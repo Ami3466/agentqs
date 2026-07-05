@@ -236,7 +236,7 @@ export function JournalTable({
                 type="button"
                 title="Delete view"
                 onClick={() => deleteView(v.id)}
-                className="rounded p-0.5 text-muted-fg/60 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                className="rounded p-0.5 text-muted-fg/60 opacity-0 transition-opacity hover:text-fg group-hover:opacity-100"
               >
                 <X width={12} height={12} />
               </button>

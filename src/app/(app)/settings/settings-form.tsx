@@ -352,7 +352,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 : "Checking…"}
             </span>
             {embed?.stale && embed.built ? (
-              <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">
                 out of date
               </span>
             ) : null}
@@ -587,7 +587,7 @@ function MentorsEditor({ initial }: { initial: Mentor[] }) {
                         setError("");
                       }}
                       disabled={busy}
-                      className="rounded-lg p-1.5 text-muted-fg transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                      className="rounded-lg p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-fg disabled:opacity-50"
                       aria-label={`Delete ${m.name}`}
                     >
                       <Trash width={15} height={15} />
