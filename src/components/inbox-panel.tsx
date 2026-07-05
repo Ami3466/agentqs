@@ -174,8 +174,8 @@ export function InboxPanel({
         ) : null}
       </div>
       <p className="mt-1 text-xs text-muted-fg">
-        Everything lands here raw and free. Hit <b>Structure</b> to turn it into clean daily data —
-        tokens are only spent on prose notes.
+        Everything lands here raw and free. <b>Structure</b> turns it into daily data — tokens only
+        for prose notes.
       </p>
 
       <div className="mt-3 flex items-center gap-2">

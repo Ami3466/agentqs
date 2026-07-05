@@ -161,10 +161,9 @@ export function GithubConnect({
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
           <p className="text-xs text-muted-fg">
-            Paste a GitHub token (a fine-grained PAT, read-only, or a classic{" "}
-            <code className="font-mono">repo</code> token). Stored in your data dir; used only to
-            read your commit counts. Or set <code className="font-mono">GITHUB_TOKEN</code> in the
-            environment.
+            Paste a GitHub token (fine-grained PAT or classic{" "}
+            <code className="font-mono">repo</code>). Stored in your data dir, reads only your commit
+            counts. Or set <code className="font-mono">GITHUB_TOKEN</code>.
           </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">

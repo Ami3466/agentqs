@@ -249,7 +249,7 @@ function SourceRow({
             <>
               <CopyBlock label="Run locally" code={source.importCmd} />
               <p className="text-[11px] text-muted-fg">
-                Reads a file on your machine, so it runs from the CLI/daemon; rows appear here after it syncs.
+                Reads a local file, so it runs from the CLI; rows appear here after it syncs.
               </p>
             </>
           ) : null}

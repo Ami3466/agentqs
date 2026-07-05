@@ -430,12 +430,9 @@ export function Chat() {
     }
   }
 
-  const placeholder =
-    mode === "memo"
-      ? "Memo — saved to your inbox, no reply"
-      : mode === "command"
-        ? "Command — /sync · /structure · /new · /mentor"
-        : `Message your ${activeMentor.name.toLowerCase()}…  ( >> memo · / commands )`;
+  // Hints live in the one helper line below, never here. Memo/command modes need
+  // typed characters, so their placeholders would never show — the chat one is it.
+  const placeholder = `Message your ${activeMentor.name.toLowerCase()}…`;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
@@ -459,8 +456,8 @@ export function Chat() {
         <div className="mt-2 space-y-1">
           {saved.length === 0 ? (
             <p className="px-1 pt-2 text-xs text-muted-fg">
-              Each conversation is distilled to a summary + commitments here, and the mentor reads
-              it next time. <code className="font-mono">/new</code> ends one.
+              Each chat is saved as a summary the mentor reads next time.{" "}
+              <code className="font-mono">/new</code> ends one.
             </p>
           ) : (
             saved.map((s) => (
@@ -502,8 +499,7 @@ export function Chat() {
               <p className="text-lg font-medium text-fg">Ask your life anything.</p>
               <p className="max-w-md text-sm text-muted-fg">
                 &ldquo;Why have I felt off this week?&rdquo; — grounded in your real sleep, heart
-                rate, calendar and messages. Plain text talks · <code className="font-mono">&gt;&gt;</code>{" "}
-                logs a memo · <code className="font-mono">/</code> runs a command.
+                rate, calendar and messages.
               </p>
               {saved.length ? (
                 <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-[12px] text-muted-fg">
@@ -651,8 +647,7 @@ export function Chat() {
             ) : (
               <>
                 <b className="font-medium text-fg">Enter</b> to send · <code className="font-mono">&gt;&gt;</code>{" "}
-                memo · <code className="font-mono">/</code> commands · mentor:{" "}
-                <b className="font-medium text-fg">{activeMentor.name}</b>
+                memo · <code className="font-mono">/</code> commands
               </>
             )}
           </p>
@@ -717,7 +712,7 @@ function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
       <div className="flex justify-center">
         <div className="max-w-[85%] rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-fg">
           <div className="mb-0.5 flex items-center gap-1.5 text-[11px] font-medium text-accent">
-            <Check width={12} height={12} /> memo saved to inbox · no reply
+            <Check width={12} height={12} /> saved to inbox
             {typeof m.pending === "number" ? <span className="text-muted-fg">· {m.pending} pending</span> : null}
           </div>
           {m.text}
