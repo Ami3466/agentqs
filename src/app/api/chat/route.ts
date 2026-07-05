@@ -113,7 +113,7 @@ export async function POST(req: Request) {
       // Semantic recall ("find days that felt like this") — the local embedding index
       // answers it with no key. Checked first: it's the most specific intent.
       if (looksLikeRecallQuestion(message)) {
-        const recall = answerRecall(message, history);
+        const recall = await answerRecall(message, history);
         if (recall) {
           for (const chunk of chunkText(recall.text)) send({ t: "delta", v: chunk });
           send({

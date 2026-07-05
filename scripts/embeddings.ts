@@ -6,11 +6,12 @@
  * semantic path is real, local, and keyless:
  *
  *   1. The pure index (src/lib/embeddings.ts — the SAME module the app imports):
- *      the local embedding model + sqlite-vec build an index from a seeded record and
- *      answer feeling-queries by MEANING, not keywords — "wired, couldn't switch off"
- *      surfaces the day that says "anxious and stressed" though they share no words.
- *      Asserts the sqlite-vec backend is actually live, and that the index is
- *      deterministic (same record → same ranking) and self-heals when stale.
+ *      the real local embedding model (all-MiniLM-L6-v2) + sqlite-vec build an index
+ *      from a seeded record and answer feeling-queries by MEANING, not keywords —
+ *      "shipped, huge relief" surfaces the day that says "the deploy finally went out
+ *      and I could breathe" though they share no words and no hand-built lexicon (the
+ *      proof it's a real model, not the old featurizer). Asserts the sqlite-vec backend
+ *      is actually live, and that the index is deterministic and self-heals when stale.
  *   2. End to end over the BUILT app with NO AI key configured: a real record of dated
  *      memos is seeded, then POST /api/search returns the right day, and the Chat
  *      endpoint answers "find days that felt like this: …" with a grounded reply that
@@ -69,13 +70,15 @@ async function waitFor(url: string, ms = 30000): Promise<void> {
   }
 }
 
-/** Dated memos — each day has a distinct *feeling*, expressed in its own words. */
+/** Dated memos — each day has a distinct *feeling*, worded so it shares NO words with
+ *  the query that should find it. A real model has to understand meaning to match. */
 const DAYS: [string, string][] = [
-  ["2026-06-01", "Woke up completely exhausted, could not focus, so tired the whole day."],
-  ["2026-06-02", "Amazing day — felt happy and energized, shipped a big feature."],
-  ["2026-06-03", "Anxious and stressed about the deadline, heart racing all afternoon."],
-  ["2026-06-04", "Calm and rested, went for a long run, felt clear and light."],
-  ["2026-06-05", "Frustrated and angry at the meeting, snapped at people."],
+  ["2026-06-01", "The deploy finally went out and I could breathe."],
+  ["2026-06-02", "Woke up drained, foggy head, dragged myself through the whole day."],
+  ["2026-06-03", "Chest tight before the review, kept bracing for bad news."],
+  ["2026-06-04", "Long quiet morning by the water, unhurried and still."],
+  ["2026-06-05", "So mad I could barely see straight, resentment boiling."],
+  ["2026-06-06", "Nobody around all weekend, the apartment felt huge and silent."],
 ];
 
 function seedRecord(recordDir: string) {
@@ -100,24 +103,33 @@ async function main() {
   const vecFile = path.join(root, "agentqs-vec.db");
   seedRecord(rDir);
 
-  // ---- 1. The pure local index (sqlite-vec + the local model), keyless. ----
-  console.log("\nThe local semantic index — sqlite-vec + the local embedding model (no key)…\n");
-  const built = buildIndex({ recordDir: rDir, vecFile });
+  // Share ONE warm model cache between this process and the spawned server so the
+  // real model downloads at most once, then runs fully offline (default is the data
+  // dir; here we pin a stable dir so the temp data dir doesn't re-download).
+  const modelDir = path.join(process.cwd(), "data", "models");
+  process.env.AGENTQS_MODEL_DIR = modelDir;
+
+  // ---- 1. The pure local index (sqlite-vec + the real local model), keyless. ----
+  console.log("\nThe local semantic index — sqlite-vec + all-MiniLM-L6-v2 (no key)…\n");
+  const built = await buildIndex({ recordDir: rDir, vecFile });
   check("the index built with the sqlite-vec backend", built.backend === "sqlite-vec", built.backend);
+  check("it used the real model, not the hash shim", built.model === "all-MiniLM-L6-v2", built.model);
   check("every dated memo was embedded", built.count === DAYS.length, `${built.count} entries`);
 
-  // Feeling-queries that share NO words with the memo they should match.
+  // Feeling-queries that share NO words (and no lexicon entry) with the memo they
+  // should match — only a real model can bridge them.
   const semantic: [string, string][] = [
-    ["wired, couldn't switch my brain off", "2026-06-03"], // → anxious/stressed
-    ["wiped out, no energy at all", "2026-06-01"], // → exhausted/tired
-    ["over the moon, buzzing with energy", "2026-06-02"], // → happy/energized
-    ["peaceful, went jogging in the morning", "2026-06-04"], // → calm/run
-    ["furious, lost my temper", "2026-06-05"], // → frustrated/angry
+    ["shipped, huge relief", "2026-06-01"], // → "the deploy finally went out and I could breathe"
+    ["no energy at all, running on empty", "2026-06-02"], // → drained/foggy
+    ["nervous and on edge about what's coming", "2026-06-03"], // → chest tight / bracing
+    ["peaceful and relaxed, felt serene", "2026-06-04"], // → quiet morning by the water
+    ["furious, lost my temper", "2026-06-05"], // → so mad, resentment boiling
+    ["isolated and missing people", "2026-06-06"], // → nobody around, silent apartment
   ];
   let semanticOk = 0;
   let firstTop = "";
   for (const [q, want] of semantic) {
-    const hits = semanticSearch(q, { recordDir: rDir, vecFile, limit: 3 });
+    const hits = await semanticSearch(q, { recordDir: rDir, vecFile, limit: 3 });
     const top = hits[0]?.date;
     if (!firstTop) firstTop = top ?? "";
     const pass = top === want;
@@ -129,10 +141,10 @@ async function main() {
   check("semantic recall matches by MEANING, not keywords", semanticOk === semantic.length, `${semanticOk}/${semantic.length}`);
 
   // Deterministic: rebuild → identical ranking (compare to the first build's result).
-  buildIndex({ recordDir: rDir, vecFile });
-  const again = semanticSearch(semantic[0][0], { recordDir: rDir, vecFile, limit: 3 });
+  await buildIndex({ recordDir: rDir, vecFile });
+  const again = await semanticSearch(semantic[0][0], { recordDir: rDir, vecFile, limit: 3 });
   check("the index is deterministic (same record → same top day)", again[0]?.date === firstTop, `${again[0]?.date} vs ${firstTop}`);
-  check("ensureIndex is a no-op when the index is fresh", ensureIndex({ recordDir: rDir, vecFile }) === null);
+  check("ensureIndex is a no-op when the index is fresh", (await ensureIndex({ recordDir: rDir, vecFile })) === null);
   const st = indexStatus({ recordDir: rDir, vecFile });
   check("indexStatus reports built + fresh", st.built && !st.stale && st.count === DAYS.length);
 
@@ -144,6 +156,7 @@ async function main() {
     env: {
       ...process.env,
       AGENTQS_DATA_DIR: root,
+      AGENTQS_MODEL_DIR: modelDir, // warm shared model cache → no re-download, offline
       SESSION_SECRET: "loop15-ships-when-secret",
       // Deliberately no ANTHROPIC/OPENAI/GOOGLE key — the whole point is keyless.
       ANTHROPIC_API_KEY: "",
@@ -164,26 +177,27 @@ async function main() {
     const cookie = ((setup.headers.get("set-cookie") || "").match(/agentqs_session=[^;]+/) || [""])[0];
 
     // --- POST /api/search — keyless semantic search returns the right day. ---
-    console.log(`\n  POST /api/search  "worried and on edge, panicking"\n`);
+    console.log(`\n  POST /api/search  "nervous and on edge about what's coming"\n`);
     const searchRes = await fetch(`${base}/api/search`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ query: "worried and on edge, panicking" }),
+      body: JSON.stringify({ query: "nervous and on edge about what's coming" }),
     });
     const search = await searchRes.json();
     check("/api/search returned days", Array.isArray(search.hits) && search.hits.length > 0);
     check(
-      "the closest day is the anxious/stressed one (matched by meaning, no key)",
+      "the closest day is the anxious one (matched by meaning, no key)",
       search.hits?.[0]?.date === "2026-06-03",
       search.hits?.[0] ? `${search.hits[0].date} @ ${search.hits[0].score}` : "none",
     );
 
-    // --- Chat: "find days that felt like this: …" → grounded reply, no key. ---
-    console.log(`\n  POST /api/chat  "find days that felt like this: happy and full of energy"\n`);
+    // --- Chat: "find days that felt like this: …" → grounded reply, no key. This is
+    // the acceptance headline: "shipped, huge relief" shares no words with the memo. ---
+    console.log(`\n  POST /api/chat  "find days that felt like this: shipped, huge relief"\n`);
     const chatRes = await fetch(`${base}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ message: "find days that felt like this: happy and full of energy", history: [] }),
+      body: JSON.stringify({ message: "find days that felt like this: shipped, huge relief", history: [] }),
     });
     check("chat streamed an NDJSON response", chatRes.ok && !!chatRes.body);
     let text = "";
@@ -207,7 +221,7 @@ async function main() {
     }
     console.log(`  → reply: ${text.replace(/\n/g, " ")}\n`);
     check("the chat reply is grounded (keyless recall path)", done?.grounded === true, done?.via ?? JSON.stringify(done));
-    check("it names the happy/energized day", text.includes(niceDate("2026-06-02")), niceDate("2026-06-02"));
+    check("it names the deploy/relief day", text.includes(niceDate("2026-06-01")), niceDate("2026-06-01"));
     check("the grounded badge attributes the memos", Array.isArray(done?.sources) && done.sources.includes("memos"), (done?.sources || []).join(", "));
 
     // --- GET /api/embeddings — the status the Settings panel shows. ---
