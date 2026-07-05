@@ -180,3 +180,44 @@ export const RefreshCw = (p: P) => (
     <path d="M3 21v-5h5" />
   </svg>
 );
+
+export const Sliders = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+  </svg>
+);
+
+export const GripVertical = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <circle cx="9" cy="6" r="1.4" />
+    <circle cx="9" cy="12" r="1.4" />
+    <circle cx="9" cy="18" r="1.4" />
+    <circle cx="15" cy="6" r="1.4" />
+    <circle cx="15" cy="12" r="1.4" />
+    <circle cx="15" cy="18" r="1.4" />
+  </svg>
+);
+
+export const Plus = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const Trash = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" />
+  </svg>
+);
+
+export const Bookmark = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />
+  </svg>
+);
+
+export const MessageSquare = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
+  </svg>
+);

@@ -54,7 +54,7 @@ Replies always quote your real numbers. Switch persona any time.
 
 ## Journal — your life on one timeline
 
-Every day in one place: metrics, memos, and the mentor session you had that day, side by side. Flip to a Notion-style table to show/hide/reorder columns and save your own views.
+Every day in one place: metrics, memos, and the mentor session you had that day, side by side. Flip to a Notion-style table to show/hide, reorder and resize columns — then save the layout as a named view (like a **Sleep** view that shows only your sleep column). Your views are stored with your account and come back every time.
 
 ![Journal](docs/images/journal.png)
 
