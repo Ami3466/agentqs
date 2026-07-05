@@ -12,6 +12,7 @@
     "import:github": "tsx scripts/import-github.ts"
   },
   "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
     "better-sqlite3": "^12.11.1",
     "next": "14.2.15",
     "react": "18.3.1",

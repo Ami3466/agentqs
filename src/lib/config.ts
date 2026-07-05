@@ -1,5 +1,6 @@
 import fs from "fs";
 import { configPath, dataDir } from "./paths";
+import type { JournalView } from "./journal";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -16,6 +17,38 @@ export interface AppConfig {
   createdAt: string;
   githubToken?: string; // GitHub PAT for the commits importer (optional)
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
+  journalViews?: JournalView[]; // saved Journal table layouts, per user
+}
+
+/** Coerce untrusted input into a clean JournalView[] before it hits config.json.
+ * Drops anything malformed so a bad POST can never corrupt the saved layouts. */
+export function sanitizeJournalViews(input: unknown): JournalView[] {
+  if (!Array.isArray(input)) return [];
+  const out: JournalView[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Record<string, unknown>;
+    const id = typeof v.id === "string" && v.id ? v.id : "";
+    const name = typeof v.name === "string" ? v.name.trim() : "";
+    if (!id || !name) continue;
+    const columnOrder = Array.isArray(v.columnOrder)
+      ? v.columnOrder.filter((s): s is string => typeof s === "string")
+      : [];
+    const columnVisibility: Record<string, boolean> = {};
+    if (v.columnVisibility && typeof v.columnVisibility === "object") {
+      for (const [k, val] of Object.entries(v.columnVisibility as Record<string, unknown>)) {
+        if (typeof val === "boolean") columnVisibility[k] = val;
+      }
+    }
+    const columnSizing: Record<string, number> = {};
+    if (v.columnSizing && typeof v.columnSizing === "object") {
+      for (const [k, val] of Object.entries(v.columnSizing as Record<string, unknown>)) {
+        if (typeof val === "number" && Number.isFinite(val)) columnSizing[k] = val;
+      }
+    }
+    out.push({ id, name: name.slice(0, 60), columnOrder, columnVisibility, columnSizing });
+  }
+  return out.slice(0, 50); // hard cap
 }
 
 export function configExists(): boolean {
