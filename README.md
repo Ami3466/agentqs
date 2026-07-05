@@ -48,7 +48,9 @@ One conversation, Claude-Code style. Plain text talks to the mentor. `>>` logs a
 
 Or **start a live voice session** — talk it out with a therapist grounded in the methodology *you* choose (CBT, ACT, schema, IFS…), or any persona you build. It listens, reflects, and quietly **writes the key points back into your daily record.** No forms, no data entry — **the database builds itself from your conversations.**
 
-Replies always quote your real numbers. Switch persona any time.
+Replies **stream in token-by-token** and always quote your real numbers — a grounded
+answer lands with a **grounded in your record** badge and an inline **sparkline** of the
+metric it cited (its shape over time, plus the latest / avg / range). Switch persona any time.
 
 ![Chat](docs/images/chat.png)
 
@@ -209,8 +211,10 @@ answer:
 The persona (mentor / therapist / coach) is the system prompt; a compact schema
 catalog tells it what's queryable. So *"why have I felt off?"* makes it `SELECT` your
 WHOOP sleep + recovery, then reply *"sleep dropped to 6.1h and recovery fell to 41%
-— your lowest in the window."* Grounded replies show a **grounded in your record**
-badge with the sources the tools actually touched.
+— your lowest in the window."* The reply **streams token-by-token** into the Chat tab
+(NDJSON over the `curl -N` endpoint); when it closes, a **grounded in your record**
+badge names the sources the tools touched and an inline **sparkline** plots a cited
+metric over time.
 
 With **no key**, a cross-source question is still answered deterministically from the
 numbers (`src/lib/grounding.ts`) — two metrics from different sources are lined up on
@@ -224,6 +228,11 @@ npm run agent:test         # ships-when proof: the agent calls the SQL + FTS too
 
 npm run integration:test   # keyless cross-source: GitHub + RescueTime + Calendar +
                            # Spotify feed one record, a question cites 2+ sources
+
+npm run chat:test          # ships-when proof (Loop 5): boots the built app, logs in,
+                           # and hits POST /api/chat like the Chat tab — asserts the
+                           # reply streams in NDJSON delta frames and the closing frame
+                           # carries ≥2 grounded sources + a sparkline of a cited metric
 ```
 
 ## Sync engine — schedules, lazy-sync, stale badges

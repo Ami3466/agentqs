@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Eye, EyeOff, GitHub, RefreshCw, Spinner } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
+import { Sparkline } from "@/components/sparkline";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
 
@@ -18,41 +19,16 @@ interface Status {
   series: Day[];
 }
 
-/** Dependency-free bar sparkline of commits/day, coloured with the accent token. */
+/** Commits/day as a bar sparkline (the shared, accent-coloured Sparkline). */
 function Spark({ data }: { data: Day[] }) {
   if (!data.length) return null;
-  const max = Math.max(1, ...data.map((d) => d.commits));
-  const w = 4;
-  const gap = 2;
-  const h = 28;
   return (
-    <div className="scrollbar-thin overflow-x-auto">
-      <svg
-        width={data.length * (w + gap)}
-        height={h}
-        className="text-accent"
-        role="img"
-        aria-label={`${data.length}-day commit history`}
-      >
-        {data.map((d, i) => {
-          const bh = Math.max(1, Math.round((d.commits / max) * h));
-          return (
-            <rect
-              key={d.date}
-              x={i * (w + gap)}
-              y={h - bh}
-              width={w}
-              height={bh}
-              rx={1}
-              fill="currentColor"
-              opacity={d.commits ? 0.9 : 0.25}
-            >
-              <title>{`${d.date}: ${d.commits} commit${d.commits === 1 ? "" : "s"}`}</title>
-            </rect>
-          );
-        })}
-      </svg>
-    </div>
+    <Sparkline
+      points={data.map((d) => ({ date: d.date, value: d.commits }))}
+      variant="bar"
+      ariaLabel={`${data.length}-day commit history`}
+      title={(p) => `${p.date}: ${p.value} commit${p.value === 1 ? "" : "s"}`}
+    />
   );
 }
 

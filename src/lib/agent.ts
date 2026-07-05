@@ -1,5 +1,5 @@
 import fs from "fs";
-import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage } from "ai";
+import { generateText, stepCountIs, streamText, tool, type LanguageModel, type ModelMessage } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
@@ -57,7 +57,9 @@ function assertSelect(sql: string): string {
   return s;
 }
 
-interface Used {
+/** What a run actually touched — accumulated by the tools as they execute, read by
+ *  the caller afterwards to attribute the "grounded in your record" badge. */
+export interface Used {
   sources: Set<string>;
   metrics: Set<string>;
   hits: number; // rows + matches returned across every tool call
@@ -225,4 +227,36 @@ export async function runMentor(opts: RunMentorOptions): Promise<MentorRun> {
     toolCalls,
     steps: result.steps.length,
   };
+}
+
+// ---- Streaming (Loop 5: the Chat UI reads tokens as they arrive) ----------
+
+/** A streaming mentor run: the same tool-using agent as `runMentor`, but the final
+ *  reply is streamed token-by-token via `result.textStream`. Tool calls still run to
+ *  completion between steps (no text streams during a tool step); `used` fills in as
+ *  they execute and is final once `textStream` drains, so the caller can attribute
+ *  the grounded badge + sparkline after the stream. `err` captures a mid-stream model
+ *  error the SDK would otherwise swallow — check it once the stream ends. */
+export function streamMentor(opts: RunMentorOptions): {
+  textStream: AsyncIterable<string>;
+  used: Used;
+  err: { error?: unknown };
+} {
+  const used: Used = { sources: new Set(), metrics: new Set(), hits: 0 };
+  const tools = mentorTools(opts.dbFile, used);
+  const err: { error?: unknown } = {};
+
+  const result = streamText({
+    model: opts.model,
+    system: opts.system,
+    messages: opts.messages as unknown as ModelMessage[],
+    tools,
+    stopWhen: stepCountIs(opts.maxSteps ?? 6),
+    abortSignal: opts.signal,
+    onError: (e) => {
+      err.error = (e as { error?: unknown }).error ?? e;
+    },
+  });
+
+  return { textStream: result.textStream, used, err };
 }

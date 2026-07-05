@@ -6,8 +6,8 @@ import { dbPath, recordDir } from "@/lib/paths";
 import { readSessionsFromRecord } from "@/lib/record";
 import { skillById } from "@/lib/skills";
 import { continuityBlock, continuityFallbackReply } from "@/lib/synthesis";
-import { groundedCrossSourceAnswer, readGrounding } from "@/lib/grounding";
-import { dailyCatalog, resolveModel, runMentor } from "@/lib/agent";
+import { buildSpark, groundedCrossSourceAnswer, readGrounding } from "@/lib/grounding";
+import { dailyCatalog, resolveModel, streamMentor } from "@/lib/agent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,16 +22,61 @@ function looksLikeDataQuestion(text: string): boolean {
   );
 }
 
+/** Split a deterministic (non-model) answer into word-boundary chunks so the keyless
+ *  path streams into the UI the same way the model path does, one frame per chunk. */
+function* chunkText(text: string, size = 42): Generator<string> {
+  let buf = "";
+  for (const part of text.split(/(\s+)/)) {
+    buf += part;
+    if (buf.length >= size) {
+      yield buf;
+      buf = "";
+    }
+  }
+  if (buf) yield buf;
+}
+
 /**
- * Plain-text chat = the mentor agent (Loop 4). With a key, the persona's system
- * prompt is joined with a compact schema catalog of the daily record and a
- * continuity block (synthesis of past sessions — summaries / insights /
- * commitments, never raw transcripts), then the Vercel AI SDK agent runs: it calls
- * SQL (query_daily) + FTS (search_notes) tools to ground the reply in real numbers
- * and can pick up an earlier commitment. With no key set it degrades to a
- * deterministic cross-source answer computed straight from the numbers, or a
- * persona-flavoured note that references the latest open commitment. `>>` memos and
- * `/` commands never reach here.
+ * Stream an answer to the browser as newline-delimited JSON frames:
+ *   {"t":"delta","v":"…"}  incremental reply text
+ *   {"t":"done", grounded, sources, metrics, spark, skill, continuity, model}
+ *   {"t":"error","error":"…"}  a mid-stream failure
+ * The Chat UI reads tokens as they arrive; the `done` frame carries the grounded
+ * badge + the inline sparkline. Auth/validation still return plain JSON errors.
+ */
+function ndjson(pump: (send: (frame: unknown) => void) => Promise<void>): Response {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (frame: unknown) => controller.enqueue(enc.encode(JSON.stringify(frame) + "\n"));
+      try {
+        await pump(send);
+      } catch (e) {
+        send({ t: "error", error: (e as Error).message });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+/**
+ * Plain-text chat = the mentor agent (Loop 4), streamed (Loop 5). With a key the
+ * persona's system prompt is joined with a compact schema catalog + a continuity
+ * block (synthesis of past sessions, never raw transcripts) and the Vercel AI SDK
+ * agent runs: it calls SQL (query_daily) + FTS (search_notes) tools to ground the
+ * reply, and the final text streams to the UI token-by-token. With no key it degrades
+ * to a deterministic cross-source answer computed straight from the numbers (still
+ * streamed), or a persona note referencing the latest open commitment. Either way the
+ * closing `done` frame carries the grounded sources + a sparkline of a cited metric.
+ * `>>` memos and `/` commands never reach here.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -65,30 +110,40 @@ export async function POST(req: Request) {
 
   // No key yet: honest, persona-flavoured fallback. But a data question over ≥2
   // sources still gets a real, grounded cross-source answer computed from the
-  // numbers — no model, no invention.
+  // numbers — no model, no invention. Streamed for a consistent UI.
   if (!cfg?.llmProvider || !cfg?.llmKey) {
-    if (grounding.sources.length >= 2 && looksLikeDataQuestion(message)) {
-      const answer = groundedCrossSourceAnswer(grounding, message);
-      if (answer) {
-        return NextResponse.json({
-          reply: answer.text,
-          skill: skill.id,
-          grounded: true,
-          sources: answer.sources,
-          metrics: answer.metrics,
-          continuity: false,
-        });
+    return ndjson(async (send) => {
+      if (grounding.sources.length >= 2 && looksLikeDataQuestion(message)) {
+        const answer = groundedCrossSourceAnswer(grounding, message);
+        if (answer) {
+          for (const chunk of chunkText(answer.text)) send({ t: "delta", v: chunk });
+          send({
+            t: "done",
+            skill: skill.id,
+            grounded: true,
+            sources: answer.sources,
+            metrics: answer.metrics,
+            spark: buildSpark(grounding, answer.sources, answer.metrics),
+            continuity: false,
+          });
+          return;
+        }
       }
-    }
-    const opener = sessionStart ? continuityFallbackReply(skill.name, prior) : null;
-    return NextResponse.json({
-      reply:
+      const opener = sessionStart ? continuityFallbackReply(skill.name, prior) : null;
+      const text =
         opener ??
         `I'm your ${skill.name.toLowerCase()}. Add an AI key in Settings and I'll answer this ` +
-          `grounded in your real data. Until then, log with \`>>\` and I'll keep your record building.`,
-      skill: skill.id,
-      grounded: false,
-      continuity: Boolean(opener),
+          `grounded in your real data. Until then, log with \`>>\` and I'll keep your record building.`;
+      for (const chunk of chunkText(text)) send({ t: "delta", v: chunk });
+      send({
+        t: "done",
+        skill: skill.id,
+        grounded: false,
+        sources: [],
+        metrics: [],
+        spark: null,
+        continuity: Boolean(opener),
+      });
     });
   }
 
@@ -97,30 +152,43 @@ export async function POST(req: Request) {
   const catalog = dailyCatalog(dbFile);
   const system = [skill.system, catalog.hint, memory].filter(Boolean).join("\n\n");
 
+  let model;
   try {
-    const model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
-    const run = await runMentor({
+    model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
+  } catch (e) {
+    return NextResponse.json({ error: `Model config failed: ${(e as Error).message}` }, { status: 502 });
+  }
+
+  return ndjson(async (send) => {
+    const { textStream, used, err } = streamMentor({
       model,
       system,
       messages: [...history, { role: "user", content: message }],
       dbFile,
     });
-    // Attribute the grounded badge: the exact sources the tools touched, else (if
-    // it queried but didn't SELECT source) fall back to the record's sources.
-    const sources = run.sources.length ? run.sources : run.grounded ? grounding.sources : [];
-    return NextResponse.json({
-      reply: run.text || "(no reply)",
+
+    for await (const delta of textStream) {
+      if (delta) send({ t: "delta", v: delta });
+    }
+
+    if (err.error) {
+      send({ t: "error", error: `Model call failed: ${String((err.error as Error)?.message ?? err.error)}` });
+      return;
+    }
+
+    // Attribute the grounded badge: the exact sources the tools touched, else (if it
+    // queried but didn't SELECT source) fall back to the record's sources.
+    const sources = used.sources.size ? [...used.sources].sort() : used.hits > 0 ? grounding.sources : [];
+    const metrics = [...used.metrics].sort();
+    send({
+      t: "done",
       skill: skill.id,
-      grounded: run.grounded,
+      grounded: used.hits > 0,
       sources,
-      metrics: run.metrics,
+      metrics,
+      spark: buildSpark(grounding, sources, metrics),
       continuity: Boolean(memory),
       model: cfg.model || null,
     });
-  } catch (e) {
-    return NextResponse.json(
-      { error: `Model call failed: ${(e as Error).message}` },
-      { status: 502 },
-    );
-  }
+  });
 }

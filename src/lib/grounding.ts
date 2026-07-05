@@ -34,6 +34,18 @@ export interface Grounding {
   series: MetricSeries[];
 }
 
+/** A compact metric series the Chat renders as an inline sparkline under a grounded
+ *  reply — the shape of a cited number over time, plus its summary stats. */
+export interface SparkPayload {
+  source: string;
+  metric: string;
+  points: Point[]; // ascending by date, tail only
+  latest: number;
+  avg: number;
+  min: number;
+  max: number;
+}
+
 const EMPTY: Grounding = { hasData: false, sources: [], series: [] };
 
 function round(n: number): number {
@@ -85,6 +97,42 @@ export function readGrounding(file: string = dbPath()): Grounding {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Pick one numeric series to draw as a sparkline beside a grounded reply — the one
+ * the answer actually cited. `metrics` may hold bare metric names (`sleep_hours`,
+ * from the SQL tool) or `source.metric` keys (from the keyless path); `sources` are
+ * the source names the reply drew on. Prefers a series matching both, then a metric,
+ * then any series from a cited source. Returns null when there's nothing to show.
+ */
+export function buildSpark(
+  g: Grounding,
+  sources: string[],
+  metrics: string[],
+  tail = 24,
+): SparkPayload | null {
+  if (!g.hasData) return null;
+  const srcSet = new Set(sources);
+  const metSet = new Set(metrics);
+  const matchesMetric = (s: MetricSeries) => metSet.has(s.metric) || metSet.has(s.key);
+  const pick =
+    g.series.find((s) => srcSet.has(s.source) && matchesMetric(s)) ??
+    g.series.find((s) => matchesMetric(s)) ??
+    g.series.find((s) => srcSet.has(s.source)) ??
+    null;
+  if (!pick) return null;
+  const points = pick.points.slice(-tail);
+  if (points.length < 2) return null; // a single dot isn't a sparkline
+  return {
+    source: pick.source,
+    metric: pick.metric,
+    points,
+    latest: pick.latest,
+    avg: pick.avg,
+    min: pick.min,
+    max: pick.max,
+  };
 }
 
 /** Compact DATA CONTEXT block for the model's system prompt (numbers to cite). */
