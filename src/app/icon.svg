@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <style>
+    :root { --sq: #171717; --mk: #fafafa; }
+    @media (prefers-color-scheme: dark) { :root { --sq: #f0f0f0; --mk: #171717; } }
+  </style>
+  <rect width="32" height="32" rx="8" fill="var(--sq, #171717)"/>
+  <g transform="translate(4 4)" fill="none" stroke="var(--mk, #fafafa)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="10" cy="10" r="6"/>
+    <circle cx="10" cy="10" r="1.5" fill="var(--mk, #fafafa)" stroke="none"/>
+    <path d="M16 4v15h3"/>
+  </g>
+</svg>

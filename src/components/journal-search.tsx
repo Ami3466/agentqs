@@ -74,6 +74,8 @@ export function JournalSearch() {
   return (
     <div className="mb-4 rounded-xl border border-border bg-card p-3">
       <div className="flex items-center gap-2 rounded-lg border border-input bg-bg px-2.5 py-1.5 focus-within:border-ring/60">
+        {/* The one intentional Sparkles in the app: genuine AI/insight — semantic
+            "find by meaning" search. Everywhere else uses a meaning-specific glyph. */}
         <Sparkles width={15} height={15} className="shrink-0 text-accent" />
         <input
           value={q}

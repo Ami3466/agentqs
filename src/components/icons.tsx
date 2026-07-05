@@ -99,6 +99,28 @@ export const Sparkles = (p: P) => (
   </svg>
 );
 
+/** agentqs brand mark — the ONE custom identity glyph. A lowercase "q" whose bowl
+ *  is a little conversation lens (ring + focus dot): you ask, it answers from your
+ *  own record. Monochrome / currentColor — reads knocked-out on the accent chip and
+ *  as the standalone favicon at 16px and 40px. Never the generic spark. */
+export const Mark = (p: P) => (
+  <svg {...base} strokeWidth={2} {...p}>
+    <circle cx="10" cy="10" r="6" />
+    <circle cx="10" cy="10" r="1.5" fill="currentColor" stroke="none" />
+    <path d="M16 4v15h3" />
+  </svg>
+);
+
+/** A mentor — a single person. Stands for a chosen voice (chip, label, mentor
+ *  card, a mentor session on the timeline), not "AI magic". Named Person to avoid
+ *  clashing with the Mentor domain type. */
+export const Person = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="8" r="3.5" />
+    <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+  </svg>
+);
+
 export const Plug = (p: P) => (
   <svg {...base} {...p}>
     <path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8ZM12 17v5" />
