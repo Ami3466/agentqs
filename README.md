@@ -30,7 +30,7 @@ Runs on **your own server** and **your own AI key**. Your data lives in your own
 - **"Why am I tired / off / anxious lately?"** — grounded in the week's real signals, not a horoscope
 - **Weekly review** — what changed, what correlated, what to try next week
 - **Decisions with your own history** — "should I take this on? what happened last time I did?"
-- **Spot your patterns** — "fire days cost me +10 bpm and 47 minutes of sleep"
+- **Spot your patterns** — "mood-9 days cost me +10 bpm and 47 minutes of sleep"
 - **A journal that talks back** — capture a memo, get reflection, never a blank page
 
 ## Set up in 4 steps

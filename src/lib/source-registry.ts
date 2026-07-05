@@ -19,6 +19,7 @@ import { PLUGINS } from "./importers/registry";
 import { resolveCredential } from "./importers/plugin";
 import { FILE_IMPORTERS } from "./importers/files/registry";
 import { UPLOAD_SOURCES } from "./upload-sources";
+import { SELF_SOURCE } from "./self-log";
 import {
   isDue,
   isStale,
@@ -180,23 +181,26 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
 
   // Discovered manual sources — structured drops / pasted exports land as
   // daily/<stem>.csv. They can't auto-sync, so an overdue one is badged stale.
+  // `self` is the built-in daily check-in (written by the Journal's log card).
   for (const stem of dailyStems(dir)) {
     if (owned.has(stem)) continue;
+    const isSelf = stem === SELF_SOURCE;
     const lastSync = fileMtimeISO(path.join(dir, "daily", `${stem}.csv`));
     const interval = intervalFor(cfg, stem);
     out.push({
       id: stem,
-      name: stem,
+      name: isSelf ? "Daily check-in" : stem,
       kind: "manual",
-      detail: "imported daily data",
+      detail: isSelf ? "mood · energy · focus · sleep, 1–10" : "imported daily data",
       connected: true,
       interval,
       lastSync,
       stale: isStale(lastSync, interval),
       due: false,
-      syncEndpoint: null,
       live: true,
+      syncEndpoint: null,
       connectVia: "upload",
+      connectHint: isSelf ? "Log it on the Journal → How was today" : null,
     });
   }
 

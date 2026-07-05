@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
 import { JournalSearch } from "./journal-search";
+import { DailyLog } from "./daily-log";
 import { cn } from "./ui";
 import { Spinner } from "./icons";
 import type { JournalData, JournalView } from "@/lib/journal";
@@ -26,6 +27,13 @@ export function JournalWorkspace() {
   useEffect(() => {
     const saved = localStorage.getItem(MODE_KEY);
     if (saved === "table" || saved === "timeline") setMode(saved);
+  }, []);
+
+  const loadData = useCallback(async () => {
+    const d = await fetch("/api/journal").then((r) =>
+      r.ok ? (r.json() as Promise<JournalData>) : null,
+    );
+    setData(d);
   }, []);
 
   useEffect(() => {
@@ -93,6 +101,8 @@ export function JournalWorkspace() {
           ))}
         </div>
       </div>
+
+      <DailyLog onSaved={loadData} />
 
       <JournalSearch />
 
