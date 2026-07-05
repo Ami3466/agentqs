@@ -191,7 +191,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       {/* AI provider */}
       <Section
         title="AI provider"
-        desc="Bring your own key. Claude, OpenAI or Gemini — your data never trains anyone's model."
+        desc="Bring your own key — Claude, OpenAI or Gemini. Never trains on your data."
       >
         <div className="space-y-4">
           <Field label="Provider" htmlFor="provider">
@@ -334,7 +334,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       {/* Semantic search (embeddings) */}
       <Section
         title="Semantic search"
-        desc="Find days that felt like this. Embeddings run on a local model — no key, no cost, private. On by default."
+        desc="Find days that felt like this — a local model, no key, no cost. On by default."
       >
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex items-center gap-2 text-sm">
@@ -370,7 +370,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               · store <code className="font-mono">{embed.backend}</code>
             </>
           ) : null}
-          . Keyword search (FTS5) stays always-on and free alongside it.
+          . Keyword search (FTS5) stays on alongside it.
         </p>
       </Section>
 
@@ -514,7 +514,7 @@ function MentorsEditor({ initial }: { initial: Mentor[] }) {
             />
           </Field>
         </div>
-        <Field label="System prompt" htmlFor="m-system" hint="Handed to the model as the mentor's voice — this is what drives the reply.">
+        <Field label="System prompt" htmlFor="m-system" hint="The mentor's voice, handed to the model.">
           <Textarea
             id="m-system"
             rows={5}
@@ -539,7 +539,7 @@ function MentorsEditor({ initial }: { initial: Mentor[] }) {
   return (
     <Section
       title="Mentors"
-      desc="Voices you switch between mid-chat with the chip or /mentor. Add your own or tweak the built-ins."
+      desc="Switch mid-chat with the chip or /mentor. Add your own or edit the built-ins."
     >
       <div className="space-y-2">
         {mentors.map((m) =>

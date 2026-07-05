@@ -212,9 +212,9 @@ export function SourceConnect({
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
           <p className="text-xs text-muted-fg">
-            Paste your {status?.credentialLabel ?? "credential"}. Stored in your data dir; used only
-            to read {status?.name ?? "this source"}.
-            {isOauth ? " It's a short-lived OAuth token — paste a fresh one when it expires." : ""}
+            Paste your {status?.credentialLabel ?? "credential"}. Stored in your data dir, only reads{" "}
+            {status?.name ?? "this source"}.
+            {isOauth ? " Short-lived OAuth token — paste a fresh one when it expires." : ""}
           </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
