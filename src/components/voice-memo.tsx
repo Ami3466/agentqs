@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AudioLines, Check, Mic, Spinner, Square, X } from "./icons";
 import { cn } from "./ui";
+import { markTourStep } from "@/lib/tour";
 
 type Phase = "idle" | "recording" | "transcribing" | "done" | "error";
 
@@ -189,6 +190,7 @@ export function VoiceMemo() {
       }
       setResult({ text: data.text, pending: data.pending, backend: data.backend });
       setPhase("done");
+      markTourStep("memo"); // real action: a transcribed memo landed in the inbox
       router.refresh(); // so the Data-tab inbox reflects the new memo
     } catch {
       setPhase("error");

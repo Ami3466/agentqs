@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Brand } from "./brand";
 import { ConnectApi } from "./connect-api";
+import { OnboardingTour } from "./onboarding-tour";
 import { TabNav } from "./tab-nav";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu } from "./user-menu";
@@ -14,10 +15,12 @@ import { Badge } from "./ui";
 export function AppShell({
   username,
   model = "",
+  onboardedAt = "",
   children,
 }: {
   username: string;
   model?: string;
+  onboardedAt?: string;
   children: ReactNode;
 }) {
   return (
@@ -47,6 +50,8 @@ export function AppShell({
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         {children}
       </main>
+
+      <OnboardingTour onboardedAt={onboardedAt} />
     </div>
   );
 }

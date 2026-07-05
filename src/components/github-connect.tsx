@@ -7,6 +7,7 @@ import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
+import { markTourStep } from "@/lib/tour";
 
 interface Day {
   date: string;
@@ -86,6 +87,7 @@ export function GithubConnect({
       `${data.commits} commits from @${data.login}${data.capped ? " (capped)" : ""} → ${data.dailyRows} daily rows.`,
     );
     await loadStatus();
+    markTourStep("source"); // real action: a source is now connected — tour re-confirms
     setTimeout(() => setMsg(""), 6000);
   }
 

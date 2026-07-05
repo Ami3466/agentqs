@@ -17,8 +17,14 @@ export default function AppLayout({
   const user = getCurrentUser();
   if (!user) redirect("/login");
 
+  const cfg = readConfig();
+
   return (
-    <AppShell username={user.username} model={readConfig()?.model || ""}>
+    <AppShell
+      username={user.username}
+      model={cfg?.model || ""}
+      onboardedAt={cfg?.onboardedAt || ""}
+    >
       {children}
     </AppShell>
   );
