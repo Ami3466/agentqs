@@ -35,7 +35,7 @@ const COMMANDS: Command[] = [
 
 // ---- Messages -------------------------------------------------------------
 
-type Role = "user" | "assistant" | "memo" | "note";
+type Role = "user" | "assistant" | "memo" | "note" | "recap";
 interface Msg {
   id: string;
   role: Role;
@@ -43,13 +43,19 @@ interface Msg {
   skill?: string; // persona that produced an assistant reply
   pending?: number; // memo: inbox count after saving
   tone?: "ok" | "error";
+  session?: SavedSession; // recap: the synthesized session being viewed
 }
 
-interface Session {
+/** A persisted session's synthesis (from /api/sessions) — no raw transcript. */
+interface SavedSession {
   id: string;
-  title: string;
-  messages: Msg[];
+  date: string;
+  startedAt: string;
   skill: string;
+  title: string | null;
+  summary: string | null;
+  insights: string[];
+  commitments: string[];
 }
 
 let seq = 0;
@@ -63,7 +69,9 @@ export function Chat() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [saved, setSaved] = useState<SavedSession[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [viewingId, setViewingId] = useState<string | null>(null);
   const [skillOpen, setSkillOpen] = useState(false);
   const [hi, setHi] = useState(0); // highlighted command in the palette
 
@@ -82,8 +90,22 @@ export function Chat() {
 
   // Restore the last-used persona.
   useEffect(() => {
-    const saved = typeof window !== "undefined" ? window.localStorage.getItem(SKILL_KEY) : null;
-    if (saved && SKILLS.some((s) => s.id === saved)) setSkill(saved);
+    const savedSkill = typeof window !== "undefined" ? window.localStorage.getItem(SKILL_KEY) : null;
+    if (savedSkill && SKILLS.some((s) => s.id === savedSkill)) setSkill(savedSkill);
+  }, []);
+
+  // Load persisted sessions (the synthesis store) for the sidebar + memory hint.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/sessions")
+      .then((r) => (r.ok ? r.json() : { sessions: [] }))
+      .then((d) => {
+        if (alive && Array.isArray(d.sessions)) setSaved(d.sessions as SavedSession[]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // Close the skill dropdown on outside click / Escape.
@@ -122,29 +144,48 @@ export function Chat() {
     inputRef.current?.focus();
   }
 
-  function newSession() {
-    setMessages((prev) => {
-      if (prev.length) {
-        const firstUser = prev.find((m) => m.role === "user" || m.role === "memo");
-        setSessions((ss) => [
-          {
-            id: nid(),
-            title: (firstUser?.text ?? "Session").slice(0, 42),
-            messages: prev,
-            skill,
-          },
-          ...ss,
-        ]);
+  /** Distill + persist the current conversation to the session store, then land
+   * it in the sidebar. No-op (returns false) when there's nothing to save. */
+  async function persistCurrent(): Promise<boolean> {
+    const convo = messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role as "user" | "assistant", content: m.text }));
+    if (!convo.some((m) => m.role === "user")) return false;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: convo, skill }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.session) {
+        setSaved((ss) => [data.session as SavedSession, ...ss]);
+        return true;
       }
-      return [];
-    });
+      return false;
+    } catch {
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function newSession() {
+    if (saving) return;
+    await persistCurrent();
+    setMessages([]);
+    setViewingId(null);
     setInput("");
     inputRef.current?.focus();
   }
 
-  function openSession(s: Session) {
-    setMessages(s.messages);
-    setSkill(s.skill);
+  /** Show a persisted session's synthesis (what the agent remembers) — a recap,
+   * not the raw transcript. Continuing from here starts a fresh conversation. */
+  function openSaved(s: SavedSession) {
+    setViewingId(s.id);
+    setSkill(SKILLS.some((k) => k.id === s.skill) ? s.skill : skill);
+    setMessages([{ id: nid(), role: "recap", text: "", session: s }]);
   }
 
   // ---- Submit paths -------------------------------------------------------
@@ -183,7 +224,7 @@ export function Chat() {
     setInput("");
 
     if (cmd === "new") {
-      newSession();
+      void newSession();
       return;
     }
     if (cmd === "skill") {
@@ -236,6 +277,7 @@ export function Chat() {
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.text }));
     push({ role: "user", text });
+    setViewingId(null);
     setInput("");
     setBusy(true);
     try {
@@ -313,28 +355,48 @@ export function Chat() {
       <Card className="hidden p-3 lg:block">
         <div className="flex items-center justify-between px-1 pb-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">Sessions</p>
+          {saved.length ? (
+            <span className="text-[11px] text-muted-fg">{saved.length}</span>
+          ) : null}
         </div>
         <button
           type="button"
-          onClick={newSession}
-          className="w-full rounded-lg bg-muted px-3 py-2 text-left text-sm font-medium text-fg transition-colors hover:bg-border/60"
+          onClick={() => void newSession()}
+          disabled={saving}
+          className="flex w-full items-center gap-2 rounded-lg bg-muted px-3 py-2 text-left text-sm font-medium text-fg transition-colors hover:bg-border/60 disabled:opacity-50"
         >
-          + New session
+          {saving ? <Spinner width={14} height={14} /> : null}
+          {saving ? "Saving session…" : "+ New session"}
         </button>
         <div className="mt-2 space-y-1">
-          {sessions.length === 0 ? (
+          {saved.length === 0 ? (
             <p className="px-1 pt-2 text-xs text-muted-fg">
-              Your conversations collect here. <code className="font-mono">/new</code> starts one.
+              Each conversation is distilled to a summary + commitments here, and the mentor reads
+              it next time. <code className="font-mono">/new</code> ends one.
             </p>
           ) : (
-            sessions.map((s) => (
+            saved.map((s) => (
               <button
                 key={s.id}
                 type="button"
-                onClick={() => openSession(s)}
-                className="block w-full truncate rounded-lg px-3 py-2 text-left text-[13px] text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+                onClick={() => openSaved(s)}
+                className={cn(
+                  "block w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted",
+                  viewingId === s.id ? "bg-muted" : "",
+                )}
               >
-                {s.title || "Session"}
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-[13px] font-medium text-fg">{s.title || "Session"}</span>
+                </span>
+                <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-fg">
+                  <span>{s.date}</span>
+                  <span>· {skillById(s.skill).name}</span>
+                  {s.commitments.length ? (
+                    <span className="inline-flex items-center gap-0.5 text-accent">
+                      · <Check width={10} height={10} /> {s.commitments.length}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             ))
           )}
@@ -355,6 +417,12 @@ export function Chat() {
                 rate, calendar and messages. Plain text talks · <code className="font-mono">&gt;&gt;</code>{" "}
                 logs a memo · <code className="font-mono">/</code> runs a command.
               </p>
+              {saved.length ? (
+                <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-[12px] text-muted-fg">
+                  <Sparkles width={12} height={12} className="text-accent" />
+                  Remembers {saved.length} past session{saved.length === 1 ? "" : "s"} — it may pick up an open commitment.
+                </p>
+              ) : null}
             </div>
           ) : (
             messages.map((m) => <Bubble key={m.id} m={m} />)
@@ -492,6 +560,53 @@ export function Chat() {
 // ---- One message ----------------------------------------------------------
 
 function Bubble({ m }: { m: Msg }) {
+  if (m.role === "recap" && m.session) {
+    const s = m.session;
+    return (
+      <div className="space-y-2">
+        <p className="flex items-center justify-center gap-1.5 text-center text-[11px] text-muted-fg">
+          <Sparkles width={11} height={11} className="text-accent" />
+          What the mentor remembers from this session — the synthesis, not the transcript.
+        </p>
+        <div className="rounded-xl border border-border bg-muted/40 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-fg">{s.title ?? "Session"}</span>
+            <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
+              {skillById(s.skill).name}
+            </span>
+            <span className="text-[11px] text-muted-fg">{s.date}</span>
+          </div>
+          {s.summary ? <p className="mt-2 text-sm text-muted-fg">{s.summary}</p> : null}
+          {s.insights.length ? (
+            <ul className="mt-2.5 space-y-1">
+              {s.insights.map((it, i) => (
+                <li key={i} className="flex gap-1.5 text-[13px] text-fg">
+                  <span className="text-accent">→</span>
+                  <span>{it}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {s.commitments.length ? (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {s.commitments.map((c, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] text-accent"
+                >
+                  <Check width={11} height={11} /> {c}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {!s.summary && !s.insights.length && !s.commitments.length ? (
+            <p className="mt-2 text-sm text-muted-fg">No commitments or insights were captured.</p>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   if (m.role === "memo") {
     return (
       <div className="flex justify-center">

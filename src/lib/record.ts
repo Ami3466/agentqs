@@ -203,7 +203,11 @@ function str(v: unknown): string | null {
   return v == null ? null : String(v);
 }
 
-function readSessions(dir: string): SessionItem[] {
+/** Read the typed session store (record/sessions.jsonl) — the synthesis layer,
+ * stored separately from the daily table. Used by the chat route for continuity
+ * (it reads these summaries/insights/commitments, never raw transcripts) and by
+ * the sessions API for the sidebar. */
+export function readSessionsFromRecord(dir: string): SessionItem[] {
   const raw = readJsonl(path.join(dir, "sessions.jsonl"));
   return raw
     .map((o) => ({
@@ -225,7 +229,7 @@ export function readRecord(dir: string): RecordData {
   return {
     daily: readDaily(path.join(dir, "daily")),
     inbox: readInbox(dir),
-    sessions: readSessions(dir),
+    sessions: readSessionsFromRecord(dir),
   };
 }
 
@@ -296,6 +300,71 @@ export function appendInboxItem(
   });
 
   const file = path.join(rDir, "inbox.jsonl");
+  if (fs.existsSync(file)) {
+    const buf = fs.readFileSync(file);
+    if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) fs.appendFileSync(file, "\n");
+  }
+  fs.appendFileSync(file, `${line}\n`);
+  return item;
+}
+
+export interface AppendSessionInput {
+  skill: string;
+  startedAt?: string;
+  endedAt?: string | null;
+  date?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  transcript?: string | null;
+  insights?: string[];
+  commitments?: string[];
+  id?: string;
+}
+
+/**
+ * Append one finished session to record/sessions.jsonl — the typed session store
+ * and synthesis layer, kept separate from record/daily/*.csv. A session is only
+ * written after it's synthesized ({summary, insights, commitments} extracted), so
+ * the record holds the distilled memory the agent later reads for continuity.
+ * The full transcript is stored too but the agent never reads it back — only the
+ * synthesis. Caller rebuilds the SQLite cache afterwards (so it lands on the
+ * Journal timeline). Trailing-newline guarded like the inbox writer.
+ */
+export function appendSession(
+  input: AppendSessionInput,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): SessionItem {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  fs.mkdirSync(rDir, { recursive: true });
+
+  const startedAt = input.startedAt || new Date().toISOString();
+  const item: SessionItem = {
+    id: input.id || crypto.randomUUID(),
+    date: input.date ?? startedAt.slice(0, 10),
+    startedAt,
+    endedAt: input.endedAt ?? new Date().toISOString(),
+    skill: input.skill?.trim() || "mentor",
+    title: input.title ?? null,
+    summary: input.summary ?? null,
+    transcript: input.transcript ?? null,
+    insights: input.insights ?? [],
+    commitments: input.commitments ?? [],
+  };
+
+  const line = JSON.stringify({
+    id: item.id,
+    date: item.date,
+    started_at: item.startedAt,
+    ended_at: item.endedAt,
+    skill: item.skill,
+    ...(item.title == null ? {} : { title: item.title }),
+    ...(item.summary == null ? {} : { summary: item.summary }),
+    ...(item.transcript == null ? {} : { transcript: item.transcript }),
+    insights: item.insights,
+    commitments: item.commitments,
+  });
+
+  const file = path.join(rDir, "sessions.jsonl");
   if (fs.existsSync(file)) {
     const buf = fs.readFileSync(file);
     if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) fs.appendFileSync(file, "\n");
