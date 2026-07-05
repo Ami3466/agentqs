@@ -33,6 +33,20 @@ export const PROVIDERS: Provider[] = [
 export const DEFAULT_PROVIDER = "anthropic";
 export const DEFAULT_MODEL = "claude-sonnet-4-5";
 
+/** Sensible default model per provider when the user hasn't picked one. Single
+ *  source of truth shared by the legacy completion helper (llm.ts) and the
+ *  tool-using agent (agent.ts). */
+export const FALLBACK_MODEL: Record<string, string> = {
+  anthropic: DEFAULT_MODEL,
+  openai: "gpt-4o",
+  google: "gemini-2.5-flash",
+};
+
+/** The model id to actually call: the user's pick, else the provider default. */
+export function fallbackModel(provider: string, model?: string | null): string {
+  return model?.trim() || FALLBACK_MODEL[provider] || "";
+}
+
 export function modelsForProvider(id: string): string[] {
   return PROVIDERS.find((p) => p.id === id)?.models ?? [];
 }

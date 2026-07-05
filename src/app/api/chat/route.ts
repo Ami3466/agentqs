@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
-import { llmComplete, type LlmMessage } from "@/lib/llm";
-import { recordDir } from "@/lib/paths";
+import type { LlmMessage } from "@/lib/llm";
+import { dbPath, recordDir } from "@/lib/paths";
 import { readSessionsFromRecord } from "@/lib/record";
 import { skillById } from "@/lib/skills";
 import { continuityBlock, continuityFallbackReply } from "@/lib/synthesis";
-import { groundedCrossSourceAnswer, groundingContext, readGrounding } from "@/lib/grounding";
+import { groundedCrossSourceAnswer, readGrounding } from "@/lib/grounding";
+import { dailyCatalog, resolveModel, runMentor } from "@/lib/agent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,12 +23,15 @@ function looksLikeDataQuestion(text: string): boolean {
 }
 
 /**
- * Plain-text chat, now with memory (Loop 9). The persona's system prompt is
- * augmented with a continuity block built from the synthesis of past sessions
- * (summaries / insights / commitments — never the raw transcripts), so a new
- * session can pick up an earlier commitment. With no key set it degrades to a
- * persona-flavoured note that still references the latest open commitment when a
- * session opens. `>>` memos and `/` commands never reach here.
+ * Plain-text chat = the mentor agent (Loop 4). With a key, the persona's system
+ * prompt is joined with a compact schema catalog of the daily record and a
+ * continuity block (synthesis of past sessions — summaries / insights /
+ * commitments, never raw transcripts), then the Vercel AI SDK agent runs: it calls
+ * SQL (query_daily) + FTS (search_notes) tools to ground the reply in real numbers
+ * and can pick up an earlier commitment. With no key set it degrades to a
+ * deterministic cross-source answer computed straight from the numbers, or a
+ * persona-flavoured note that references the latest open commitment. `>>` memos and
+ * `/` commands never reach here.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -89,22 +93,27 @@ export async function POST(req: Request) {
   }
 
   const memory = continuityBlock(prior);
-  const dataBlock = groundingContext(grounding);
-  const system = [skill.system, dataBlock, memory].filter(Boolean).join("\n\n");
+  const dbFile = dbPath();
+  const catalog = dailyCatalog(dbFile);
+  const system = [skill.system, catalog.hint, memory].filter(Boolean).join("\n\n");
 
   try {
-    const reply = await llmComplete({
-      provider: cfg.llmProvider,
-      apiKey: cfg.llmKey,
-      model: cfg.model,
+    const model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
+    const run = await runMentor({
+      model,
       system,
       messages: [...history, { role: "user", content: message }],
+      dbFile,
     });
+    // Attribute the grounded badge: the exact sources the tools touched, else (if
+    // it queried but didn't SELECT source) fall back to the record's sources.
+    const sources = run.sources.length ? run.sources : run.grounded ? grounding.sources : [];
     return NextResponse.json({
-      reply: reply || "(no reply)",
+      reply: run.text || "(no reply)",
       skill: skill.id,
-      grounded: Boolean(dataBlock),
-      sources: grounding.sources,
+      grounded: run.grounded,
+      sources,
+      metrics: run.metrics,
       continuity: Boolean(memory),
       model: cfg.model || null,
     });
