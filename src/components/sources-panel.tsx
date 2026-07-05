@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Clock, Spinner } from "@/components/icons";
+import { brandIcon } from "@/components/brand-icons";
 import { GithubConnect } from "@/components/github-connect";
 import { SourceConnect } from "@/components/source-connect";
 import { IntervalSelect } from "@/components/interval-select";
@@ -148,11 +149,12 @@ function SourceRow({
   saving: boolean;
   onIntervalChange: (i: Interval) => void;
 }) {
-  const { name, kind, detail, connected, lastSync, stale, interval } = source;
+  const { id, name, kind, detail, connected, lastSync, stale, interval } = source;
+  const Icon = brandIcon(id);
   return (
     <div className="flex items-center gap-3 p-4">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-sm font-semibold uppercase text-muted-fg">
-        {name.charAt(0)}
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
+        <Icon width={18} height={18} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
