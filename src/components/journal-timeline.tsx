@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { Card } from "./ui";
-import { MessageSquare, Sparkles } from "./icons";
+import { MessageSquare, Person } from "./icons";
 import { cn } from "./ui";
 import type { JournalData, JournalDay, MetricColumn } from "@/lib/journal";
 
@@ -98,7 +98,7 @@ function DayCard({
         {day.sessions.map((s) => (
           <div key={s.id} className="rounded-lg border border-border bg-muted/40 p-3">
             <div className="flex items-center gap-2">
-              <Sparkles width={14} height={14} className={MENTOR_TINT[s.skill] ?? "text-accent"} />
+              <Person width={14} height={14} className={MENTOR_TINT[s.skill] ?? "text-accent"} />
               <span className="text-sm font-medium text-fg">
                 {s.title ?? "Session"}
               </span>

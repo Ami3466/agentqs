@@ -1,4 +1,4 @@
-import { Sparkles } from "./icons";
+import { Mark } from "./icons";
 
 /** agentqs wordmark + mark. Shared by the shell and the auth pages. */
 export function Brand({ size = "md" }: { size?: "md" | "lg" }) {
@@ -12,7 +12,7 @@ export function Brand({ size = "md" }: { size?: "md" | "lg" }) {
             : "flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-accent-fg shadow-sm"
         }
       >
-        <Sparkles width={lg ? 22 : 16} height={lg ? 22 : 16} />
+        <Mark width={lg ? 22 : 16} height={lg ? 22 : 16} />
       </span>
       <span
         className={

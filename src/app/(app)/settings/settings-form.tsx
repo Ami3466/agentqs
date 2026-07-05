@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Eye, EyeOff, Moon, Plus, Spinner, Sparkles, Sun, Trash, X } from "@/components/icons";
+import { Check, Eye, EyeOff, Moon, Person, Plus, RefreshCw, Spinner, Sun, Trash, X } from "@/components/icons";
 import { Button, Card, Field, Input, Select, Textarea, cn } from "@/components/ui";
 import { PROVIDERS } from "@/lib/models";
 import { isBuiltinMentor, type Mentor } from "@/lib/mentors";
@@ -358,7 +358,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
             ) : null}
           </div>
           <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing}>
-            {reindexing ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
+            {reindexing ? <Spinner width={14} height={14} /> : <RefreshCw width={14} height={14} />}
             {reindexing ? "Reindexing…" : "Reindex now"}
           </Button>
         </div>
@@ -551,7 +551,7 @@ function MentorsEditor({ initial }: { initial: Mentor[] }) {
               className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
             >
               <span className="mt-0.5 text-accent">
-                <Sparkles width={15} height={15} />
+                <Person width={15} height={15} />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-2 text-sm font-medium text-fg">

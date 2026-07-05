@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, Inbox, Plus, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
+import { Bookmark, Check, ChevronDown, Inbox, Mark, Person, Plus, Send, Spinner, Terminal } from "@/components/icons";
 import { Sparkline } from "@/components/sparkline";
 import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
@@ -471,7 +471,7 @@ export function Chat() {
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 py-10 text-center">
               <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-muted text-accent">
-                <Sparkles width={20} height={20} />
+                <Mark width={20} height={20} />
               </span>
               <p className="text-lg font-medium text-fg">Ask your life anything.</p>
               <p className="max-w-md text-sm text-muted-fg">
@@ -481,7 +481,7 @@ export function Chat() {
               </p>
               {saved.length ? (
                 <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-[12px] text-muted-fg">
-                  <Sparkles width={12} height={12} className="text-accent" />
+                  <Bookmark width={12} height={12} className="text-accent" />
                   Remembers {saved.length} past session{saved.length === 1 ? "" : "s"} — it may pick up an open commitment.
                 </p>
               ) : null}
@@ -544,7 +544,7 @@ export function Chat() {
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-muted"
                 title="Switch mentor"
               >
-                <Sparkles width={14} height={14} className="text-accent" />
+                <Person width={14} height={14} className="text-accent" />
                 {activeMentor.name}
                 <ChevronDown width={13} height={13} className={cn("transition-transform", mentorOpen && "rotate-180")} />
               </button>
@@ -644,7 +644,7 @@ function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
     return (
       <div className="space-y-2">
         <p className="flex items-center justify-center gap-1.5 text-center text-[11px] text-muted-fg">
-          <Sparkles width={11} height={11} className="text-accent" />
+          <Bookmark width={11} height={11} className="text-accent" />
           What the mentor remembers from this session — the synthesis, not the transcript.
         </p>
         <div className="rounded-xl border border-border bg-muted/40 p-4">
@@ -726,7 +726,7 @@ function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
       <div className="max-w-[85%]">
         {m.mentor ? (
           <p className="mb-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-muted-fg">
-            <Sparkles width={11} height={11} className="text-accent" /> {mentorById(m.mentor, mentors).name}
+            <Person width={11} height={11} className="text-accent" /> {mentorById(m.mentor, mentors).name}
           </p>
         ) : null}
         <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-muted px-3.5 py-2 text-sm text-fg">
