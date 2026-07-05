@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "rebuild": "tsx scripts/rebuild.ts",
-    "rebuild:verify": "tsx scripts/rebuild.ts --record samples/record --verify"
+    "rebuild:verify": "tsx scripts/rebuild.ts --record samples/record --verify",
+    "import:github": "tsx scripts/import-github.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
