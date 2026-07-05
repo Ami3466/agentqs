@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Eye, EyeOff, Moon, Spinner, Sparkles, Sun } from "@/components/icons";
-import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
+import { Check, Eye, EyeOff, Moon, Plus, Spinner, Sparkles, Sun, Trash, X } from "@/components/icons";
+import { Button, Card, Field, Input, Select, Textarea, cn } from "@/components/ui";
 import { PROVIDERS } from "@/lib/models";
-import { SKILLS } from "@/lib/skills";
+import { isBuiltinMentor, type Mentor } from "@/lib/mentors";
 import type { PublicConfig } from "@/lib/config";
 
 interface EmbedStatus {
@@ -158,7 +158,8 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   }
 
   return (
-    <form onSubmit={save} className="max-w-2xl space-y-5">
+    <div className="max-w-2xl space-y-5">
+    <form onSubmit={save} className="space-y-5">
       {/* Profile */}
       <Section title="Profile" desc="How you sign in to this instance.">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -373,31 +374,6 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </p>
       </Section>
 
-      {/* Personas / skills */}
-      <Section
-        title="Personas"
-        desc="The voices your mentor can take. Switch mid-chat with the skill chip or /skill."
-      >
-        <div className="space-y-2">
-          {SKILLS.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
-            >
-              <span className="mt-0.5 text-accent">
-                <Sparkles width={15} height={15} />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-fg">
-                  {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
-                </p>
-                <p className="text-xs text-muted-fg">{s.blurb}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Section>
-
       {/* Save bar */}
       <div className="flex items-center gap-3">
         <Button type="submit" variant="primary" disabled={saving}>
@@ -414,5 +390,225 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         ) : null}
       </div>
     </form>
+
+      {/* Mentors — persisted independently via /api/mentors, not the Save bar above */}
+      <MentorsEditor initial={config.mentors} />
+    </div>
+  );
+}
+
+// ---- Mentors editor -------------------------------------------------------
+
+const preview = (s: string) => (s.length > 130 ? `${s.slice(0, 129).trimEnd()}…` : s);
+
+/**
+ * Add / edit / delete the mentors the chat can wear. Built-ins arrive as editable
+ * rows; every change persists to config.json via /api/mentors on its own (this
+ * section is independent of the page's Save button) so it survives a reload and
+ * shows up in the chat chip immediately.
+ */
+function MentorsEditor({ initial }: { initial: Mentor[] }) {
+  const [mentors, setMentors] = useState<Mentor[]>(initial);
+  const [editing, setEditing] = useState<string | null>(null); // a mentor id, "new", or null
+  const [name, setName] = useState("");
+  const [blurb, setBlurb] = useState("");
+  const [system, setSystem] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  function openNew() {
+    setEditing("new");
+    setName("");
+    setBlurb("");
+    setSystem("");
+    setError("");
+    setConfirmId(null);
+  }
+  function openEdit(m: Mentor) {
+    setEditing(m.id);
+    setName(m.name);
+    setBlurb(m.blurb);
+    setSystem(m.system);
+    setError("");
+    setConfirmId(null);
+  }
+
+  async function save() {
+    if (!name.trim()) return setError("Give the mentor a name.");
+    if (!system.trim()) return setError("Add a system prompt — it's what drives the reply.");
+    setBusy(true);
+    setError("");
+    try {
+      const creating = editing === "new";
+      const res = await fetch("/api/mentors", {
+        method: creating ? "POST" : "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          creating ? { name, blurb, system } : { id: editing, name, blurb, system },
+        ),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(data.mentors)) {
+        setError(data.error || "Could not save the mentor.");
+        return;
+      }
+      setMentors(data.mentors);
+      setEditing(null);
+    } catch {
+      setError("Could not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/mentors", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(data.mentors)) {
+        setError(data.error || "Could not delete the mentor.");
+        return;
+      }
+      setMentors(data.mentors);
+      setConfirmId(null);
+      if (editing === id) setEditing(null);
+    } catch {
+      setError("Could not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const editorCard = (
+    <div className="rounded-lg border border-border bg-muted/40 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-sm font-medium text-fg">{editing === "new" ? "New mentor" : "Edit mentor"}</p>
+        <button
+          type="button"
+          onClick={() => setEditing(null)}
+          className="rounded p-1 text-muted-fg hover:text-fg"
+          aria-label="Close editor"
+        >
+          <X width={16} height={16} />
+        </button>
+      </div>
+      <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Name" htmlFor="m-name">
+            <Input id="m-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Stoic" maxLength={40} />
+          </Field>
+          <Field label="One-line blurb" htmlFor="m-blurb">
+            <Input
+              id="m-blurb"
+              value={blurb}
+              onChange={(e) => setBlurb(e.target.value)}
+              placeholder="Calm, principled, cuts to what you control"
+              maxLength={120}
+            />
+          </Field>
+        </div>
+        <Field label="System prompt" htmlFor="m-system" hint="Handed to the model as the mentor's voice — this is what drives the reply.">
+          <Textarea
+            id="m-system"
+            rows={5}
+            value={system}
+            onChange={(e) => setSystem(e.target.value)}
+            placeholder="You are a Stoic mentor. Ground the reply in the user's real record, separate what they control from what they don't, and end on one action within their control."
+          />
+        </Field>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="primary" size="sm" onClick={() => void save()} disabled={busy}>
+            {busy ? <Spinner width={14} height={14} /> : null}
+            {editing === "new" ? "Add mentor" : "Save mentor"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(null)} disabled={busy}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <Section
+      title="Mentors"
+      desc="Voices you switch between mid-chat with the chip or /mentor. Add your own or tweak the built-ins."
+    >
+      <div className="space-y-2">
+        {mentors.map((m) =>
+          editing === m.id ? (
+            <div key={m.id}>{editorCard}</div>
+          ) : (
+            <div
+              key={m.id}
+              className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
+            >
+              <span className="mt-0.5 text-accent">
+                <Sparkles width={15} height={15} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-2 text-sm font-medium text-fg">
+                  {m.name}
+                  {isBuiltinMentor(m.id) ? (
+                    <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
+                      built-in
+                    </span>
+                  ) : null}
+                </p>
+                {m.blurb ? <p className="text-xs text-muted-fg">{m.blurb}</p> : null}
+                <p className="mt-1 text-xs text-muted-fg/80">{preview(m.system)}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {confirmId === m.id ? (
+                  <>
+                    <Button type="button" size="sm" variant="danger" onClick={() => void remove(m.id)} disabled={busy}>
+                      {busy ? <Spinner width={14} height={14} /> : null} Delete
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmId(null)}>
+                      Keep
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => openEdit(m)} disabled={busy}>
+                      Edit
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmId(m.id);
+                        setError("");
+                      }}
+                      disabled={busy}
+                      className="rounded-lg p-1.5 text-muted-fg transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                      aria-label={`Delete ${m.name}`}
+                    >
+                      <Trash width={15} height={15} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+
+      {editing === "new" ? (
+        <div className="mt-2">{editorCard}</div>
+      ) : editing === null ? (
+        <Button type="button" size="sm" className="mt-3" onClick={openNew}>
+          <Plus width={14} height={14} /> Add mentor
+        </Button>
+      ) : null}
+
+      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
+    </Section>
   );
 }

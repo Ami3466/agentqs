@@ -6,7 +6,7 @@ import { answerRecall } from "./embeddings";
 import { continuityBlock, continuityFallbackReply } from "./synthesis";
 import { dailyCatalog, resolveModel, runMentor } from "./agent";
 import { modeOf, memoText } from "./smart-input";
-import { skillById } from "./skills";
+import { effectiveMentors, mentorById } from "./mentors";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -20,7 +20,7 @@ import type { LlmMessage } from "./llm";
  *   plain text /  → the grounded mentor. With an AI key it's the tool-using agent
  *   a question       (runMentor: query_daily + search_notes over the record). With
  *                    no key a cross-source data question is still answered
- *                    deterministically from the numbers, else a persona/continuity
+ *                    deterministically from the numbers, else a mentor/continuity
  *                    note. Either way the reply cites the user's real record.
  *
  * This is the single funnel every channel adapter calls, so a new transport is a
@@ -40,7 +40,7 @@ export interface ComposedReply {
 export interface ComposeReplyInput {
   message: string;
   channel: string; // "telegram" | "slack" — the inbox source for a memo
-  skill?: string | null;
+  mentor?: string | null;
   history?: LlmMessage[];
 }
 
@@ -48,7 +48,6 @@ export interface ComposeReplyInput {
  *  (memo vs keyed agent vs keyless grounded vs continuity) without streaming. */
 export async function composeReply(input: ComposeReplyInput): Promise<ComposedReply> {
   const raw = input.message.trim();
-  const skill = skillById(input.skill);
   const mode = modeOf(raw);
 
   // ---- Memo: land it raw in the inbox, no LLM, and ack. -------------------
@@ -75,6 +74,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const message = mode === "command" ? raw.replace(/^\//, "").trim() : raw;
 
   const cfg = readConfig();
+  const mentor = mentorById(input.mentor, effectiveMentors(cfg?.mentors));
   const history = Array.isArray(input.history)
     ? input.history
         .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
@@ -116,14 +116,14 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
         };
       }
     }
-    const opener = sessionStart ? continuityFallbackReply(skill.name, prior) : null;
+    const opener = sessionStart ? continuityFallbackReply(mentor.name, prior) : null;
     if (opener) {
       return { mode: "chat", text: opener, grounded: false, sources: [], metrics: [], via: "continuity" };
     }
     return {
       mode: "chat",
       text:
-        `I'm your ${skill.name.toLowerCase()}. Add an AI key in Settings and I'll answer this grounded in your real data. ` +
+        `I'm your ${mentor.name.toLowerCase()}. Add an AI key in Settings and I'll answer this grounded in your real data. ` +
         `Until then, send \`>> a note\` and I'll keep your record building.`,
       grounded: false,
       sources: [],
@@ -136,7 +136,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const dbFile = dbPath();
   const catalog = dailyCatalog(dbFile);
   const memory = continuityBlock(prior);
-  const system = [skill.system, catalog.hint, memory].filter(Boolean).join("\n\n");
+  const system = [mentor.system, catalog.hint, memory].filter(Boolean).join("\n\n");
   const model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model, cfg.llmModels);
 
   const run = await runMentor({

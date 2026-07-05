@@ -2,6 +2,7 @@ import fs from "fs";
 import { configPath, dataDir } from "./paths";
 import type { JournalView } from "./journal";
 import type { Interval } from "./sources";
+import { effectiveMentors, type Mentor } from "./mentors";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -20,6 +21,7 @@ export interface AppConfig {
   githubToken?: string; // GitHub PAT for the commits importer (optional)
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
   journalViews?: JournalView[]; // saved Journal table layouts, per user
+  mentors?: Mentor[]; // custom + edited mentors; absent = the three built-ins
   sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
@@ -92,6 +94,7 @@ export interface PublicConfig {
   theme: string;
   dataDir: string;
   createdAt: string;
+  mentors: Mentor[]; // effective mentor list (built-ins seeded + custom), for the editor + chip
 }
 
 export function publicConfig(cfg: AppConfig): PublicConfig {
@@ -105,5 +108,6 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     theme: cfg.theme,
     dataDir: dataDir(),
     createdAt: cfg.createdAt,
+    mentors: effectiveMentors(cfg.mentors),
   };
 }

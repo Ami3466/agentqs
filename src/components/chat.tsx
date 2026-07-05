@@ -8,12 +8,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, Inbox, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
+import { Check, ChevronDown, Inbox, Plus, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
 import { Sparkline } from "@/components/sparkline";
 import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
 import type { SparkPayload } from "@/lib/grounding";
-import { DEFAULT_SKILL, SKILLS, skillById } from "@/lib/skills";
+import { BUILTIN_MENTORS, DEFAULT_MENTOR, mentorById, type Mentor } from "@/lib/mentors";
 import { COMMANDS, filterCommands, memoText, modeOf, parseCommand } from "@/lib/smart-input";
 
 // ---- Messages -------------------------------------------------------------
@@ -23,7 +23,7 @@ interface Msg {
   id: string;
   role: Role;
   text: string;
-  skill?: string; // persona that produced an assistant reply
+  mentor?: string; // mentor that produced an assistant reply
   pending?: number; // memo: inbox count after saving
   tone?: "ok" | "error";
   session?: SavedSession; // recap: the synthesized session being viewed
@@ -38,7 +38,7 @@ interface SavedSession {
   id: string;
   date: string;
   startedAt: string;
-  skill: string;
+  mentor: string;
   title: string | null;
   summary: string | null;
   insights: string[];
@@ -48,11 +48,12 @@ interface SavedSession {
 let seq = 0;
 const nid = () => `m${Date.now().toString(36)}_${(seq++).toString(36)}`;
 
-const SKILL_KEY = "agentqs.skill";
+const MENTOR_KEY = "agentqs.mentor";
 
 export function Chat() {
   const router = useRouter();
-  const [skill, setSkill] = useState(DEFAULT_SKILL);
+  const [mentors, setMentors] = useState<Mentor[]>(BUILTIN_MENTORS);
+  const [mentor, setMentor] = useState(DEFAULT_MENTOR);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
@@ -60,22 +61,35 @@ export function Chat() {
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState(false);
   const [viewingId, setViewingId] = useState<string | null>(null);
-  const [skillOpen, setSkillOpen] = useState(false);
+  const [mentorOpen, setMentorOpen] = useState(false);
   const [hi, setHi] = useState(0); // highlighted command in the palette
 
-  const skillRef = useRef<HTMLDivElement>(null);
+  const mentorRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const mode = modeOf(input);
-  const activeSkill = skillById(skill);
+  const activeMentor = mentorById(mentor, mentors);
 
   const filtered = useMemo(() => filterCommands(input), [input]);
 
-  // Restore the last-used persona.
+  // Load the merged built-in + custom mentor list, then restore the last-used pick.
   useEffect(() => {
-    const savedSkill = typeof window !== "undefined" ? window.localStorage.getItem(SKILL_KEY) : null;
-    if (savedSkill && SKILLS.some((s) => s.id === savedSkill)) setSkill(savedSkill);
+    let alive = true;
+    fetch("/api/mentors")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive || !d || !Array.isArray(d.mentors) || !d.mentors.length) return;
+        const list = d.mentors as Mentor[];
+        setMentors(list);
+        const savedMentor =
+          typeof window !== "undefined" ? window.localStorage.getItem(MENTOR_KEY) : null;
+        if (savedMentor && list.some((m) => m.id === savedMentor)) setMentor(savedMentor);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // Load persisted sessions (the synthesis store) for the sidebar + memory hint.
@@ -92,20 +106,20 @@ export function Chat() {
     };
   }, []);
 
-  // Close the skill dropdown on outside click / Escape.
+  // Close the mentor dropdown on outside click / Escape.
   useEffect(() => {
-    if (!skillOpen) return;
+    if (!mentorOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (skillRef.current && !skillRef.current.contains(e.target as Node)) setSkillOpen(false);
+      if (mentorRef.current && !mentorRef.current.contains(e.target as Node)) setMentorOpen(false);
     };
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setSkillOpen(false);
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setMentorOpen(false);
     document.addEventListener("mousedown", onClick);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [skillOpen]);
+  }, [mentorOpen]);
 
   // Keep the palette highlight in range as the filter narrows.
   useEffect(() => {
@@ -121,10 +135,10 @@ export function Chat() {
     setMessages((prev) => [...prev, { ...m, id: nid() }]);
   }
 
-  function chooseSkill(id: string) {
-    setSkill(id);
-    setSkillOpen(false);
-    if (typeof window !== "undefined") window.localStorage.setItem(SKILL_KEY, id);
+  function chooseMentor(id: string) {
+    setMentor(id);
+    setMentorOpen(false);
+    if (typeof window !== "undefined") window.localStorage.setItem(MENTOR_KEY, id);
     inputRef.current?.focus();
   }
 
@@ -140,7 +154,7 @@ export function Chat() {
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: convo, skill }),
+        body: JSON.stringify({ messages: convo, mentor }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.session) {
@@ -168,7 +182,7 @@ export function Chat() {
    * not the raw transcript. Continuing from here starts a fresh conversation. */
   function openSaved(s: SavedSession) {
     setViewingId(s.id);
-    setSkill(SKILLS.some((k) => k.id === s.skill) ? s.skill : skill);
+    setMentor(mentors.some((k) => k.id === s.mentor) ? s.mentor : mentor);
     setMessages([{ id: nid(), role: "recap", text: "", session: s }]);
   }
 
@@ -209,13 +223,13 @@ export function Chat() {
       void newSession();
       return;
     }
-    if (cmd === "skill") {
+    if (cmd === "mentor") {
       const target = args[0]?.toLowerCase();
-      if (target && SKILLS.some((s) => s.id === target)) {
-        chooseSkill(target);
-        push({ role: "note", tone: "ok", text: `Switched to ${skillById(target).name}.` });
+      if (target && mentors.some((s) => s.id === target)) {
+        chooseMentor(target);
+        push({ role: "note", tone: "ok", text: `Switched to ${mentorById(target, mentors).name}.` });
       } else {
-        push({ role: "note", text: `Pick a persona: ${SKILLS.map((s) => s.id).join(" · ")}` });
+        push({ role: "note", text: `Pick a mentor: ${mentors.map((s) => s.id).join(" · ")}` });
       }
       return;
     }
@@ -273,14 +287,14 @@ export function Chat() {
 
     // Drop in an empty assistant bubble the stream fills token-by-token.
     const aid = nid();
-    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", skill, streaming: true }]);
+    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", mentor, streaming: true }]);
     setStreamingId(aid);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, skill, history }),
+        body: JSON.stringify({ message: text, mentor, history }),
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
@@ -307,7 +321,7 @@ export function Chat() {
             t?: string;
             v?: string;
             error?: string;
-            skill?: string;
+            mentor?: string;
             grounded?: boolean;
             sources?: string[];
             spark?: SparkPayload | null;
@@ -324,7 +338,7 @@ export function Chat() {
               ...m,
               streaming: false,
               text: m.text.trim() ? m.text : "(no reply)",
-              skill: f.skill || m.skill,
+              mentor: f.mentor || m.mentor,
               grounded: Boolean(f.grounded),
               sources: Array.isArray(f.sources) && f.sources.length ? f.sources : undefined,
               spark: f.spark ?? undefined,
@@ -394,8 +408,8 @@ export function Chat() {
     mode === "memo"
       ? "Memo — saved to your inbox, no reply"
       : mode === "command"
-        ? "Command — /sync · /structure · /new · /skill"
-        : `Message your ${activeSkill.name.toLowerCase()}…  ( >> memo · / commands )`;
+        ? "Command — /sync · /structure · /new · /mentor"
+        : `Message your ${activeMentor.name.toLowerCase()}…  ( >> memo · / commands )`;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
@@ -438,7 +452,7 @@ export function Chat() {
                 </span>
                 <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-fg">
                   <span>{s.date}</span>
-                  <span>· {skillById(s.skill).name}</span>
+                  <span>· {mentorById(s.mentor, mentors).name}</span>
                   {s.commitments.length ? (
                     <span className="inline-flex items-center gap-0.5 text-accent">
                       · <Check width={10} height={10} /> {s.commitments.length}
@@ -473,7 +487,7 @@ export function Chat() {
               ) : null}
             </div>
           ) : (
-            messages.map((m) => <Bubble key={m.id} m={m} />)
+            messages.map((m) => <Bubble key={m.id} m={m} mentors={mentors} />)
           )}
           {busy && !streamingId ? (
             <div className="flex items-center gap-2 text-xs text-muted-fg">
@@ -496,7 +510,7 @@ export function Chat() {
                   type="button"
                   onMouseEnter={() => setHi(i)}
                   onClick={() => {
-                    if (c.cmd === "/skill") setInput("/skill ");
+                    if (c.cmd === "/mentor") setInput("/mentor ");
                     else void runCommand(c.cmd);
                     inputRef.current?.focus();
                   }}
@@ -522,39 +536,53 @@ export function Chat() {
                   : "border-input focus-within:border-ring/60",
             )}
           >
-            {/* skill chip */}
-            <div className="relative" ref={skillRef}>
+            {/* mentor chip */}
+            <div className="relative" ref={mentorRef}>
               <button
                 type="button"
-                onClick={() => setSkillOpen((v) => !v)}
+                onClick={() => setMentorOpen((v) => !v)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-muted"
-                title="Switch persona"
+                title="Switch mentor"
               >
                 <Sparkles width={14} height={14} className="text-accent" />
-                {activeSkill.name}
-                <ChevronDown width={13} height={13} className={cn("transition-transform", skillOpen && "rotate-180")} />
+                {activeMentor.name}
+                <ChevronDown width={13} height={13} className={cn("transition-transform", mentorOpen && "rotate-180")} />
               </button>
-              {skillOpen ? (
+              {mentorOpen ? (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-card shadow-xl">
                   <p className="border-b border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-                    Persona
+                    Mentor
                   </p>
-                  {SKILLS.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => chooseSkill(s.id)}
-                      className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
-                    >
-                      <span className="mt-0.5 w-4 shrink-0 text-accent">
-                        {s.id === skill ? <Check width={14} height={14} /> : null}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium text-fg">{s.name}</span>
-                        <span className="block truncate text-xs text-muted-fg">{s.blurb}</span>
-                      </span>
-                    </button>
-                  ))}
+                  <div className="max-h-72 overflow-y-auto">
+                    {mentors.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => chooseMentor(s.id)}
+                        className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
+                      >
+                        <span className="mt-0.5 w-4 shrink-0 text-accent">
+                          {s.id === mentor ? <Check width={14} height={14} /> : null}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-fg">{s.name}</span>
+                          {s.blurb ? (
+                            <span className="block truncate text-xs text-muted-fg">{s.blurb}</span>
+                          ) : null}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMentorOpen(false);
+                      router.push("/settings");
+                    }}
+                    className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors hover:bg-muted"
+                  >
+                    <Plus width={14} height={14} className="text-accent" /> New mentor
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -597,8 +625,8 @@ export function Chat() {
             ) : (
               <>
                 <b className="font-medium text-fg">Enter</b> to send · <code className="font-mono">&gt;&gt;</code>{" "}
-                memo · <code className="font-mono">/</code> commands · persona:{" "}
-                <b className="font-medium text-fg">{activeSkill.name}</b>
+                memo · <code className="font-mono">/</code> commands · mentor:{" "}
+                <b className="font-medium text-fg">{activeMentor.name}</b>
               </>
             )}
           </p>
@@ -610,7 +638,7 @@ export function Chat() {
 
 // ---- One message ----------------------------------------------------------
 
-function Bubble({ m }: { m: Msg }) {
+function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
   if (m.role === "recap" && m.session) {
     const s = m.session;
     return (
@@ -623,7 +651,7 @@ function Bubble({ m }: { m: Msg }) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-fg">{s.title ?? "Session"}</span>
             <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              {skillById(s.skill).name}
+              {mentorById(s.mentor, mentors).name}
             </span>
             <span className="text-[11px] text-muted-fg">{s.date}</span>
           </div>
@@ -696,9 +724,9 @@ function Bubble({ m }: { m: Msg }) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[85%]">
-        {m.skill ? (
+        {m.mentor ? (
           <p className="mb-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-muted-fg">
-            <Sparkles width={11} height={11} className="text-accent" /> {skillById(m.skill).name}
+            <Sparkles width={11} height={11} className="text-accent" /> {mentorById(m.mentor, mentors).name}
           </p>
         ) : null}
         <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-muted px-3.5 py-2 text-sm text-fg">

@@ -102,7 +102,7 @@ async function main() {
     const res = await fetch(`${base}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ message: question, skill: "mentor", history: [] }),
+      body: JSON.stringify({ message: question, mentor: "mentor", history: [] }),
     });
     check("chat responded 200", res.status === 200);
     check("response is an NDJSON stream", (res.headers.get("content-type") || "").includes("ndjson"));

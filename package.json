@@ -15,6 +15,7 @@
     "daemon": "tsx scripts/daemon.ts",
     "chat:test": "tsx scripts/chat-stream.ts",
     "smart:test": "tsx scripts/smart-input.ts",
+    "mentors:test": "tsx scripts/mentors.ts",
     "session:test": "tsx scripts/session-continuity.ts",
     "sync:test": "tsx scripts/sync-engine.ts",
     "integration:test": "tsx scripts/integration-batch.ts",

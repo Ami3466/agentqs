@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/session";
 import { readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import { appendSession, readSessionsFromRecord, rebuild } from "@/lib/record";
-import { skillById } from "@/lib/skills";
+import { effectiveMentors, mentorById } from "@/lib/mentors";
 import type { LlmMessage } from "@/lib/llm";
 import {
   openCommitments,
@@ -19,7 +19,7 @@ interface SessionView {
   id: string;
   date: string;
   startedAt: string;
-  skill: string;
+  mentor: string;
   title: string | null;
   summary: string | null;
   insights: string[];
@@ -40,7 +40,7 @@ function toView(s: {
     id: s.id,
     date: s.date ?? s.startedAt.slice(0, 10),
     startedAt: s.startedAt,
-    skill: s.skill,
+    mentor: s.skill,
     title: s.title,
     summary: s.summary,
     insights: s.insights,
@@ -67,7 +67,7 @@ export async function GET() {
  * timeline, and return the synthesis. The agent later reads this synthesis —
  * never the transcript — for continuity.
  *
- * Body: `{ messages: [{role,content}], skill, title?, startedAt? }`.
+ * Body: `{ messages: [{role,content}], mentor, title?, startedAt? }`.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -76,7 +76,7 @@ export async function POST(req: Request) {
 
   const body = (await req.json().catch(() => ({}))) as {
     messages?: LlmMessage[];
-    skill?: string;
+    mentor?: string;
     title?: string;
     startedAt?: string;
   };
@@ -91,17 +91,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Nothing to save — a session needs at least one message." }, { status: 400 });
   }
 
-  const skill = skillById(body.skill).id;
+  const cfg = readConfig();
+  const mentor = mentorById(body.mentor, effectiveMentors(cfg?.mentors)).id;
   const startedAt = body.startedAt || new Date().toISOString();
   const date = startedAt.slice(0, 10);
-  const cfg = readConfig();
 
-  const { synthesis, via, transcript } = await synthesizeSession({ messages, skill, date, cfg });
+  const { synthesis, via, transcript } = await synthesizeSession({ messages, skill: mentor, date, cfg });
 
   const rDir = recordDir();
   const item = appendSession(
     {
-      skill,
+      skill: mentor,
       startedAt,
       date,
       title: body.title?.trim() || synthesis.title || null,
