@@ -162,6 +162,24 @@ dense per-day series, and merges them into `record/daily/github.csv`. In the app
 the **Data** tab does the same with one click (paste a token → real commits land
 in your record and rebuild into the daily table).
 
+## Structure — raw → daily
+
+Anything you capture lands raw and free in the **pending inbox**: memos (`>>` in
+Chat), and any CSV or text file you **drag-and-drop** (or Upload) onto the Data
+tab. Nothing is parsed until you press **Structure** — that's the only place you
+spend tokens, and only for prose.
+
+- **Clean CSV / TSV → direct column map, no LLM.** The first date column becomes
+  `date` (ISO), the rest become metrics, and it's merged into
+  `record/daily/<source>.csv`. Deterministic and free.
+- **Prose note → LLM.** The model extracts any dated metrics into the same wide
+  shape, then merges the same way. Needs an AI key (Settings); if none is set,
+  prose items stay pending and CSVs still structure for free.
+
+Either way the cache is rebuilt and the new rows appear in the **daily table**
+preview right below the inbox — long form `(date, source, metric, value)`, the
+same table the mentor reasons over.
+
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.

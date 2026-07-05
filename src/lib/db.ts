@@ -78,6 +78,14 @@ export function open(path: string): DB {
   return db;
 }
 
+/** Open an existing cache read-only — the query path (Data/Journal previews).
+ * `query_only` guarantees the derived cache is never mutated by a reader. */
+export function openReadonly(path: string): DB {
+  const db = new Database(path, { readonly: true, fileMustExist: true });
+  db.pragma("query_only = ON");
+  return db;
+}
+
 /** Create a fresh in-memory DB with the schema applied — the rebuild target. */
 export function createEmpty(): DB {
   const db = new Database(":memory:");
