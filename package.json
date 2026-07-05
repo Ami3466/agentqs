@@ -20,6 +20,7 @@
     "integration:test": "tsx scripts/integration-batch.ts",
     "files:test": "tsx scripts/import-files-test.ts",
     "voice:test": "tsx scripts/voice-memo.ts",
+    "channels:test": "tsx scripts/channels.ts",
     "agent:test": "tsx scripts/agent-brain.ts"
   },
   "dependencies": {

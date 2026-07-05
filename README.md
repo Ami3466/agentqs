@@ -402,6 +402,51 @@ npm run voice:test         # ships-when proof (Loop 13): a local transcriber is
                            # session reports config-gated when unset.
 ```
 
+## Channels — talk to your record from Telegram or Slack
+
+Your mentor doesn't have to live in the browser. Point a **Telegram** or **Slack**
+bot at your running instance and DM it — *"why am I so tired lately?"* comes back
+with the same grounded answer the Chat tab gives, and `>> slept badly` still lands
+raw in your inbox. It's the cloud replica's job: **message in → memo or grounded
+chat → reply out.**
+
+Every channel is the same channel-agnostic adapter
+(`src/lib/channels/*`) — a thin shell around the shared reply brain
+(`src/lib/reply.ts`, the exact `>>`-memo / grounded-chat logic the Chat box uses,
+just non-streaming):
+
+- **ingest** — verify the request came from the platform (a Telegram shared secret,
+  a Slack signing-secret signature) and parse it into one normalized message.
+- **composeReply** — the shared brain: a `>>` line is appended raw to the inbox
+  (no LLM, no daily row) and acked; anything else is answered grounded — the
+  tool-using agent with a key, the deterministic cross-source answer without one.
+- **send** — post the reply back out via the platform's official API
+  (Telegram `sendMessage` · Slack `chat.postMessage`).
+
+Adding a channel is one small file plus a registry entry — the brain, the record,
+and the grounding never change. Each is a webhook at `/api/channels/<channel>`:
+
+```bash
+# Telegram — create a bot with @BotFather, set TELEGRAM_BOT_TOKEN, then register:
+curl "https://api.telegram.org/bot<token>/setWebhook?url=<host>/api/channels/telegram&secret_token=<secret>"
+
+# Slack — set SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET and point the app's
+# Events API request URL at <host>/api/channels/slack (the url_verification
+# handshake is handled automatically).
+```
+
+Channels are official APIs only — **WhatsApp will use the official Cloud API**, never
+an unofficial bridge (data + ban risk). The transport carries the message; your
+sensitive data never leaves your store.
+
+```bash
+npm run channels:test      # ships-when proof (Loop 14): a Telegram DM "why tired?"
+                           # is grounded against a real 2-source record and the
+                           # reply is posted back out via the Bot API; the identical
+                           # Slack message gives the identical reply through the same
+                           # adapter; a `>>` memo lands raw in the inbox (no LLM).
+```
+
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.
