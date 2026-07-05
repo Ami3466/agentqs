@@ -13,8 +13,12 @@ services:
     volumes:
       # Your record + SQLite + config live here. Persist it.
       - agentqs-data:/data
-      # Optional: mount local file sources read-only, e.g.
+      # Optional: mount local file sources read-only (only works when this
+      # container runs on the machine that holds the files). Otherwise run the
+      # local daemon on that machine — `npm run daemon -- run --push` — and let
+      # this instance pull the record via git. The importer probes these paths:
       # - "$HOME/Library/Application Support/Google/Chrome:/host/chrome:ro"
+      # - "$HOME/Library/Application Support/MobileSync/Backup:/host/iphone-backup:ro"
     restart: unless-stopped
 
 volumes:

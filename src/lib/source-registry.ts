@@ -15,6 +15,7 @@ import { recordDir } from "./paths";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { PLUGINS } from "./importers/registry";
 import { resolveCredential } from "./importers/plugin";
+import { FILE_IMPORTERS } from "./importers/files/registry";
 import {
   isDue,
   isStale,
@@ -33,11 +34,10 @@ interface Registered {
   live: boolean; // has a working importer
 }
 
-/** Not-yet-live file-based integrations (later loops wire these up). GitHub and
- *  the Tier-1 plugins are composed separately below. */
+/** Not-yet-live file-based integrations (later loops wire these up). GitHub, the
+ *  Tier-1 plugins, and the Tier-2 file importers are composed separately below. */
 const PLACEHOLDERS: Registered[] = [
   { id: "apple-health", name: "Apple Health", kind: "manual", detail: "steps, HR, sleep, workouts", live: false },
-  { id: "chrome", name: "Chrome history", kind: "manual", detail: "browsing history", live: false },
 ];
 
 function intervalFor(cfg: AppConfig | null, id: string): Interval {
@@ -120,13 +120,42 @@ function pluginRow(cfg: AppConfig | null, dir: string, plugin: (typeof PLUGINS)[
   };
 }
 
-/** Compose the full sources list: GitHub + Tier-1 plugins + placeholder
- *  integrations + discovered manual sources (any daily/*.csv not owned above). */
+/** Row for a Tier-2 file importer (Chrome history, iPhone backup). These read a
+ *  local file on the user's own machine, so the server can never auto-sync them —
+ *  they're `manual` (run `agentqs import:file` / the local daemon; a cloud replica
+ *  gets the rows via git). Connected once the record file has rows; overdue → stale. */
+function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FILE_IMPORTERS)[number]): SourceView {
+  const file = path.join(dir, "daily", `${importer.id}.csv`);
+  const connected = hasRows(file);
+  const lastSync = cfg?.sourceSyncedAt?.[importer.id] ?? fileMtimeISO(file);
+  const interval = intervalFor(cfg, importer.id);
+  return {
+    id: importer.id,
+    name: importer.name,
+    kind: "manual",
+    detail: importer.detail,
+    connected,
+    interval,
+    lastSync,
+    stale: connected ? isStale(lastSync, interval) : false,
+    due: false, // local file — the server can't reach the user's disk
+    syncEndpoint: null,
+    live: importer.live,
+  };
+}
+
+/** Compose the full sources list: GitHub + Tier-1 plugins + Tier-2 file importers
+ *  + placeholder integrations + discovered manual sources (daily/*.csv not owned). */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   const out: SourceView[] = [githubRow(cfg, dir)];
   for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
+  for (const importer of FILE_IMPORTERS) out.push(fileSourceRow(cfg, dir, importer));
 
-  const owned = new Set<string>(["github", ...PLUGINS.map((p) => p.id)]);
+  const owned = new Set<string>([
+    "github",
+    ...PLUGINS.map((p) => p.id),
+    ...FILE_IMPORTERS.map((f) => f.id),
+  ]);
 
   for (const reg of PLACEHOLDERS) {
     out.push({
