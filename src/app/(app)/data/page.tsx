@@ -1,5 +1,6 @@
 import { PageHeader } from "@/components/page-header";
 import { GithubConnect } from "@/components/github-connect";
+import { InboxPanel } from "@/components/inbox-panel";
 import { Badge, Card } from "@/components/ui";
 
 // Stub sources — wired one by one in later loops. GitHub is live (Loop 3).
@@ -40,15 +41,8 @@ export default function DataPage() {
           ))}
         </Card>
 
-        <Card className="p-4">
-          <p className="text-sm font-semibold text-fg">Pending inbox</p>
-          <p className="mt-1 text-xs text-muted-fg">
-            Everything lands here raw and free. Hit <b>Structure</b> to turn it
-            into clean daily data — you only spend tokens on the button.
-          </p>
-          <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-fg">
-            Drop a CSV, export, or screenshot
-          </div>
+        <Card>
+          <InboxPanel />
         </Card>
       </div>
     </div>

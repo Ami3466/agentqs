@@ -248,6 +248,57 @@ export function recordHash(dir: string): string {
   return h.digest("hex");
 }
 
+// ---- Writers --------------------------------------------------------------
+
+export interface AppendInboxInput {
+  text: string;
+  source?: string; // memo | drop | chat | telegram | ...  (default: memo)
+  kind?: string; // text | csv | file | ...                (default: text)
+  meta?: unknown;
+}
+
+/**
+ * Append one raw capture to record/inbox.jsonl — the pending bucket. The record
+ * is the source of truth; the caller rebuilds the SQLite cache afterwards. No
+ * LLM, no parsing: whatever the user typed lands verbatim, status `pending`.
+ * A trailing newline is guaranteed so lines never run together on re-append.
+ */
+export function appendInboxItem(
+  input: AppendInboxInput,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): InboxItem {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  fs.mkdirSync(rDir, { recursive: true });
+
+  const item: InboxItem = {
+    id: crypto.randomUUID(),
+    ts: new Date().toISOString(),
+    source: input.source?.trim() || "memo",
+    kind: input.kind?.trim() || "text",
+    text: input.text,
+    meta: input.meta ?? null,
+    status: "pending",
+  };
+
+  const line = JSON.stringify({
+    id: item.id,
+    ts: item.ts,
+    source: item.source,
+    kind: item.kind,
+    text: item.text,
+    ...(item.meta == null ? {} : { meta: item.meta }),
+    status: item.status,
+  });
+
+  const file = path.join(rDir, "inbox.jsonl");
+  if (fs.existsSync(file)) {
+    const buf = fs.readFileSync(file);
+    if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) fs.appendFileSync(file, "\n");
+  }
+  fs.appendFileSync(file, `${line}\n`);
+  return item;
+}
+
 // ---- Rebuild --------------------------------------------------------------
 
 export interface RebuildOptions {
