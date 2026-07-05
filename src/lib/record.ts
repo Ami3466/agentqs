@@ -68,8 +68,13 @@ export function parseNumber(s: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Minimal RFC-4180 CSV: quotes, escaped quotes, embedded commas/newlines. */
-export function parseCsv(text: string): { header: string[]; rows: string[][] } {
+/** Minimal RFC-4180 CSV: quotes, escaped quotes, embedded delimiters/newlines.
+ * The delimiter is configurable (comma default) so tab/semicolon exports parse
+ * with the same quote-aware state machine. */
+export function parseCsv(
+  text: string,
+  delimiter = ",",
+): { header: string[]; rows: string[][] } {
   const records: string[][] = [];
   let field = "";
   let row: string[] = [];
@@ -105,7 +110,7 @@ export function parseCsv(text: string): { header: string[]; rows: string[][] } {
     if (c === '"') {
       inQuotes = true;
       i++;
-    } else if (c === ",") {
+    } else if (c === delimiter) {
       endField();
       i++;
     } else if (c === "\r") {
@@ -297,6 +302,148 @@ export function appendInboxItem(
   }
   fs.appendFileSync(file, `${line}\n`);
   return item;
+}
+
+/** Patch inbox items in place by id (e.g. mark `structured` / `discarded`).
+ * Rewrites the whole file once, preserving every other field on each line and
+ * any lines it can't parse. Returns how many items matched a patch. */
+export function updateInboxItems(
+  patches: Array<{ id: string; status?: string; meta?: unknown }>,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): number {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const file = path.join(rDir, "inbox.jsonl");
+  if (!fs.existsSync(file)) return 0;
+  const byId = new Map(patches.map((p) => [p.id, p]));
+  const out: string[] = [];
+  let updated = 0;
+  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === "") continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(t) as Record<string, unknown>;
+    } catch {
+      out.push(t); // keep unparseable lines untouched
+      continue;
+    }
+    const patch = byId.get(String(obj.id));
+    if (patch) {
+      if (patch.status !== undefined) obj.status = patch.status;
+      if (patch.meta !== undefined) obj.meta = patch.meta;
+      updated++;
+    }
+    out.push(JSON.stringify(obj));
+  }
+  fs.writeFileSync(file, out.length ? out.join("\n") + "\n" : "", "utf8");
+  return updated;
+}
+
+/** One CSV cell, quoted only when it must be (delimiter, quote, or newline). */
+function csvCell(s: string): string {
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Serialize a wide table back to RFC-4180 CSV text (trailing newline). */
+export function serializeCsv(header: string[], rows: string[][]): string {
+  const lines = [header.map(csvCell).join(",")];
+  for (const r of rows) lines.push(r.map(csvCell).join(","));
+  return lines.join("\n") + "\n";
+}
+
+export interface DailyMergeResult {
+  file: string;
+  source: string;
+  rows: number; // total date-rows in the file after the merge
+  metrics: string[]; // metric columns the incoming data actually wrote
+  dates: string[]; // distinct dates the incoming data touched
+  cells: number; // non-empty incoming metric cells applied (= daily rows added)
+}
+
+/**
+ * Merge a wide table (`incoming.header[0]` = date, rest = metrics) into
+ * `record/daily/<source>.csv` — the generic path every structured import uses.
+ * Existing metrics are unioned in first-seen order; a date+metric already present
+ * is overwritten by a non-empty incoming value, blanks never clobber. Rows are
+ * re-sorted by date. Deterministic: same inputs → byte-identical file.
+ */
+export function mergeDailyCsv(
+  recordDir: string,
+  source: string,
+  incoming: { header: string[]; rows: string[][] },
+): DailyMergeResult {
+  const dailyDir = path.join(recordDir, "daily");
+  fs.mkdirSync(dailyDir, { recursive: true });
+  const file = path.join(dailyDir, `${source}.csv`);
+
+  const table = new Map<string, Map<string, string>>();
+  const metricOrder: string[] = [];
+  const seen = new Set<string>();
+  const addMetric = (m: string) => {
+    if (m && !seen.has(m)) {
+      seen.add(m);
+      metricOrder.push(m);
+    }
+  };
+
+  // Load the current file (if any) into date → {metric: value}.
+  if (fs.existsSync(file)) {
+    const { header, rows } = parseCsv(fs.readFileSync(file, "utf8"));
+    for (let c = 1; c < header.length; c++) addMetric(header[c].trim());
+    for (const r of rows) {
+      const date = (r[0] ?? "").trim();
+      if (!date) continue;
+      const row = table.get(date) ?? new Map<string, string>();
+      for (let c = 1; c < header.length; c++) {
+        const m = header[c].trim();
+        const v = (r[c] ?? "").trim();
+        if (m && v !== "") row.set(m, v);
+      }
+      table.set(date, row);
+    }
+  }
+
+  // Apply the incoming rows.
+  const touchedMetrics: string[] = [];
+  const touchedM = new Set<string>();
+  const touchedD = new Set<string>();
+  let cells = 0;
+  for (const r of incoming.rows) {
+    const date = (r[0] ?? "").trim();
+    if (!date) continue;
+    const row = table.get(date) ?? new Map<string, string>();
+    for (let c = 1; c < incoming.header.length; c++) {
+      const m = (incoming.header[c] ?? "").trim();
+      const v = (r[c] ?? "").trim();
+      if (!m || v === "") continue;
+      addMetric(m);
+      row.set(m, v);
+      if (!touchedM.has(m)) {
+        touchedM.add(m);
+        touchedMetrics.push(m);
+      }
+      cells++;
+    }
+    table.set(date, row);
+    touchedD.add(date);
+  }
+
+  const header = ["date", ...metricOrder];
+  const dates = [...table.keys()].sort(cmp);
+  const outRows = dates.map((d) => {
+    const row = table.get(d)!;
+    return [d, ...metricOrder.map((m) => row.get(m) ?? "")];
+  });
+  fs.writeFileSync(file, serializeCsv(header, outRows), "utf8");
+
+  return {
+    file,
+    source,
+    rows: dates.length,
+    metrics: touchedMetrics,
+    dates: [...touchedD].sort(cmp),
+    cells,
+  };
 }
 
 // ---- Rebuild --------------------------------------------------------------

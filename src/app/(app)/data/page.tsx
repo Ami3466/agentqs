@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/page-header";
 import { GithubConnect } from "@/components/github-connect";
-import { InboxPanel } from "@/components/inbox-panel";
+import { DataWorkspace } from "@/components/data-workspace";
 import { Badge, Card } from "@/components/ui";
 
 // Stub sources — wired one by one in later loops. GitHub is live (Loop 3).
@@ -19,7 +19,7 @@ export default function DataPage() {
         subtitle="One pipe, all your sources. Set a sync interval; drop files into the inbox."
       />
 
-      <div className="grid gap-4 md:grid-cols-[1fr_260px]">
+      <DataWorkspace>
         <Card className="divide-y divide-border">
           <GithubConnect />
           {SOURCES.map((s) => (
@@ -29,9 +29,7 @@ export default function DataPage() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-medium text-fg">
-                    {s.name}
-                  </p>
+                  <p className="truncate text-sm font-medium text-fg">{s.name}</p>
                   <Badge>{s.kind}</Badge>
                 </div>
                 <p className="truncate text-xs text-muted-fg">{s.detail}</p>
@@ -40,11 +38,7 @@ export default function DataPage() {
             </div>
           ))}
         </Card>
-
-        <Card>
-          <InboxPanel />
-        </Card>
-      </div>
+      </DataWorkspace>
     </div>
   );
 }
