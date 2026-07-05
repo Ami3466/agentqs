@@ -25,7 +25,7 @@ function relativeLabel(iso: string): string | null {
   return null;
 }
 
-const SKILL_TINT: Record<string, string> = {
+const MENTOR_TINT: Record<string, string> = {
   mentor: "text-accent",
   therapist: "text-accent",
   coach: "text-accent",
@@ -98,7 +98,7 @@ function DayCard({
         {day.sessions.map((s) => (
           <div key={s.id} className="rounded-lg border border-border bg-muted/40 p-3">
             <div className="flex items-center gap-2">
-              <Sparkles width={14} height={14} className={SKILL_TINT[s.skill] ?? "text-accent"} />
+              <Sparkles width={14} height={14} className={MENTOR_TINT[s.skill] ?? "text-accent"} />
               <span className="text-sm font-medium text-fg">
                 {s.title ?? "Session"}
               </span>

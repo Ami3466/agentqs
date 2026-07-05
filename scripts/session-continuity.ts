@@ -25,7 +25,7 @@ import {
   openCommitments,
   synthesizeSession,
 } from "../src/lib/synthesis";
-import { skillById } from "../src/lib/skills";
+import { mentorById } from "../src/lib/mentors";
 
 const json = process.argv.includes("--json");
 
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     check(open.length === 1, "prior open commitment is visible to a new session");
 
     // Exactly what /api/chat runs at the start of a keyless session.
-    const opener = continuityFallbackReply(skillById("mentor").name, prior);
+    const opener = continuityFallbackReply(mentorById("mentor").name, prior);
     log();
     log("Session 2 opener (no-key continuity):");
     log(`  ${(opener ?? "(none)").replace(/\n+/g, " ")}`);

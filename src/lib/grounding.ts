@@ -49,7 +49,7 @@ export interface SparkPayload {
 const EMPTY: Grounding = { hasData: false, sources: [], series: [] };
 
 /** Does the message look like it's asking about the user's data (so the keyless
- *  path should compute a grounded cross-source answer rather than a persona note)?
+ *  path should compute a grounded cross-source answer rather than a mentor note)?
  *  Shared by the Chat route and the channel bots so their routing can't drift. */
 export function looksLikeDataQuestion(text: string): boolean {
   const t = text.toLowerCase();

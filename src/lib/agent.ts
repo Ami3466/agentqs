@@ -21,8 +21,8 @@ import type { LlmMessage } from "./llm";
  *   - search_notes — FTS5 keyword search over memos + past sessions (qualitative
  *                    context, never the daily numbers).
  *
- * The persona (mentor / therapist / coach) is the system prompt; a compact schema
- * catalog tells the model what's queryable so it can decide the SQL itself. Every
+ * The mentor (mentor / therapist / coach / custom) is the system prompt; a compact
+ * schema catalog tells the model what's queryable so it can decide the SQL itself. Every
  * tool run is against the read-only SQLite cache — the model can read the record
  * but never mutate it. Server-only (fs + sqlite + native providers).
  */
@@ -230,7 +230,7 @@ export interface RunMentorOptions {
 }
 
 /**
- * Run the mentor agent: hand the model the persona + schema catalog as the system
+ * Run the mentor agent: hand the model the mentor prompt + schema catalog as the system
  * prompt and let it call query_daily / search_notes to ground its answer in real
  * numbers, iterating until it has enough to reply. Returns the final text plus what
  * the run actually touched (for the grounded badge).

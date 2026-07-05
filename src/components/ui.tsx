@@ -6,6 +6,7 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
 } from "react";
 
 export function cn(...parts: Array<string | false | null | undefined>): string {
@@ -73,6 +74,25 @@ export const Input = forwardRef<
   />
 ));
 Input.displayName = "Input";
+
+// ---- Textarea -------------------------------------------------------------
+
+export const Textarea = forwardRef<
+  HTMLTextAreaElement,
+  TextareaHTMLAttributes<HTMLTextAreaElement>
+>(({ className, ...props }, ref) => (
+  <textarea
+    ref={ref}
+    className={cn(
+      "w-full rounded-lg border border-input bg-bg px-3 py-2 text-sm text-fg",
+      "placeholder:text-muted-fg/70 transition-colors resize-y",
+      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:border-ring/60",
+      className,
+    )}
+    {...props}
+  />
+));
+Textarea.displayName = "Textarea";
 
 // ---- Select ---------------------------------------------------------------
 

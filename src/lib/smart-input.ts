@@ -4,7 +4,7 @@
  *
  *   plain text  → talk to the mentor (the model / grounded answer)
  *   `>>`        → a memo: appended raw to the inbox, no LLM, no reply
- *   `/`         → a command: /sync · /structure · /new · /skill
+ *   `/`         → a command: /sync · /structure · /new · /mentor
  *
  * Pure data + string helpers only (no fs, no React) so the exact same routing is
  * shared by the client input box and server-side tests — the dispatch can't drift.
@@ -28,7 +28,7 @@ export const COMMANDS: Command[] = [
   { cmd: "/sync", desc: "Pull the latest from your connected sources" },
   { cmd: "/structure", desc: "Turn pending inbox items into daily data" },
   { cmd: "/new", desc: "Start a fresh session" },
-  { cmd: "/skill", desc: "Switch persona — /skill mentor · therapist · coach" },
+  { cmd: "/mentor", desc: "Switch the active mentor (e.g. /mentor coach)" },
 ];
 
 /** The command-palette suggestions for the current input: commands whose name
