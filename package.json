@@ -9,7 +9,8 @@
     "lint": "next lint",
     "rebuild": "tsx scripts/rebuild.ts",
     "rebuild:verify": "tsx scripts/rebuild.ts --record samples/record --verify",
-    "import:github": "tsx scripts/import-github.ts"
+    "import:github": "tsx scripts/import-github.ts",
+    "session:test": "tsx scripts/session-continuity.ts"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",

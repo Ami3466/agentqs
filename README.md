@@ -180,6 +180,31 @@ Either way the cache is rebuilt and the new rows appear in the **daily table**
 preview right below the inbox — long form `(date, source, metric, value)`, the
 same table the mentor reasons over.
 
+## Sessions — memory that carries
+
+Every conversation is a **session**. When you end one (`/new`, or **+ New
+session** in the Chat sidebar) it's distilled into a small **synthesis** —
+`{title, summary, insights, commitments}` — and appended to
+`record/sessions.jsonl`, the typed session store kept **separate from your daily
+data**. With an AI key the model does the distilling; with no key a deterministic
+heuristic lifts your explicit commitments and a plain summary from your own words
+(it never invents insights).
+
+That synthesis is the memory. When a **new** session opens, the mentor reads the
+prior sessions' synthesis — summaries, insights, and open commitments, **never
+the raw transcripts** — and picks up the most relevant open commitment
+("last session you committed to X — how did that go?"). The transcript is still
+stored for provenance, but the agent never reads it back.
+
+Sessions surface as dated entries on the **Journal timeline**, side by side with
+that day's metrics and memos — one storage layer (typed + synthesis), one merged
+view.
+
+```bash
+npm run session:test       # ships-when proof: a new session references a prior
+                           # session's commitment (no AI key required)
+```
+
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.
