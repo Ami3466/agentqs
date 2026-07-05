@@ -91,7 +91,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
     // Semantic recall ("find days that felt like this") — the local index answers it
     // with no key. Most specific intent, so checked first.
     if (looksLikeRecallQuestion(message)) {
-      const recall = answerRecall(message, history);
+      const recall = await answerRecall(message, history);
       if (recall) {
         return {
           mode: "chat",

@@ -158,7 +158,7 @@ export function mentorTools(dbFile: string, used: Used) {
     execute: async ({ query, limit }) => {
       try {
         const vecFile = path.join(path.dirname(dbFile), "agentqs-vec.db");
-        const hits = semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
+        const hits = await semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
         used.hits += hits.length;
         for (const h of hits) used.sources.add(h.kind === "session" ? "sessions" : "memos");
         return { days: hits.map((h) => ({ date: h.date, snippet: h.snippet, score: h.score })) };

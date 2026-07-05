@@ -30,8 +30,8 @@ export async function POST(req: Request) {
   const limit = Math.max(1, Math.min(Number(body.limit) || 5, 25));
 
   try {
-    const recall = answerRecall(query, body.history, { limit });
-    const hits = recall?.hits ?? semanticSearch(query, { limit });
+    const recall = await answerRecall(query, body.history, { limit });
+    const hits = recall?.hits ?? (await semanticSearch(query, { limit }));
     return NextResponse.json({
       query: recall?.query ?? query,
       hits,

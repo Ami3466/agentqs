@@ -363,7 +363,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
           </Button>
         </div>
         <p className="mt-3 text-xs text-muted-fg">
-          Model <code className="font-mono">{embed?.modelId || "agentqs-local-hash-v1"}</code>
+          Model <code className="font-mono">{embed?.modelId || "all-MiniLM-L6-v2"}</code>
           {embed?.backend ? (
             <>
               {" "}
