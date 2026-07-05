@@ -10,6 +10,7 @@ import {
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, Inbox, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
 import { Sparkline } from "@/components/sparkline";
+import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
 import type { SparkPayload } from "@/lib/grounding";
 import { DEFAULT_SKILL, SKILLS, skillById } from "@/lib/skills";
@@ -557,6 +558,9 @@ export function Chat() {
                 </div>
               ) : null}
             </div>
+
+            {/* in-chat live voice session (ElevenLabs) — separate from the global mic */}
+            <VoiceSession />
 
             <textarea
               ref={inputRef}
