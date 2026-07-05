@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "rebuild": "tsx scripts/rebuild.ts",
+    "rebuild:verify": "tsx scripts/rebuild.ts --record samples/record --verify"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

@@ -119,6 +119,26 @@ docker run -d \
 - **Docker on a remote server** (VPS, Coolify): the container can't reach your laptop's files. Run the small local importer on your machine — it commits file-sourced data into your record repo, and the server pulls it. **Git is the sync layer**, so the remote instance still sees everything.
 - API sources (WHOOP, Calendar, GitHub…) work anywhere — no local machine needed.
 
+## The record (source of truth)
+
+Your life lives as **plain text in a git repo** — human-readable, diffable, and importable by a script in any language. The SQLite database is just a **rebuildable cache** (never committed); the record is the truth.
+
+```
+record/
+  daily/<source>.csv   one wide CSV per source, first column `date`
+  inbox.jsonl          one raw capture per line (the pending bucket)
+  sessions.jsonl       one mentor/therapy session per line
+```
+
+Each `daily/*.csv` is melted into long form — `(date, source, metric, value)` — so any new source, or any CSV you drop in, adds its columns with **zero schema migration**.
+
+Rebuild the cache from the record any time — it's pure, so the same record always yields the same database:
+
+```bash
+npm run rebuild            # rebuild ./data/agentqs.db from ./data/record
+npm run rebuild:verify     # build the sample record twice, prove the bytes are identical
+```
+
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.
