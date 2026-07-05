@@ -10,7 +10,8 @@
     "rebuild": "tsx scripts/rebuild.ts",
     "rebuild:verify": "tsx scripts/rebuild.ts --record samples/record --verify",
     "import:github": "tsx scripts/import-github.ts",
-    "session:test": "tsx scripts/session-continuity.ts"
+    "session:test": "tsx scripts/session-continuity.ts",
+    "sync:test": "tsx scripts/sync-engine.ts"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",

@@ -162,6 +162,31 @@ dense per-day series, and merges them into `record/daily/github.csv`. In the app
 the **Data** tab does the same with one click (paste a token → real commits land
 in your record and rebuild into the daily table).
 
+## Sync engine — schedules, lazy-sync, stale badges
+
+The **Data** tab lists every source with its type (`api` / `manual`), last-sync,
+and a per-source **interval** dropdown (Manual · Hourly · Daily · Weekly). The
+cadence is saved per user in `config.json` (`sourceIntervals`).
+
+- **API sources auto-sync (lazy, on open).** When the Data tab opens, any api
+  source whose interval has elapsed is **due** — the app runs it in the
+  background, then refreshes the daily-table preview. Set **GitHub → Daily** and
+  the next time you open the tab it re-pulls your commits with no click. (GitHub
+  only auto-runs when a token is available, so it never loops on a failure.)
+- **Manual sources get a stale badge.** A dropped/pasted source can't auto-sync,
+  so when no fresh data has arrived within its interval it shows an amber
+  **stale** badge — a nudge to refresh it. Manual sources are never "due".
+
+The list is composed server-side (`src/lib/source-registry.ts`) from a registry
+of known integrations plus any manual sources discovered in `record/daily/*.csv`;
+the schedule math (`isDue` / `isStale`) is a pure, browser-safe module
+(`src/lib/sources.ts`) shared by the API and the UI.
+
+```bash
+npm run sync:test          # ships-when proof: "GitHub: daily" is due on reopen,
+                           # and an overdue manual source is flagged stale
+```
+
 ## Structure — raw → daily
 
 Anything you capture lands raw and free in the **pending inbox**: memos (`>>` in

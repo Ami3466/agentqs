@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, GitHub, Spinner } from "@/components/icons";
+import { Check, Eye, EyeOff, GitHub, RefreshCw, Spinner } from "@/components/icons";
+import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, Input, cn } from "@/components/ui";
+import { ago, type Interval } from "@/lib/sources";
 
 interface Day {
   date: string;
@@ -14,15 +16,6 @@ interface Status {
   syncedAt: string | null;
   total: number;
   series: Day[];
-}
-
-function ago(iso: string | null): string {
-  if (!iso) return "never";
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 /** Dependency-free bar sparkline of commits/day, coloured with the accent token. */
@@ -63,7 +56,19 @@ function Spark({ data }: { data: Day[] }) {
   );
 }
 
-export function GithubConnect() {
+export function GithubConnect({
+  version = 0,
+  interval = "off",
+  due = false,
+  savingInterval = false,
+  onIntervalChange,
+}: {
+  version?: number;
+  interval?: Interval;
+  due?: boolean;
+  savingInterval?: boolean;
+  onIntervalChange?: (i: Interval) => void;
+} = {}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
@@ -77,9 +82,11 @@ export function GithubConnect() {
     if (res.ok) setStatus((await res.json()) as Status);
   }
 
+  // Reload on mount and whenever the shared version bumps — after a lazy
+  // auto-sync the sparkline + last-sync line pick up the new commits.
   useEffect(() => {
     void loadStatus();
-  }, []);
+  }, [version]);
 
   async function sync() {
     setBusy(true);
@@ -115,12 +122,21 @@ export function GithubConnect() {
           <GitHub width={18} height={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="truncate text-sm font-medium text-fg">GitHub</p>
             <Badge>api</Badge>
             {connected ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
                 <Check width={12} height={12} /> connected
+              </span>
+            ) : null}
+            {connected && interval !== "off" ? (
+              <span
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-fg"
+                title={due ? "Overdue — auto-syncs when the Data tab opens" : "Scheduled auto-sync"}
+              >
+                <RefreshCw width={11} height={11} />
+                {due ? "auto-syncs on open" : `syncs ${interval}`}
               </span>
             ) : null}
           </div>
@@ -131,6 +147,12 @@ export function GithubConnect() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {connected && onIntervalChange ? (
+            <div className="flex items-center gap-1.5">
+              {savingInterval ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
+              <IntervalSelect value={interval} onChange={onIntervalChange} disabled={savingInterval} />
+            </div>
+          ) : null}
           {connected ? (
             <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
               {busy ? <Spinner width={14} height={14} /> : null}
