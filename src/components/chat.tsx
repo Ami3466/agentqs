@@ -13,27 +13,7 @@ import { Sparkline } from "@/components/sparkline";
 import { Card, cn } from "@/components/ui";
 import type { SparkPayload } from "@/lib/grounding";
 import { DEFAULT_SKILL, SKILLS, skillById } from "@/lib/skills";
-
-// ---- Smart-input model ----------------------------------------------------
-
-type Mode = "chat" | "memo" | "command";
-
-function modeOf(text: string): Mode {
-  if (text.startsWith(">>")) return "memo";
-  if (text.startsWith("/")) return "command";
-  return "chat";
-}
-
-interface Command {
-  cmd: string;
-  desc: string;
-}
-const COMMANDS: Command[] = [
-  { cmd: "/sync", desc: "Pull the latest from your connected sources" },
-  { cmd: "/structure", desc: "Turn pending inbox items into daily data" },
-  { cmd: "/new", desc: "Start a fresh session" },
-  { cmd: "/skill", desc: "Switch persona — /skill mentor · therapist · coach" },
-];
+import { COMMANDS, filterCommands, memoText, modeOf, parseCommand } from "@/lib/smart-input";
 
 // ---- Messages -------------------------------------------------------------
 
@@ -89,11 +69,7 @@ export function Chat() {
   const mode = modeOf(input);
   const activeSkill = skillById(skill);
 
-  const filtered = useMemo(() => {
-    if (mode !== "command") return [];
-    const token = input.split(/\s+/)[0].toLowerCase();
-    return COMMANDS.filter((c) => c.cmd.startsWith(token));
-  }, [input, mode]);
+  const filtered = useMemo(() => filterCommands(input), [input]);
 
   // Restore the last-used persona.
   useEffect(() => {
@@ -198,7 +174,7 @@ export function Chat() {
   // ---- Submit paths -------------------------------------------------------
 
   async function sendMemo(raw: string) {
-    const text = raw.replace(/^>>\s*/, "").trim();
+    const text = memoText(raw);
     if (!text) {
       push({ role: "note", tone: "error", text: "A memo needs some text after >>." });
       return;
@@ -225,9 +201,7 @@ export function Chat() {
   }
 
   async function runCommand(raw: string) {
-    const parts = raw.slice(1).trim().split(/\s+/);
-    const cmd = parts[0].toLowerCase();
-    const args = parts.slice(1);
+    const { cmd, args } = parseCommand(raw);
     setInput("");
 
     if (cmd === "new") {

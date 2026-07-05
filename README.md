@@ -290,6 +290,12 @@ npm run chat:test          # ships-when proof (Loop 5): boots the built app, log
                            # and hits POST /api/chat like the Chat tab — asserts the
                            # reply streams in NDJSON delta frames and the closing frame
                            # carries ≥2 grounded sources + a sparkline of a cited metric
+
+npm run smart:test         # ships-when proof (Loop 6): the shared smart-input contract
+                           # routes `>>`/`/`/plain text; then over the built app `>> slept
+                           # bad` lands in the inbox raw (no LLM, no daily row), `/sync`
+                           # runs its live pipeline into the daily table, and the skill
+                           # chip switches persona (mentor → therapist → coach)
 ```
 
 ## Sync engine — schedules, lazy-sync, stale badges
