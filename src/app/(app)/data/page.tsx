@@ -1,8 +1,9 @@
 import { PageHeader } from "@/components/page-header";
+import { GithubConnect } from "@/components/github-connect";
 import { Badge, Card } from "@/components/ui";
 
+// Stub sources — wired one by one in later loops. GitHub is live (Loop 3).
 const SOURCES = [
-  { name: "GitHub", kind: "api", detail: "commits per day" },
   { name: "WHOOP", kind: "api", detail: "per-minute heart rate, sleep, strain" },
   { name: "Google Calendar", kind: "api", detail: "meetings" },
   { name: "Apple Health", kind: "file", detail: "steps, HR, sleep, workouts" },
@@ -19,6 +20,7 @@ export default function DataPage() {
 
       <div className="grid gap-4 md:grid-cols-[1fr_260px]">
         <Card className="divide-y divide-border">
+          <GithubConnect />
           {SOURCES.map((s) => (
             <div key={s.name} className="flex items-center gap-3 p-4">
               <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-muted text-sm font-semibold text-muted-fg">

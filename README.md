@@ -139,6 +139,29 @@ npm run rebuild            # rebuild ./data/agentqs.db from ./data/record
 npm run rebuild:verify     # build the sample record twice, prove the bytes are identical
 ```
 
+## Importers
+
+Each source is a small script behind the record contract: fetch → normalize →
+write one `daily/<source>.csv` → rebuild. **GitHub** (commits/day) is the first,
+live end to end:
+
+```bash
+# your own commits — token from --token, GITHUB_TOKEN, or the Data tab
+npm run import:github -- --token ghp_xxx --rebuild
+
+# any public author, no token needed
+npm run import:github -- --login torvalds --days 30 --record /tmp/rec --rebuild
+
+# offline: run the same normalize → write → rebuild path against a fixture
+npm run import:github -- --fixture samples/github-commits.json --login demo \
+  --from 2026-06-01 --to 2026-06-14 --record /tmp/rec --rebuild
+```
+
+It pulls commits from the GitHub Search API, buckets them by author-date into a
+dense per-day series, and merges them into `record/daily/github.csv`. In the app,
+the **Data** tab does the same with one click (paste a token → real commits land
+in your record and rebuild into the daily table).
+
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.

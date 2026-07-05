@@ -14,6 +14,8 @@ export interface AppConfig {
   model: string;
   theme: string; // light | dark | system
   createdAt: string;
+  githubToken?: string; // GitHub PAT for the commits importer (optional)
+  githubSyncedAt?: string; // ISO timestamp of the last GitHub import
 }
 
 export function configExists(): boolean {
