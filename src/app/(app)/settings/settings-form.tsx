@@ -1,0 +1,253 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useTheme } from "@/components/theme-provider";
+import { Check, Eye, EyeOff, Moon, Spinner, Sun } from "@/components/icons";
+import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
+import {
+  DEFAULT_MODEL,
+  PROVIDERS,
+  modelsForProvider,
+} from "@/lib/models";
+import type { PublicConfig } from "@/lib/config";
+
+function Section({
+  title,
+  desc,
+  children,
+}: {
+  title: string;
+  desc?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="mb-4">
+        <h2 className="text-base font-semibold text-fg">{title}</h2>
+        {desc ? <p className="mt-0.5 text-sm text-muted-fg">{desc}</p> : null}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
+export function SettingsForm({ config }: { config: PublicConfig }) {
+  const router = useRouter();
+  const { theme, setTheme } = useTheme();
+
+  const [username, setUsername] = useState(config.username);
+  const [password, setPassword] = useState("");
+  const [provider, setProvider] = useState(config.llmProvider || "");
+  const [model, setModel] = useState(config.model || DEFAULT_MODEL);
+  const [llmKey, setLlmKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  const providerModels = modelsForProvider(provider);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    setSaved(false);
+
+    const body: Record<string, string> = {
+      username: username.trim(),
+      llmProvider: provider,
+      model,
+      theme,
+    };
+    if (password) body.password = password;
+    if (llmKey) body.llmKey = llmKey;
+
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    setSaving(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error || "Could not save settings.");
+      return;
+    }
+    setSaved(true);
+    setPassword("");
+    setLlmKey("");
+    setTimeout(() => setSaved(false), 2000);
+    router.refresh();
+  }
+
+  return (
+    <form onSubmit={save} className="max-w-2xl space-y-5">
+      {/* Profile */}
+      <Section title="Profile" desc="How you sign in to this instance.">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Username" htmlFor="username">
+            <Input
+              id="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+            />
+          </Field>
+          <Field
+            label="New password"
+            htmlFor="password"
+            hint="Leave blank to keep your current password."
+          >
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="new-password"
+            />
+          </Field>
+        </div>
+      </Section>
+
+      {/* AI provider */}
+      <Section
+        title="AI provider"
+        desc="Bring your own key. Claude, OpenAI or Gemini — your data never trains anyone's model."
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Provider" htmlFor="provider">
+              <Select
+                id="provider"
+                value={provider}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setProvider(next);
+                  const models = modelsForProvider(next);
+                  if (models.length && !models.includes(model)) setModel(models[0]);
+                }}
+              >
+                <option value="">Not set</option>
+                {PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Model" htmlFor="model">
+              <Select
+                id="model"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={!providerModels.length}
+              >
+                {providerModels.length ? (
+                  providerModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">Pick a provider first</option>
+                )}
+              </Select>
+            </Field>
+          </div>
+
+          <Field
+            label="API key"
+            htmlFor="llmKey"
+            hint={
+              config.hasLlmKey
+                ? `A key is saved (${config.hasLlmKey}). Enter a new one to replace it.`
+                : "Stored locally in your data dir. Never sent anywhere but your provider."
+            }
+          >
+            <div className="relative">
+              <Input
+                id="llmKey"
+                type={showKey ? "text" : "password"}
+                value={llmKey}
+                onChange={(e) => setLlmKey(e.target.value)}
+                placeholder={
+                  PROVIDERS.find((p) => p.id === provider)?.keyHint || "sk-…"
+                }
+                autoComplete="off"
+                className="pr-10 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
+                aria-label={showKey ? "Hide key" : "Show key"}
+              >
+                {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
+              </button>
+            </div>
+          </Field>
+        </div>
+      </Section>
+
+      {/* Data */}
+      <Section title="Data" desc="Where agentqs stores your config, record and cache.">
+        <Field label="Data directory">
+          <div className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[13px] text-fg">
+            {config.dataDir}
+          </div>
+        </Field>
+        <p className="mt-2 text-xs text-muted-fg">
+          Set with the <code className="font-mono">AGENTQS_DATA_DIR</code> env
+          var (a restart applies it).
+        </p>
+      </Section>
+
+      {/* Appearance */}
+      <Section title="Appearance" desc="Applies instantly and persists on this device.">
+        <div className="grid max-w-xs grid-cols-2 gap-2">
+          {(["light", "dark"] as const).map((t) => {
+            const active = theme === t;
+            const Icon = t === "light" ? Sun : Moon;
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTheme(t)}
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium capitalize transition-colors",
+                  active
+                    ? "border-accent bg-accent/10 text-fg"
+                    : "border-border bg-card text-muted-fg hover:bg-muted hover:text-fg",
+                )}
+              >
+                <Icon width={16} height={16} />
+                {t}
+                {active ? <Check width={14} height={14} className="text-accent" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
+      {/* Save bar */}
+      <div className="flex items-center gap-3">
+        <Button type="submit" variant="primary" disabled={saving}>
+          {saving ? <Spinner width={16} height={16} /> : null}
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+        {saved ? (
+          <span className="inline-flex items-center gap-1.5 text-sm text-accent">
+            <Check width={16} height={16} /> Saved
+          </span>
+        ) : null}
+        {error ? (
+          <span className="text-sm text-destructive">{error}</span>
+        ) : null}
+      </div>
+    </form>
+  );
+}
