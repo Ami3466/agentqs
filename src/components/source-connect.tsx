@@ -6,6 +6,7 @@ import { brandIcon } from "@/components/brand-icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
+import { markTourStep } from "@/lib/tour";
 
 /**
  * Generic connect/sync row for a Tier-1 plugin source (RescueTime · Google
@@ -119,6 +120,7 @@ export function SourceConnect({
     setOpen(false);
     setMsg(`${data.days} day${data.days === 1 ? "" : "s"} of ${data.name} → ${data.dailyRows} daily rows.`);
     await loadStatus();
+    markTourStep("source"); // real action: a source is now connected — tour re-confirms
     setTimeout(() => setMsg(""), 6000);
   }
 

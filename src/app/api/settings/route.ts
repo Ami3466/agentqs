@@ -70,6 +70,11 @@ export async function POST(req: Request) {
     cfg.theme = body.theme;
   }
 
+  // First-run tour finished/dismissed — stamp once so it never reappears.
+  if (typeof body.onboardedAt === "string" && body.onboardedAt && !cfg.onboardedAt) {
+    cfg.onboardedAt = body.onboardedAt;
+  }
+
   try {
     writeConfig(cfg);
   } catch {

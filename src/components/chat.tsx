@@ -15,6 +15,7 @@ import { Card, cn } from "@/components/ui";
 import type { SparkPayload } from "@/lib/grounding";
 import { BUILTIN_MENTORS, DEFAULT_MENTOR, mentorById, type Mentor } from "@/lib/mentors";
 import { COMMANDS, filterCommands, memoText, modeOf, parseCommand } from "@/lib/smart-input";
+import { CHAT_PREFILL_EVENT, markTourStep, takeChatPrefill } from "@/lib/tour";
 
 // ---- Messages -------------------------------------------------------------
 
@@ -104,6 +105,29 @@ export function Chat() {
     return () => {
       alive = false;
     };
+  }, []);
+
+  // The first-run tour deep-links here with a suggested question (or `>>` to show
+  // the memo path): drop it into the input, live if mounted and on mount if the
+  // nav just landed us here.
+  useEffect(() => {
+    const load = (text: string) => {
+      if (!text) return;
+      setInput(text);
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    };
+    load(takeChatPrefill());
+    const onPrefill = (e: Event) => {
+      load((e as CustomEvent<string>).detail);
+      takeChatPrefill(); // clear the stashed copy so a later mount won't reload it
+    };
+    window.addEventListener(CHAT_PREFILL_EVENT, onPrefill as EventListener);
+    return () => window.removeEventListener(CHAT_PREFILL_EVENT, onPrefill as EventListener);
   }, []);
 
   // Close the mentor dropdown on outside click / Escape.
@@ -207,6 +231,7 @@ export function Chat() {
         push({ role: "note", tone: "error", text: data.error || "Could not save that memo." });
       } else {
         push({ role: "memo", text, pending: data.pending });
+        markTourStep("memo"); // real action: a memo landed in the inbox
       }
     } catch {
       push({ role: "note", tone: "error", text: "Could not reach the inbox." });
@@ -302,6 +327,7 @@ export function Chat() {
         push({ role: "note", tone: "error", text: data.error || "The model didn't answer." });
         return;
       }
+      markTourStep("chat"); // real action: a question reached the mentor
 
       // Read the NDJSON stream: {t:"delta"} tokens, then one {t:"done"} (or {t:"error"}).
       const reader = res.body.getReader();

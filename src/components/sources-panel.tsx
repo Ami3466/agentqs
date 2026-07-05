@@ -10,6 +10,7 @@ import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, cn } from "@/components/ui";
 import { uploadFilesToInbox } from "@/lib/inbox-upload";
 import { ago, type Interval, type SourceView } from "@/lib/sources";
+import { markTourStep } from "@/lib/tour";
 
 /**
  * The Data-tab sources list + sync engine (Loop 10). Single fetcher/persister of
@@ -173,6 +174,7 @@ function SourceRow({
       if (added) {
         setFlash(`${added} file${added === 1 ? "" : "s"} added to the inbox — hit Structure to turn it into daily rows.`);
         onChanged();
+        markTourStep("source"); // ping the tour; it re-confirms once the source has rows
       } else if (skipped.length) {
         setFlash(`Skipped ${skipped[0]}.`);
       }
