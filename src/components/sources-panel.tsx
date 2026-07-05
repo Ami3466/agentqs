@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Clock, Spinner } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
+import { SourceConnect } from "@/components/source-connect";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, cn } from "@/components/ui";
 import { ago, type Interval, type SourceView } from "@/lib/sources";
@@ -88,6 +89,9 @@ export function SourcesPanel({
 
   const github = sources?.find((s) => s.id === "github");
   const others = (sources ?? []).filter((s) => s.id !== "github");
+  // api plugin sources get the rich connect/sync row; the rest (manual drops,
+  // not-yet-live placeholders) get the generic row.
+  const isPluginRow = (s: SourceView) => s.kind === "api" && s.id !== "github";
 
   return (
     <div>
@@ -107,14 +111,26 @@ export function SourcesPanel({
           onIntervalChange={(i) => changeInterval("github", i)}
         />
 
-        {others.map((s) => (
-          <SourceRow
-            key={s.id}
-            source={s}
-            saving={savingId === s.id}
-            onIntervalChange={(i) => changeInterval(s.id, i)}
-          />
-        ))}
+        {others.map((s) =>
+          isPluginRow(s) ? (
+            <SourceConnect
+              key={s.id}
+              id={s.id}
+              version={version}
+              interval={s.interval}
+              due={s.due}
+              savingInterval={savingId === s.id}
+              onIntervalChange={(i) => changeInterval(s.id, i)}
+            />
+          ) : (
+            <SourceRow
+              key={s.id}
+              source={s}
+              saving={savingId === s.id}
+              onIntervalChange={(i) => changeInterval(s.id, i)}
+            />
+          ),
+        )}
       </div>
     </div>
   );

@@ -92,4 +92,5 @@ export interface SourceView {
   stale: boolean; // manual + connected + overdue
   due: boolean; // api + connected + syncable + overdue → auto-sync on open
   syncEndpoint: string | null; // POST target for api auto-sync
+  live: boolean; // has a working importer (false = stub / not-yet-live placeholder)
 }
