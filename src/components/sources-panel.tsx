@@ -201,7 +201,7 @@ function SourceRow({
             <Badge>{kind}</Badge>
             {stale ? (
               <span
-                className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-medium text-warning"
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-fg"
                 title={`No fresh data within its ${interval} interval — refresh this source.`}
               >
                 <AlertTriangle width={11} height={11} /> stale

@@ -244,7 +244,7 @@ export function InboxPanel({
                     onClick={() => discard(it.id)}
                     disabled={anyBusy}
                     title="Discard"
-                    className="rounded p-0.5 text-muted-fg transition-colors hover:text-destructive disabled:opacity-40"
+                    className="rounded p-0.5 text-muted-fg transition-colors hover:text-fg disabled:opacity-40"
                   >
                     <X width={12} height={12} />
                   </button>
