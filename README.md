@@ -117,8 +117,8 @@ docker run -d \
   -p 3000:3000 agentqs
 ```
 
-- **Docker on the machine that has your data** (your Mac, a NAS): mount those paths read-only and agentqs reads them directly.
-- **Docker on a remote server** (VPS, Coolify): the container can't reach your laptop's files. Run the small local importer on your machine — it commits file-sourced data into your record repo, and the server pulls it. **Git is the sync layer**, so the remote instance still sees everything.
+- **Docker on the machine that has your data** (your Mac, a NAS): mount those paths read-only (the importer probes `/host/chrome/Default/History`) and agentqs reads them directly.
+- **Docker on a remote server** (VPS, Coolify): the container can't reach your laptop's files. Run the local daemon on your machine — `npm run daemon -- run --push` imports your file sources and commits + pushes them into your record repo, and the server pulls. **Git is the sync layer**, so the remote instance still sees everything.
 - API sources (WHOOP, Calendar, GitHub…) work anywhere — no local machine needed.
 
 ## The record (source of truth)
@@ -193,6 +193,63 @@ npm run import:source -- --source gcal --fixture samples/gcal-events.json \
 WHOOP is a **stub adapter**: its normalize → merge → rebuild pipeline is real and
 fixture-provable, but its OAuth flow isn't configurable in a single run, so the
 Data tab marks it *not-live* until that lands (a later loop).
+
+### Tier-2 file importers — Chrome history · iPhone backup
+
+Some sources aren't an API — they're a file on **your own machine** (a Chrome
+`History` SQLite, an iPhone backup) that a remote/Docker instance can't reach.
+These live behind a sibling contract (`src/lib/importers/file-plugin.ts`): `local
+file → read a window → normalize into a wide daily table → merge into
+record/daily/<id>.csv → rebuild`. Same idempotent write, same daily table the
+mentor reasons over. Because the reader touches your disk they run **locally**
+(the CLI / daemon), never on the server:
+
+```bash
+# Chrome browsing history — visits, pages, domains per day.
+# Omit --path to probe the default profile location for your OS.
+npm run import:file -- --source chrome --rebuild
+npm run import:file -- --source chrome --path "~/Library/Application Support/Google/Chrome/Default/History" --days 30 --rebuild
+
+# iPhone backup (stub) — a snapshot row from an unencrypted Finder/iTunes backup.
+npm run import:file -- --source iphone --path "~/Library/Application Support/MobileSync/Backup" --rebuild
+```
+
+Chrome copies the (locked) `History` file to a temp dir and reads the copy, so it
+never touches the browser's own file, and converts Chrome's WebKit-microsecond
+timestamps to days. **iPhone is a stub adapter**: it reads the backup's
+`Manifest.db` and lands a real *snapshot* row (`files_backed_up`, `domains`) for
+the backup's day — the per-domain call / iMessage / screen-time extraction isn't
+wired yet, so the Data tab marks it *not-live*.
+
+| Source | Reads | Daily metrics |
+|---|---|---|
+| **Chrome history** | `History` SQLite (`urls` + `visits`) | `visits`, `pages`, `domains` |
+| **iPhone backup** *(stub)* | `Manifest.db` | `files_backed_up`, `domains` |
+
+### Local daemon — ingest local files, then git-sync to the cloud
+
+The daemon is the local loop that keeps file sources fresh and hands them to a
+cloud replica. **Git is the sync layer**: the daemon commits your record repo on
+your machine, the cloud instance pulls it.
+
+```bash
+npm run daemon -- ingest          # run every file importer found on THIS machine → rebuild
+npm run daemon -- sync            # git add + commit the record repo (--push to send upstream)
+npm run daemon -- run --push      # ingest, then commit + push in one shot
+```
+
+`ingest` probes each importer's default file locations, imports whatever it finds
+(silently skipping the rest), and rebuilds the cache once. `sync` commits the
+record and, only with `--push`, pushes it — so a remote/Docker agentqs sees your
+Chrome history and everything else after it pulls, without ever reaching your
+laptop's disk.
+
+```bash
+npm run files:test         # ships-when proof (Loop 12): the Chrome import command
+                           # reads a real local History SQLite and lands per-day
+                           # rows in the record + rebuilt daily table; the iPhone
+                           # stub lands a snapshot; daemon sync commits the record.
+```
 
 ### The agent brain — a mentor that queries your own record
 
