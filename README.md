@@ -192,21 +192,38 @@ WHOOP is a **stub adapter**: its normalize → merge → rebuild pipeline is rea
 fixture-provable, but its OAuth flow isn't configurable in a single run, so the
 Data tab marks it *not-live* until that lands (a later loop).
 
-### Grounded chat — a cross-source answer from your numbers
+### The agent brain — a mentor that queries your own record
 
-With four sources feeding one record, the mentor answers **across** them. Every
-chat reads the numeric daily cache (`src/lib/grounding.ts`): with an AI key, a
-compact `DATA CONTEXT` block is injected so the model cites your real figures; with
-**no key**, a cross-source question is still answered deterministically from the
-numbers — two metrics from different sources are lined up on their shared days and
-the relationship reported (e.g. *"commits run 13.25 on your high-productivity days
-vs 3 on the low ones"*). Grounded replies show a **grounded in your record** badge
-with the sources used.
+With an AI key the mentor is a real **tool-using agent** (`src/lib/agent.ts`), built
+on the **Vercel AI SDK** so it's provider-agnostic — default **Claude**, or paste an
+OpenAI / Gemini key and the same agent runs on that model. It doesn't get your
+numbers stuffed into its prompt; it **fetches them**, calling two tools until it can
+answer:
+
+- **`query_daily`** — runs a read-only SQL `SELECT` over your long/tidy `daily`
+  table and gets the real rows back (the connection is read-only, so it can read the
+  record but never mutate it).
+- **`search_notes`** — FTS5 keyword search over your memos and past sessions for the
+  qualitative context behind a number.
+
+The persona (mentor / therapist / coach) is the system prompt; a compact schema
+catalog tells it what's queryable. So *"why have I felt off?"* makes it `SELECT` your
+WHOOP sleep + recovery, then reply *"sleep dropped to 6.1h and recovery fell to 41%
+— your lowest in the window."* Grounded replies show a **grounded in your record**
+badge with the sources the tools actually touched.
+
+With **no key**, a cross-source question is still answered deterministically from the
+numbers (`src/lib/grounding.ts`) — two metrics from different sources are lined up on
+their shared days and the relationship reported (e.g. *"commits run 13.25 on your
+high-productivity days vs 3 on the low ones"*).
 
 ```bash
-npm run integration:test   # ships-when proof: GitHub + RescueTime + Calendar +
-                           # Spotify feed one record, and a cross-source question
-                           # returns a grounded answer citing 2+ sources
+npm run agent:test         # ships-when proof: the agent calls the SQL + FTS tools
+                           # and answers "why have I felt off?" citing a number that
+                           # genuinely exists in the daily table
+
+npm run integration:test   # keyless cross-source: GitHub + RescueTime + Calendar +
+                           # Spotify feed one record, a question cites 2+ sources
 ```
 
 ## Sync engine — schedules, lazy-sync, stale badges

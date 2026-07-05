@@ -6,6 +6,8 @@
  * they haven't. One helper, one fetch, provider chosen by id.
  */
 
+import { fallbackModel } from "./models";
+
 export interface LlmMessage {
   role: "user" | "assistant";
   content: string;
@@ -20,12 +22,6 @@ export interface LlmRequest {
   maxTokens?: number;
   signal?: AbortSignal;
 }
-
-const FALLBACK_MODEL: Record<string, string> = {
-  anthropic: "claude-sonnet-4-5",
-  openai: "gpt-4o",
-  google: "gemini-2.5-flash",
-};
 
 async function post(url: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal) {
   const res = await fetch(url, {
@@ -50,7 +46,7 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
 
 /** Run one completion. Returns the assistant's text; throws on transport/API error. */
 export async function llmComplete(req: LlmRequest): Promise<string> {
-  const model = req.model?.trim() || FALLBACK_MODEL[req.provider] || "";
+  const model = fallbackModel(req.provider, req.model);
   const maxTokens = req.maxTokens ?? 1024;
 
   if (req.provider === "anthropic") {

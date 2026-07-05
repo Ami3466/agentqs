@@ -13,14 +13,20 @@
     "import:source": "tsx scripts/import-source.ts",
     "session:test": "tsx scripts/session-continuity.ts",
     "sync:test": "tsx scripts/sync-engine.ts",
-    "integration:test": "tsx scripts/integration-batch.ts"
+    "integration:test": "tsx scripts/integration-batch.ts",
+    "agent:test": "tsx scripts/agent-brain.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.8",
+    "@ai-sdk/google": "^4.0.8",
+    "@ai-sdk/openai": "^4.0.7",
     "@tanstack/react-table": "^8.21.3",
+    "ai": "^7.0.15",
     "better-sqlite3": "^12.11.1",
     "next": "14.2.15",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
