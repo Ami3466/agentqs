@@ -20,40 +20,45 @@ interface Snip {
   extra?: { label: string; code: (base: string) => string };
 }
 
-const SNIPPETS: Record<string, Snip> = {
-  chat: {
-    title: "Chat",
-    cli: `agentqs chat "why have I felt off this week?"`,
-    api: (b) => `curl -N ${b}/api/chat \\
+/** The Settings snippet quotes the user's actual saved model (never a hardcoded
+ *  id); MODEL_ID is a self-evident placeholder until a provider is connected. */
+function snippetsFor(model: string): Record<string, Snip> {
+  const m = model || "MODEL_ID";
+  return {
+    chat: {
+      title: "Chat",
+      cli: `agentqs chat "why have I felt off this week?"`,
+      api: (b) => `curl -N ${b}/api/chat \\
   -H 'content-type: application/json' \\
   -d '{"message":"why have I felt off this week?"}'`,
-  },
-  journal: {
-    title: "Journal",
-    cli: `agentqs journal --table`,
-    api: (b) => `curl ${b}/api/journal`,
-    extra: {
-      label: "Semantic search — find days that felt like this",
-      code: (b) => `curl ${b}/api/search \\
+    },
+    journal: {
+      title: "Journal",
+      cli: `agentqs journal --table`,
+      api: (b) => `curl ${b}/api/journal`,
+      extra: {
+        label: "Semantic search — find days that felt like this",
+        code: (b) => `curl ${b}/api/search \\
   -H 'content-type: application/json' \\
   -d '{"query":"anxious, could not sleep"}'`,
+      },
     },
-  },
-  data: {
-    title: "Data",
-    cli: `agentqs sync --source github`,
-    api: (b) => `curl -X POST ${b}/api/import/github \\
+    data: {
+      title: "Data",
+      cli: `agentqs sync --source github`,
+      api: (b) => `curl -X POST ${b}/api/import/github \\
   -H 'content-type: application/json' \\
   -d '{"login":"torvalds"}'`,
-  },
-  settings: {
-    title: "Settings",
-    cli: `agentqs config set model claude-sonnet-4-5`,
-    api: (b) => `curl -X POST ${b}/api/settings \\
+    },
+    settings: {
+      title: "Settings",
+      cli: `agentqs config set model ${m}`,
+      api: (b) => `curl -X POST ${b}/api/settings \\
   -H 'content-type: application/json' \\
-  -d '{"model":"claude-sonnet-4-5"}'`,
-  },
-};
+  -d '{"model":"${m}"}'`,
+    },
+  };
+}
 
 const MCP_JSON = `{
   "mcpServers": {
@@ -66,7 +71,7 @@ const MCP_JSON = `{
 
 const MCP_ADD = `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'`;
 
-function tabKey(pathname: string): keyof typeof SNIPPETS {
+function tabKey(pathname: string): "chat" | "journal" | "data" | "settings" {
   if (pathname.startsWith("/journal")) return "journal";
   if (pathname.startsWith("/data")) return "data";
   if (pathname.startsWith("/settings")) return "settings";
@@ -101,12 +106,12 @@ function CopyBlock({ label, code }: { label: string; code: string }) {
   );
 }
 
-export function ConnectApi() {
+export function ConnectApi({ model = "" }: { model?: string }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [base, setBase] = useState("http://localhost:3000");
   const ref = useRef<HTMLDivElement>(null);
-  const snip = SNIPPETS[tabKey(pathname)];
+  const snip = snippetsFor(model)[tabKey(pathname)];
 
   useEffect(() => {
     if (typeof window !== "undefined") setBase(window.location.origin);

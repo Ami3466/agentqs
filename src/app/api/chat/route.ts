@@ -169,7 +169,7 @@ export async function POST(req: Request) {
 
   let model;
   try {
-    model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
+    model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model, cfg.llmModels);
   } catch (e) {
     return NextResponse.json({ error: `Model config failed: ${(e as Error).message}` }, { status: 502 });
   }

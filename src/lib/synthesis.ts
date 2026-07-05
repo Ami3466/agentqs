@@ -27,6 +27,7 @@ export interface LlmConfigLike {
   llmProvider?: string;
   llmKey?: string;
   model?: string;
+  llmModels?: string[];
 }
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -167,6 +168,7 @@ export async function synthesizeSession(input: SynthesizeInput): Promise<Synthes
       provider: input.cfg!.llmProvider!,
       apiKey: input.cfg!.llmKey!,
       model: input.cfg!.model,
+      models: input.cfg!.llmModels,
       system: synthesisSystem(),
       messages: [{ role: "user", content: synthesisUser(transcript, input.skill, input.date) }],
       maxTokens: 600,

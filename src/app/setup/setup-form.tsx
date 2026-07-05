@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Spinner } from "@/components/icons";
 import { Button, Field, Input, Select } from "@/components/ui";
-import { DEFAULT_MODEL, PROVIDERS, modelsForProvider } from "@/lib/models";
+import { PROVIDERS } from "@/lib/models";
 
 export function SetupForm() {
   const router = useRouter();
@@ -12,13 +12,47 @@ export function SetupForm() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [provider, setProvider] = useState("");
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  const [model, setModel] = useState("");
+  const [models, setModels] = useState<string[]>([]);
   const [llmKey, setLlmKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadMsg, setLoadMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const models = modelsForProvider(provider);
+  function resetModels() {
+    setModels([]);
+    setModel("");
+    setLoadMsg("");
+  }
+
+  async function loadModels() {
+    setError("");
+    setLoadMsg("Connecting…");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, key: llmKey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setModels(data.models);
+        setModel(data.models[0] ?? "");
+        setLoadMsg(`Loaded ${data.models.length} models`);
+      } else {
+        resetModels();
+        setLoadMsg(data.error || "Could not load models.");
+      }
+    } catch {
+      resetModels();
+      setLoadMsg("Could not reach the provider.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,6 +71,7 @@ export function SetupForm() {
         llmProvider: provider,
         model: provider ? model : "",
         llmKey: provider ? llmKey : "",
+        llmModels: provider ? models : [],
       }),
     });
     setBusy(false);
@@ -90,65 +125,78 @@ export function SetupForm() {
         <p className="mb-3 text-xs font-medium text-muted-fg">
           AI provider — optional, add it later in Settings.
         </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Select
-            value={provider}
-            onChange={(e) => {
-              const next = e.target.value;
-              setProvider(next);
-              const m = modelsForProvider(next);
-              if (m.length) setModel(m[0]);
-            }}
-          >
-            <option value="">No provider yet</option>
-            {PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={!models.length}
-          >
-            {models.length ? (
-              models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))
-            ) : (
-              <option value="">—</option>
-            )}
-          </Select>
-        </div>
+        <Select
+          value={provider}
+          onChange={(e) => {
+            setProvider(e.target.value);
+            setLlmKey("");
+            resetModels();
+          }}
+        >
+          <option value="">No provider yet</option>
+          {PROVIDERS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </Select>
+
         {provider ? (
-          <div className="relative mt-3">
-            <Input
-              type={showKey ? "text" : "password"}
-              value={llmKey}
-              onChange={(e) => setLlmKey(e.target.value)}
-              placeholder={
-                PROVIDERS.find((p) => p.id === provider)?.keyHint || "API key"
-              }
-              autoComplete="off"
-              className="pr-16 font-mono"
-            />
-            <button
-              type="button"
-              onClick={() => setShowKey((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-xs text-muted-fg hover:text-fg"
+          <div className="mt-3 space-y-3">
+            <div className="relative">
+              <Input
+                type={showKey ? "text" : "password"}
+                value={llmKey}
+                onChange={(e) => {
+                  setLlmKey(e.target.value);
+                  resetModels();
+                }}
+                placeholder={PROVIDERS.find((p) => p.id === provider)?.keyHint || "API key"}
+                autoComplete="off"
+                className="pr-16 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-xs text-muted-fg hover:text-fg"
+              >
+                {showKey ? "Hide" : "Show"}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                onClick={() => void loadModels()}
+                disabled={!llmKey || loading}
+                size="sm"
+              >
+                {loading ? <Spinner width={14} height={14} /> : null}
+                {loading ? "Connecting…" : "Connect & load models"}
+              </Button>
+              {loadMsg ? <span className="text-xs text-muted-fg">{loadMsg}</span> : null}
+            </div>
+
+            <Select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={!models.length}
             >
-              {showKey ? "Hide" : "Show"}
-            </button>
+              {models.length ? (
+                models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))
+              ) : (
+                <option value="">Connect a key to load models</option>
+              )}
+            </Select>
           </div>
         ) : null}
       </div>
 
-      {error ? (
-        <p className="text-sm text-destructive">{error}</p>
-      ) : null}
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <Button type="submit" variant="primary" disabled={busy} className="w-full">
         {busy ? <Spinner width={16} height={16} /> : null}
