@@ -36,6 +36,8 @@ export interface FileImporter {
   id: string; // source stem → record/daily/<id>.csv
   name: string; // display name
   detail: string; // one-line description for the Data tab / CLI
+  /** How to locate the local file, shown under the `import:file` command in the UI. */
+  connectHint?: string;
   /** false = stub adapter (real read path, but not the full extraction yet). */
   live: boolean;
   /** The metric column the Data-tab headline / sparkline reads. */

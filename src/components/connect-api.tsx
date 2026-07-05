@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Check, ChevronDown, Copy, Terminal } from "./icons";
+import { ChevronDown, Terminal } from "./icons";
 import { cn } from "./ui";
+import { CopyBlock } from "./copy-block";
 
 /**
  * The Supabase-style Connect / API affordance (Loop 15). Context-aware: on each tab
@@ -76,34 +77,6 @@ function tabKey(pathname: string): "chat" | "journal" | "data" | "settings" {
   if (pathname.startsWith("/data")) return "data";
   if (pathname.startsWith("/settings")) return "settings";
   return "chat";
-}
-
-function CopyBlock({ label, code }: { label: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-          {label}
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            navigator.clipboard?.writeText(code);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-          className="inline-flex items-center gap-1 text-[11px] text-muted-fg transition-colors hover:text-fg"
-        >
-          {copied ? <Check width={12} height={12} /> : <Copy width={12} height={12} />}
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <pre className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[12px] leading-relaxed text-fg">
-        {code}
-      </pre>
-    </div>
-  );
 }
 
 export function ConnectApi({ model = "" }: { model?: string }) {

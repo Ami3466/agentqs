@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { Inbox, Spinner, Upload, Wand, X } from "@/components/icons";
 import { cn } from "@/components/ui";
+import { INBOX_TEXT_ACCEPT, uploadFilesToInbox } from "@/lib/inbox-upload";
 
 interface Item {
   id: string;
@@ -19,14 +20,6 @@ interface StructResult {
   source?: string;
   rowsAdded?: number;
   message?: string;
-}
-
-const TEXT_EXT = /\.(csv|tsv|tab|psv|txt|md|json|log)$/i;
-function isTextFile(f: File): boolean {
-  return f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
-}
-function kindOf(name: string): string {
-  return /\.(csv|tsv|tab|psv)$/i.test(name) ? "csv" : "file";
 }
 
 function ago(iso: string): string {
@@ -77,37 +70,15 @@ export function InboxPanel({
   }
 
   async function uploadFiles(files: FileList | File[]) {
-    const list = Array.from(files);
-    if (!list.length) return;
+    if (!Array.from(files).length) return;
     setBusy("upload");
-    let ok = 0;
     try {
-      for (const f of list) {
-        if (!isTextFile(f)) {
-          say("error", `Skipped ${f.name} — text/CSV files only for now.`);
-          continue;
-        }
-        const text = await f.text();
-        if (!text.trim()) {
-          say("error", `Skipped ${f.name} — empty file.`);
-          continue;
-        }
-        const res = await fetch("/api/inbox", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            text,
-            source: "drop",
-            kind: kindOf(f.name),
-            meta: { filename: f.name, bytes: f.size },
-          }),
-        });
-        if (res.ok) ok++;
-      }
-      if (ok) {
+      const { added, skipped } = await uploadFilesToInbox(files, "drop");
+      if (skipped.length) say("error", `Skipped ${skipped[0]}.`);
+      if (added) {
         say(
           "ok",
-          `${ok} file${ok === 1 ? "" : "s"} added — hit Structure to turn ${ok === 1 ? "it" : "them"} into daily rows.`,
+          `${added} file${added === 1 ? "" : "s"} added — hit Structure to turn ${added === 1 ? "it" : "them"} into daily rows.`,
         );
         onChanged();
       }
@@ -230,7 +201,7 @@ export function InboxPanel({
           ref={fileRef}
           type="file"
           multiple
-          accept=".csv,.tsv,.tab,.psv,.txt,.md,.json,.log,text/*,application/json"
+          accept={INBOX_TEXT_ACCEPT}
           className="hidden"
           onChange={(e) => {
             if (e.target.files) void uploadFiles(e.target.files);

@@ -125,6 +125,7 @@ export function SourceConnect({
   const Icon = brandIcon(id);
   const connected = status?.connected;
   const live = status?.live ?? true;
+  const isOauth = (status?.credentialLabel ?? "").toLowerCase().includes("oauth");
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred);
   const dayLabel = status ? `${status.days} day${status.days === 1 ? "" : "s"}` : "";
   const headline = status
@@ -146,6 +147,13 @@ export function SourceConnect({
             {!live ? (
               <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
                 stub · OAuth soon
+              </span>
+            ) : isOauth ? (
+              <span
+                className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg"
+                title="Paste an OAuth access token — no in-app OAuth redirect yet"
+              >
+                OAuth · paste token
               </span>
             ) : null}
             {connected ? (
@@ -202,8 +210,9 @@ export function SourceConnect({
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
           <p className="text-xs text-muted-fg">
-            Paste a {status?.credentialLabel ?? "credential"}. Stored in your data dir; used only to
-            read {status?.name ?? "this source"}.
+            Paste your {status?.credentialLabel ?? "credential"}. Stored in your data dir; used only
+            to read {status?.name ?? "this source"}.
+            {isOauth ? " It's a short-lived OAuth token — paste a fresh one when it expires." : ""}
           </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
