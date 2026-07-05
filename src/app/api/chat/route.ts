@@ -6,21 +6,11 @@ import { dbPath, recordDir } from "@/lib/paths";
 import { readSessionsFromRecord } from "@/lib/record";
 import { skillById } from "@/lib/skills";
 import { continuityBlock, continuityFallbackReply } from "@/lib/synthesis";
-import { buildSpark, groundedCrossSourceAnswer, readGrounding } from "@/lib/grounding";
+import { buildSpark, groundedCrossSourceAnswer, looksLikeDataQuestion, readGrounding } from "@/lib/grounding";
 import { dailyCatalog, resolveModel, streamMentor } from "@/lib/agent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** Does the message look like it's asking about the user's data (so the keyless
- *  path should compute a grounded cross-source answer rather than a persona note)? */
-function looksLikeDataQuestion(text: string): boolean {
-  const t = text.toLowerCase();
-  if (t.includes("?")) return true;
-  return /\b(why|how|what|when|which|compare|correlat|affect|impact|pattern|trend|productiv|focus|sleep|commit|meeting|music|recovery|hrv|heart|listen)\b/.test(
-    t,
-  );
-}
 
 /** Split a deterministic (non-model) answer into word-boundary chunks so the keyless
  *  path streams into the UI the same way the model path does, one frame per chunk. */
