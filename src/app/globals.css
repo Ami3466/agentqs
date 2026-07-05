@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Semantic color tokens (space-separated RGB channels for /alpha) ---- */
+:root {
+  --bg: 252 252 251;
+  --fg: 24 24 27;
+  --card: 255 255 255;
+  --card-fg: 24 24 27;
+  --muted: 244 244 245;
+  --muted-fg: 113 113 122;
+  --border: 228 228 231;
+  --input: 224 224 228;
+  --ring: 16 185 129;
+  --accent: 16 185 129;
+  --accent-fg: 255 255 255;
+  --destructive: 220 38 38;
+  --destructive-fg: 255 255 255;
+}
+
+.dark {
+  --bg: 12 12 14;
+  --fg: 244 244 245;
+  --card: 24 24 27;
+  --card-fg: 244 244 245;
+  --muted: 39 39 42;
+  --muted-fg: 161 161 170;
+  --border: 39 39 42;
+  --input: 45 45 49;
+  --ring: 62 207 142;
+  --accent: 62 207 142;
+  --accent-fg: 8 24 16;
+  --destructive: 239 68 68;
+  --destructive-fg: 12 12 14;
+}
+
+@layer base {
+  * {
+    border-color: rgb(var(--border));
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    background-color: rgb(var(--bg));
+    color: rgb(var(--fg));
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background-color: rgb(var(--accent) / 0.25);
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--border));
+    border-radius: 9999px;
+  }
+}

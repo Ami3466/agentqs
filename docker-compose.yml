@@ -1,0 +1,21 @@
+services:
+  agentqs:
+    build: .
+    container_name: agentqs
+    ports:
+      - "3000:3000"
+    environment:
+      - AGENTQS_DATA_DIR=/data
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY:-}
+    volumes:
+      # Your record + SQLite + config live here. Persist it.
+      - agentqs-data:/data
+      # Optional: mount local file sources read-only, e.g.
+      # - "$HOME/Library/Application Support/Google/Chrome:/host/chrome:ro"
+    restart: unless-stopped
+
+volumes:
+  agentqs-data:
