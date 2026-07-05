@@ -162,6 +162,53 @@ dense per-day series, and merges them into `record/daily/github.csv`. In the app
 the **Data** tab does the same with one click (paste a token → real commits land
 in your record and rebuild into the daily table).
 
+### Tier-1 plugins — RescueTime · Google Calendar · Spotify · WHOOP
+
+The rest of the Tier-1 APIs live behind one shared **plugin** interface
+(`src/lib/importers/plugin.ts`): `credential → fetch a window → normalize into a
+wide daily table → merge into record/daily/<id>.csv → rebuild`. Adding a source is
+one file plus a registry entry — no new route, no new UI. They all share the
+generic `/api/import/[source]` route and the `SourceConnect` Data-tab row (paste a
+credential → sync → sparkline + interval), and one CLI:
+
+```bash
+# RescueTime uses a simple API key; Calendar / Spotify take an OAuth access token
+npm run import:source -- --source rescuetime --credential <key> --rebuild
+npm run import:source -- --source spotify --credential <token> --days 30 --rebuild
+
+# offline: run the real fetch → normalize → merge → rebuild path against a fixture
+npm run import:source -- --source gcal --fixture samples/gcal-events.json \
+  --from 2026-06-01 --to 2026-06-30 --record /tmp/rec --rebuild
+```
+
+| Source | Auth | Daily metrics |
+|---|---|---|
+| **RescueTime** | API key | `productivity_pulse`, `productive_hours`, `distracting_hours`, `total_hours` |
+| **Google Calendar** | OAuth token | `meetings`, `meeting_hours` |
+| **Spotify** | OAuth token | `tracks`, `minutes` |
+| **WHOOP** *(stub)* | OAuth token | `recovery`, `hrv`, `resting_hr` |
+
+WHOOP is a **stub adapter**: its normalize → merge → rebuild pipeline is real and
+fixture-provable, but its OAuth flow isn't configurable in a single run, so the
+Data tab marks it *not-live* until that lands (a later loop).
+
+### Grounded chat — a cross-source answer from your numbers
+
+With four sources feeding one record, the mentor answers **across** them. Every
+chat reads the numeric daily cache (`src/lib/grounding.ts`): with an AI key, a
+compact `DATA CONTEXT` block is injected so the model cites your real figures; with
+**no key**, a cross-source question is still answered deterministically from the
+numbers — two metrics from different sources are lined up on their shared days and
+the relationship reported (e.g. *"commits run 13.25 on your high-productivity days
+vs 3 on the low ones"*). Grounded replies show a **grounded in your record** badge
+with the sources used.
+
+```bash
+npm run integration:test   # ships-when proof: GitHub + RescueTime + Calendar +
+                           # Spotify feed one record, and a cross-source question
+                           # returns a grounded answer citing 2+ sources
+```
+
 ## Sync engine — schedules, lazy-sync, stale badges
 
 The **Data** tab lists every source with its type (`api` / `manual`), last-sync,

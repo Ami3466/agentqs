@@ -20,6 +20,8 @@ export interface AppConfig {
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
   journalViews?: JournalView[]; // saved Journal table layouts, per user
   sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
+  sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
+  sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.

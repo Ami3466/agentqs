@@ -3,12 +3,18 @@
  * merging a registry of known integrations with the manual sources discovered in
  * the record, then layering each source's saved interval + derived last-sync and
  * computing stale/due via the pure helpers in ./sources.
+ *
+ * GitHub keeps its bespoke row/route (Loop 3); the Tier-1 plugins (RescueTime,
+ * Google Calendar, Spotify, WHOOP-stub) are composed generically from the plugin
+ * registry so adding a source is one entry, not a new branch here.
  */
 import fs from "fs";
 import path from "path";
 import type { AppConfig } from "./config";
 import { recordDir } from "./paths";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
+import { PLUGINS } from "./importers/registry";
+import { resolveCredential } from "./importers/plugin";
 import {
   isDue,
   isStale,
@@ -24,24 +30,12 @@ interface Registered {
   kind: SourceKind;
   detail: string;
   csv?: string; // daily/<csv>.csv this source owns (so it isn't double-counted as manual)
-  syncEndpoint?: string; // present + `live` → auto-syncable
   live: boolean; // has a working importer
 }
 
-/** Known integrations. Only GitHub is live today; the rest are placeholders that
- *  the later integration loops wire up (WHOOP, Calendar, file importers). */
-const REGISTERED: Registered[] = [
-  {
-    id: "github",
-    name: "GitHub",
-    kind: "api",
-    detail: "commits per day",
-    csv: "github",
-    syncEndpoint: "/api/import/github",
-    live: true,
-  },
-  { id: "whoop", name: "WHOOP", kind: "api", detail: "per-minute heart rate, sleep, strain", live: false },
-  { id: "gcal", name: "Google Calendar", kind: "api", detail: "meetings", live: false },
+/** Not-yet-live file-based integrations (later loops wire these up). GitHub and
+ *  the Tier-1 plugins are composed separately below. */
+const PLACEHOLDERS: Registered[] = [
   { id: "apple-health", name: "Apple Health", kind: "manual", detail: "steps, HR, sleep, workouts", live: false },
   { id: "chrome", name: "Chrome history", kind: "manual", detail: "browsing history", live: false },
 ];
@@ -59,6 +53,14 @@ function fileMtimeISO(file: string): string | null {
   }
 }
 
+function hasRows(file: string): boolean {
+  try {
+    return fs.readFileSync(file, "utf8").trim().split(/\r?\n/).length > 1;
+  } catch {
+    return false;
+  }
+}
+
 function dailyStems(dir: string): string[] {
   try {
     return fs
@@ -73,39 +75,60 @@ function dailyStems(dir: string): string[] {
 /** GitHub is connected once its record file holds commits; last-sync prefers the
  *  saved API timestamp, falling back to the file mtime. It is only DUE (auto-sync)
  *  when a token is actually available to run the sync. */
-function githubRow(cfg: AppConfig | null, dir: string, reg: Registered): SourceView {
+function githubRow(cfg: AppConfig | null, dir: string): SourceView {
   const file = path.join(dir, "daily", "github.csv");
   const days = fs.existsSync(file) ? parseGithubCsv(fs.readFileSync(file, "utf8")) : [];
-  const connected = days.some((d) => d.commits > 0) || days.length > 0;
+  const connected = days.length > 0;
   const lastSync = cfg?.githubSyncedAt ?? fileMtimeISO(file);
-  const interval = intervalFor(cfg, reg.id);
+  const interval = intervalFor(cfg, "github");
   const hasToken = Boolean(resolveGithubToken());
   return {
-    id: reg.id,
-    name: reg.name,
-    kind: reg.kind,
-    detail: reg.detail,
+    id: "github",
+    name: "GitHub",
+    kind: "api",
+    detail: "commits per day",
     connected,
     interval,
     lastSync,
     stale: false,
     due: connected && hasToken && isDue(lastSync, interval),
-    syncEndpoint: reg.syncEndpoint ?? null,
+    syncEndpoint: "/api/import/github",
+    live: true,
   };
 }
 
-/** Compose the full sources list: registered integrations + discovered manual
- *  sources (any daily/*.csv not owned by a registered source, e.g. a dropped CSV). */
-export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
-  const owned = new Set(REGISTERED.map((r) => r.csv).filter(Boolean) as string[]);
-  const out: SourceView[] = [];
+/** Generic row for a Tier-1 plugin source. Connected once its record file has
+ *  rows; DUE (auto-sync on open) only when live + a credential is resolvable. */
+function pluginRow(cfg: AppConfig | null, dir: string, plugin: (typeof PLUGINS)[number]): SourceView {
+  const file = path.join(dir, "daily", `${plugin.id}.csv`);
+  const connected = hasRows(file);
+  const lastSync = cfg?.sourceSyncedAt?.[plugin.id] ?? fileMtimeISO(file);
+  const interval = intervalFor(cfg, plugin.id);
+  const hasCred = Boolean(resolveCredential(plugin, undefined, cfg));
+  return {
+    id: plugin.id,
+    name: plugin.name,
+    kind: "api",
+    detail: plugin.detail,
+    connected,
+    interval,
+    lastSync,
+    stale: false,
+    due: plugin.live && connected && hasCred && isDue(lastSync, interval),
+    syncEndpoint: plugin.live ? `/api/import/${plugin.id}` : null,
+    live: plugin.live,
+  };
+}
 
-  for (const reg of REGISTERED) {
-    if (reg.id === "github") {
-      out.push(githubRow(cfg, dir, reg));
-      continue;
-    }
-    // Not-yet-live integrations: shown so intervals can be set, but not connected.
+/** Compose the full sources list: GitHub + Tier-1 plugins + placeholder
+ *  integrations + discovered manual sources (any daily/*.csv not owned above). */
+export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
+  const out: SourceView[] = [githubRow(cfg, dir)];
+  for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
+
+  const owned = new Set<string>(["github", ...PLUGINS.map((p) => p.id)]);
+
+  for (const reg of PLACEHOLDERS) {
     out.push({
       id: reg.id,
       name: reg.name,
@@ -117,6 +140,7 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
       stale: false,
       due: false,
       syncEndpoint: null,
+      live: reg.live,
     });
   }
 
@@ -137,6 +161,7 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
       stale: isStale(lastSync, interval),
       due: false,
       syncEndpoint: null,
+      live: true,
     });
   }
 

@@ -235,3 +235,30 @@ export const Clock = (p: P) => (
     <path d="M12 7v5l3 2" />
   </svg>
 );
+
+export const Calendar = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+    <path d="M16 2v4M8 2v4M3 10h18" />
+  </svg>
+);
+
+export const Music = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M9 18V5l12-2v13" />
+    <circle cx="6" cy="18" r="3" />
+    <circle cx="18" cy="16" r="3" />
+  </svg>
+);
+
+export const Activity = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
+
+export const Gauge = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M12 15a3 3 0 0 0 2.1-5.1L12 12M4.2 17a9 9 0 1 1 15.6 0" />
+  </svg>
+);

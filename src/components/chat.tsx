@@ -44,6 +44,8 @@ interface Msg {
   pending?: number; // memo: inbox count after saving
   tone?: "ok" | "error";
   session?: SavedSession; // recap: the synthesized session being viewed
+  grounded?: boolean; // assistant reply cited the daily record
+  sources?: string[]; // sources the grounded reply drew on
 }
 
 /** A persisted session's synthesis (from /api/sessions) — no raw transcript. */
@@ -290,7 +292,13 @@ export function Chat() {
       if (!res.ok) {
         push({ role: "note", tone: "error", text: data.error || "The model didn't answer." });
       } else {
-        push({ role: "assistant", text: data.reply, skill: data.skill });
+        push({
+          role: "assistant",
+          text: data.reply,
+          skill: data.skill,
+          grounded: Boolean(data.grounded),
+          sources: Array.isArray(data.sources) ? data.sources : undefined,
+        });
       }
     } catch {
       push({ role: "note", tone: "error", text: "Could not reach the mentor." });
@@ -653,6 +661,14 @@ function Bubble({ m }: { m: Msg }) {
         <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-muted px-3.5 py-2 text-sm text-fg">
           {m.text}
         </div>
+        {m.grounded ? (
+          <p className="mt-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-accent">
+            <Check width={11} height={11} /> grounded in your record
+            {m.sources?.length ? (
+              <span className="font-normal text-muted-fg">· {m.sources.join(", ")}</span>
+            ) : null}
+          </p>
+        ) : null}
       </div>
     </div>
   );
