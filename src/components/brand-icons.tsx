@@ -160,12 +160,24 @@ const MapsPin = (p: P) => (
   </Mark>
 );
 
+/** Daily self-ratings — four bars of varying height, i.e. the 1–10 dimensions. */
+const SelfRatings = (p: P) => (
+  <Mark {...p}>
+    <rect x="3" y="14" width="3.4" height="7" rx="1" />
+    <rect x="8.3" y="9" width="3.4" height="12" rx="1" />
+    <rect x="13.6" y="11" width="3.4" height="10" rx="1" />
+    <rect x="18.9" y="5" width="3.4" height="16" rx="1" />
+  </Mark>
+);
+
 /**
  * Source-id → brand mark. Keys cover the live sources plus the aliases a manual
  * drop can land under (a pasted `whatsapp.csv` → `whatsapp`, etc.). Add a source =
  * add a key here, not a new component elsewhere.
  */
 export const BRAND_ICONS: Record<string, IconComponent> = {
+  // first-party
+  self: SelfRatings,
   // live sources
   github: GitHub,
   rescuetime: RescueTime,
