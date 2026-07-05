@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
+import { JournalSearch } from "./journal-search";
 import { cn } from "./ui";
 import { Spinner } from "./icons";
 import type { JournalData, JournalView } from "@/lib/journal";
@@ -92,6 +93,8 @@ export function JournalWorkspace() {
           ))}
         </div>
       </div>
+
+      <JournalSearch />
 
       {loading || !data ? (
         <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-20 text-sm text-muted-fg">

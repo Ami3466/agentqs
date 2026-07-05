@@ -199,6 +199,12 @@ function readInbox(dir: string): InboxItem[] {
     .sort((a, b) => cmp(a.ts, b.ts) || cmp(a.id, b.id));
 }
 
+/** Read the raw inbox (record/inbox.jsonl) — the pending capture bucket. Exposed for
+ *  the semantic index, which embeds each memo's text. */
+export function readInboxFromRecord(dir: string): InboxItem[] {
+  return readInbox(dir);
+}
+
 function str(v: unknown): string | null {
   return v == null ? null : String(v);
 }

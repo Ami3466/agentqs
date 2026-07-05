@@ -1,10 +1,12 @@
 import fs from "fs";
+import path from "path";
 import { generateText, stepCountIs, streamText, tool, type LanguageModel, type ModelMessage } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { openReadonly } from "./db";
+import { semanticSearch } from "./embeddings";
 import { fallbackModel } from "./models";
 import type { LlmMessage } from "./llm";
 
@@ -138,7 +140,28 @@ export function mentorTools(dbFile: string, used: Used) {
     },
   });
 
-  return { query_daily, search_notes };
+  const find_similar = tool({
+    description:
+      "Semantic search over the user's memos and past sessions using the local embedding index — finds days that FELT like a described feeling or situation, even when they don't share the exact words (e.g. 'anxious, couldn't sleep' also surfaces a day they wrote 'wired and stressed'). " +
+      "Use this for recall/vibe questions ('find days that felt like this', 'when have I felt this way', 'days like today'). It returns the closest days with a dated snippet. For exact keywords use search_notes; for numbers use query_daily.",
+    inputSchema: z.object({
+      query: z.string().describe("The feeling or situation to match, in natural language."),
+      limit: z.number().int().min(1).max(10).optional(),
+    }),
+    execute: async ({ query, limit }) => {
+      try {
+        const vecFile = path.join(path.dirname(dbFile), "agentqs-vec.db");
+        const hits = semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
+        used.hits += hits.length;
+        for (const h of hits) used.sources.add(h.kind === "session" ? "sessions" : "memos");
+        return { days: hits.map((h) => ({ date: h.date, snippet: h.snippet, score: h.score })) };
+      } catch (e) {
+        return { error: (e as Error).message, days: [] };
+      }
+    },
+  });
+
+  return { query_daily, search_notes, find_similar };
 }
 
 // ---- Schema catalog (what the model may query) ----------------------------
@@ -171,7 +194,7 @@ export function dailyCatalog(dbFile: string): { sources: string[]; hint: string 
       "Table `daily` (long/tidy): date TEXT (ISO day), source TEXT, metric TEXT, value_num REAL, value_text TEXT — one row per (date, source, metric).",
       `Dates ${range.lo}..${range.hi}. Sources: ${sources.join(", ")}.`,
       `Queryable numeric series (source.metric): ${cols}.`,
-      "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so your citations are attributed. Call search_notes for keywords in memos / past sessions. When explaining how the user feels, line up 2+ sources.",
+      "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so your citations are attributed. Call search_notes for keywords in memos / past sessions, or find_similar for semantic recall ('days that felt like this'). When explaining how the user feels, line up 2+ sources.",
     ].join("\n");
     return { sources, hint };
   } finally {

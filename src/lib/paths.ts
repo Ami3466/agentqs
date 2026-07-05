@@ -26,3 +26,14 @@ export function recordDir(dir: string = dataDir()): string {
 export function dbPath(dir: string = dataDir()): string {
   return path.join(dir, "agentqs.db");
 }
+
+/**
+ * The local semantic index — sqlite-vec embeddings over the record's free text
+ * (memos + session synthesis). A SEPARATE derived file from the main cache on
+ * purpose: the main cache is byte-deterministic (rebuild:verify asserts it), so the
+ * embedding store is kept out of that guarantee. Rebuildable from the record; never
+ * committed.
+ */
+export function vecPath(dir: string = dataDir()): string {
+  return path.join(dir, "agentqs-vec.db");
+}
