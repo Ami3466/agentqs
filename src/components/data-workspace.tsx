@@ -1,24 +1,27 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { Card } from "@/components/ui";
+import { SourcesPanel } from "@/components/sources-panel";
 import { InboxPanel } from "@/components/inbox-panel";
 import { DailyPreview } from "@/components/daily-preview";
 
 /**
- * Client shell for the Data tab. Holds the one shared `version` counter so an
- * inbox mutation (upload · structure · discard) refetches both the pending list
- * and the daily-table preview from a single source of truth. The server-rendered
- * sources card (GitHub + stubs) is passed straight through as `children`.
+ * Client shell for the Data tab. Holds the one shared `version` counter so any
+ * mutation (an inbox upload · structure · discard, or a source auto-sync) refetches
+ * every panel from a single source of truth: the sources list, the pending inbox,
+ * and the daily-table preview all read `version`.
  */
-export function DataWorkspace({ children }: { children: ReactNode }) {
+export function DataWorkspace() {
   const [version, setVersion] = useState(0);
   const bump = () => setVersion((v) => v + 1);
 
   return (
     <>
       <div className="grid gap-4 md:grid-cols-[1fr_300px]">
-        {children}
+        <Card>
+          <SourcesPanel version={version} onChanged={bump} />
+        </Card>
         <Card>
           <InboxPanel version={version} onChanged={bump} />
         </Card>

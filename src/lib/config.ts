@@ -1,6 +1,7 @@
 import fs from "fs";
 import { configPath, dataDir } from "./paths";
 import type { JournalView } from "./journal";
+import type { Interval } from "./sources";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -18,6 +19,7 @@ export interface AppConfig {
   githubToken?: string; // GitHub PAT for the commits importer (optional)
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
   journalViews?: JournalView[]; // saved Journal table layouts, per user
+  sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.

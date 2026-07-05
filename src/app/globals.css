@@ -17,6 +17,8 @@
   --accent-fg: 255 255 255;
   --destructive: 220 38 38;
   --destructive-fg: 255 255 255;
+  --warning: 180 83 9;
+  --warning-fg: 255 255 255;
 }
 
 .dark {
@@ -33,6 +35,8 @@
   --accent-fg: 8 24 16;
   --destructive: 239 68 68;
   --destructive-fg: 12 12 14;
+  --warning: 245 158 11;
+  --warning-fg: 12 12 14;
 }
 
 @layer base {
