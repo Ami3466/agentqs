@@ -1,18 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ComponentType, type SVGProps } from "react";
-import {
-  Activity,
-  Calendar,
-  Check,
-  Eye,
-  EyeOff,
-  Gauge,
-  Music,
-  Plug,
-  RefreshCw,
-  Spinner,
-} from "@/components/icons";
+import { useEffect, useState } from "react";
+import { Check, Eye, EyeOff, RefreshCw, Spinner } from "@/components/icons";
+import { brandIcon } from "@/components/brand-icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
@@ -47,13 +37,6 @@ interface Status {
   average: number | null;
   series: Point[];
 }
-
-const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
-  rescuetime: Gauge,
-  gcal: Calendar,
-  spotify: Music,
-  whoop: Activity,
-};
 
 /** Dependency-free bar sparkline of the primary metric, accent-coloured. */
 function Spark({ data }: { data: Point[] }) {
@@ -139,7 +122,7 @@ export function SourceConnect({
     setTimeout(() => setMsg(""), 6000);
   }
 
-  const Icon = ICONS[id] ?? Plug;
+  const Icon = brandIcon(id);
   const connected = status?.connected;
   const live = status?.live ?? true;
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred);
