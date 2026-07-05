@@ -262,3 +262,28 @@ export const Gauge = (p: P) => (
     <path d="M12 15a3 3 0 0 0 2.1-5.1L12 12M4.2 17a9 9 0 1 1 15.6 0" />
   </svg>
 );
+
+export const Mic = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8" />
+  </svg>
+);
+
+export const Square = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
+
+export const AudioLines = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M2 12v0M6 8v8M10 5v14M14 8v8M18 10v4M22 12v0" />
+  </svg>
+);
+
+export const Waveform = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4" />
+  </svg>
+);

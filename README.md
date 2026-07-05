@@ -366,6 +366,42 @@ npm run session:test       # ships-when proof: a new session references a prior
                            # session's commitment (no AI key required)
 ```
 
+## Voice — a memo you speak, and a session you talk
+
+Two separate voice paths, both landing in the same record.
+
+**Global mic → voice memo.** The mic in the top bar (every tab) records audio,
+transcribes it, and drops the transcript **raw into your inbox** — no LLM, no
+daily row, exactly like a typed `>>` memo. Structure it later like anything else.
+Transcription is the only external step, and it's **pluggable**
+(`src/lib/voice.ts`):
+
+- **Local Whisper (default, private, no cost).** Point `WHISPER_BIN` at any
+  command that takes an audio file path and prints the transcript — wrap
+  whisper.cpp, faster-whisper, or a one-line shell script (`WHISPER_ARGS` passes
+  extra args before the file). Preferred when set.
+- **OpenAI Whisper (cloud fallback).** With no local binary, agentqs uses OpenAI
+  Whisper if an OpenAI key is available (`OPENAI_API_KEY`, or your saved key when
+  the provider is OpenAI).
+- **No backend wired?** The mic stays config-gated — it explains what to set
+  instead of recording, and `POST /api/voice/memo` returns a `501` with the hint.
+
+**In-chat live voice session (ElevenLabs).** The toggle beside the chat input
+starts a real-time voice conversation — premium voice + natural turn-taking, with
+**Claude as the brain** (set the agent's LLM to Claude in the ElevenLabs
+dashboard) and the session's key points written back to your record. It's
+**config-gated**: a stub until both `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID`
+are set. Once configured, `POST /api/voice/session` mints the signed URL the
+ElevenLabs Conversational AI widget connects to.
+
+```bash
+npm run voice:test         # ships-when proof (Loop 13): a local transcriber is
+                           # wired, POST /api/voice/memo transcribes a recording,
+                           # and the transcript lands in the inbox as a raw `voice`
+                           # memo (no LLM, no daily row); the ElevenLabs in-chat
+                           # session reports config-gated when unset.
+```
+
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.

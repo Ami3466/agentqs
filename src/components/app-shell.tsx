@@ -4,6 +4,7 @@ import { ConnectApi } from "./connect-api";
 import { TabNav } from "./tab-nav";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu } from "./user-menu";
+import { VoiceMemo } from "./voice-memo";
 import { Badge } from "./ui";
 
 /**
@@ -30,6 +31,7 @@ export function AppShell({
           </span>
           <div className="ml-auto flex items-center gap-2">
             <ConnectApi />
+            <VoiceMemo />
             <ThemeToggle />
             <UserMenu username={username} />
           </div>
