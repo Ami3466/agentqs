@@ -256,14 +256,17 @@ npm run files:test         # ships-when proof (Loop 12): the Chrome import comma
 With an AI key the mentor is a real **tool-using agent** (`src/lib/agent.ts`), built
 on the **Vercel AI SDK** so it's provider-agnostic — default **Claude**, or paste an
 OpenAI / Gemini key and the same agent runs on that model. It doesn't get your
-numbers stuffed into its prompt; it **fetches them**, calling two tools until it can
-answer:
+numbers stuffed into its prompt; it **fetches them**, calling three tools until it
+can answer:
 
 - **`query_daily`** — runs a read-only SQL `SELECT` over your long/tidy `daily`
   table and gets the real rows back (the connection is read-only, so it can read the
   record but never mutate it).
 - **`search_notes`** — FTS5 keyword search over your memos and past sessions for the
   qualitative context behind a number.
+- **`find_similar`** — semantic search over the same text via the local embedding
+  index (see below): finds days that *felt* like a described feeling even when they
+  share no keywords. SQL for numbers, FTS for exact words, embeddings for vibe.
 
 The persona (mentor / therapist / coach) is the system prompt; a compact schema
 catalog tells it what's queryable. So *"why have I felt off?"* makes it `SELECT` your
@@ -364,6 +367,44 @@ view.
 ```bash
 npm run session:test       # ships-when proof: a new session references a prior
                            # session's commitment (no AI key required)
+```
+
+## Semantic search — find days that felt like this
+
+Ask *"find days that felt like this"* and agentqs surfaces the days that **rhyme with
+a feeling** — matched by meaning, not keywords. Type it in the box on the **Journal**,
+ask it in **Chat**, or hit the API — *"wired, couldn't switch off"* still surfaces the
+day you wrote *"anxious and stressed."*
+
+It runs on a **local embedding model + sqlite-vec**, on by default with **nothing to
+set up** — no key, no cost, nothing to download, works offline on first run:
+
+- **The local model** (`src/lib/embed.ts`) turns text into a vector with a compact,
+  deterministic featurizer — word + char-trigram features (so *slept* ≈ *sleeping*)
+  plus a small concept lexicon that pulls *anxious* and *stressed* (or *tired* and
+  *exhausted*) onto shared axes. Private, byte-deterministic, zero dependencies. It's
+  pluggable behind one `embed()` seam — swap in a neural / API embedder later and bump
+  the model id to reindex.
+- **sqlite-vec** (`src/lib/embeddings.ts`) stores the vectors and runs the nearest-
+  neighbour search inside SQLite. It self-heals: the index is a separate derived file
+  (never committed, kept out of the byte-deterministic main cache) that rebuilds
+  whenever your record or the model changes. If the loadable extension can't load on
+  some host, the same vectors are ranked by a pure-JS cosine fallback — it never
+  hard-fails.
+
+Every memo and session synthesis is indexed with its date; a query collapses to the
+best-matching **days**. SQL (`query_daily`) still answers numbers and FTS5
+(`search_notes`) still answers exact keywords — embeddings add *vibe*. It all works
+with **no AI key**; the mentor also calls it as the `find_similar` tool when a key is
+set. Settings shows the index status and a one-click **Reindex**.
+
+```bash
+npm run semantic:test      # ships-when proof (Loop 15): the local model + sqlite-vec
+                           # build an index from a seeded record and match days by
+                           # MEANING (queries that share no words with the day they
+                           # hit); then over the built app with NO AI key, /api/search
+                           # returns the right day and Chat answers "find days that
+                           # felt like this" grounded — all keyless.
 ```
 
 ## Voice — a memo you speak, and a session you talk

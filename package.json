@@ -21,6 +21,7 @@
     "files:test": "tsx scripts/import-files-test.ts",
     "voice:test": "tsx scripts/voice-memo.ts",
     "channels:test": "tsx scripts/channels.ts",
+    "semantic:test": "tsx scripts/embeddings.ts",
     "agent:test": "tsx scripts/agent-brain.ts"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "next": "14.2.15",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "sqlite-vec": "^0.1.9",
     "zod": "^4.4.3"
   },
   "devDependencies": {

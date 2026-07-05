@@ -59,6 +59,24 @@ export function looksLikeDataQuestion(text: string): boolean {
   );
 }
 
+/** Does the message look like a *semantic recall* ("find days that felt like this",
+ *  "days like this one", "when did I feel this way", "similar days")? These route to
+ *  the embedding index rather than the numeric cross-source path. Shared by the Chat
+ *  route and the channel bots. */
+export function looksLikeRecallQuestion(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /\bfe(el|els|lt|eling)\s+like\b/.test(t) ||
+    /\bfeels?\s+like\s+this\b/.test(t) ||
+    /\b(days?|times?|moments?)\s+(that|like|when|where)\b/.test(t) ||
+    /\bsimilar\s+(days?|to)\b/.test(t) ||
+    /\bremind|\breminds?\s+me\b/.test(t) ||
+    /\blike\s+this\b/.test(t) ||
+    /\bfind\s+(days?|other)\b/.test(t) ||
+    /\bwhen\s+(did|have)\s+i\s+(feel|felt|last)\b/.test(t)
+  );
+}
+
 function round(n: number): number {
   return Math.round(n * 100) / 100;
 }

@@ -5,36 +5,57 @@ import { usePathname } from "next/navigation";
 import { Check, ChevronDown, Copy, Terminal } from "./icons";
 import { cn } from "./ui";
 
-/** Per-tab CLI + API + MCP snippets. Stub content for Loop 1. */
-const SNIPPETS: Record<
-  string,
-  { title: string; cli: string; api: string }
-> = {
+/**
+ * The Supabase-style Connect / API affordance (Loop 15). Context-aware: on each tab
+ * it shows the equivalent CLI command + the real HTTP API call for what you're
+ * viewing, plus a one-click "Connect to Claude Code" (MCP) config. One brain, three
+ * faces — the UI just surfaces the CLI/API face of whatever screen you're on. The
+ * API host tracks wherever the app is actually served.
+ */
+
+interface Snip {
+  title: string;
+  cli: string;
+  api: (base: string) => string;
+  extra?: { label: string; code: (base: string) => string };
+}
+
+const SNIPPETS: Record<string, Snip> = {
   chat: {
     title: "Chat",
     cli: `agentqs chat "why have I felt off this week?"`,
-    api: `curl -N localhost:3000/api/chat \\
+    api: (b) => `curl -N ${b}/api/chat \\
+  -H 'content-type: application/json' \\
   -d '{"message":"why have I felt off this week?"}'`,
   },
   journal: {
     title: "Journal",
-    cli: `agentqs journal --since 7d --view timeline`,
-    api: `curl localhost:3000/api/journal?since=7d`,
+    cli: `agentqs journal --table`,
+    api: (b) => `curl ${b}/api/journal`,
+    extra: {
+      label: "Semantic search — find days that felt like this",
+      code: (b) => `curl ${b}/api/search \\
+  -H 'content-type: application/json' \\
+  -d '{"query":"anxious, could not sleep"}'`,
+    },
   },
   data: {
     title: "Data",
     cli: `agentqs sync --source github`,
-    api: `curl -X POST localhost:3000/api/sources/github/sync`,
+    api: (b) => `curl -X POST ${b}/api/import/github \\
+  -H 'content-type: application/json' \\
+  -d '{"login":"torvalds"}'`,
   },
   settings: {
     title: "Settings",
     cli: `agentqs config set model claude-sonnet-4-5`,
-    api: `curl -X POST localhost:3000/api/settings \\
+    api: (b) => `curl -X POST ${b}/api/settings \\
+  -H 'content-type: application/json' \\
   -d '{"model":"claude-sonnet-4-5"}'`,
   },
 };
 
-const MCP = `{
+const MCP_JSON = `{
   "mcpServers": {
     "agentqs": {
       "command": "agentqs",
@@ -42,6 +63,8 @@ const MCP = `{
     }
   }
 }`;
+
+const MCP_ADD = `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'`;
 
 function tabKey(pathname: string): keyof typeof SNIPPETS {
   if (pathname.startsWith("/journal")) return "journal";
@@ -81,8 +104,13 @@ function CopyBlock({ label, code }: { label: string; code: string }) {
 export function ConnectApi() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [base, setBase] = useState("http://localhost:3000");
   const ref = useRef<HTMLDivElement>(null);
   const snip = SNIPPETS[tabKey(pathname)];
+
+  useEffect(() => {
+    if (typeof window !== "undefined") setBase(window.location.origin);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -109,7 +137,7 @@ export function ConnectApi() {
         )}
       >
         <Terminal width={15} height={15} />
-        Connect / API
+        <span className="hidden sm:inline">Connect / API</span>
         <ChevronDown
           width={14}
           height={14}
@@ -118,20 +146,22 @@ export function ConnectApi() {
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-50 mt-2 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card p-4 shadow-xl">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-semibold text-fg">
-              {snip.title} · from the terminal
-            </p>
-            <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-fg">
-              stub
-            </span>
-          </div>
+        <div className="scrollbar-thin absolute right-0 z-50 mt-2 max-h-[calc(100vh-5rem)] w-[380px] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-xl">
+          <p className="mb-3 text-sm font-semibold text-fg">
+            {snip.title} · from the terminal
+          </p>
           <div className="space-y-3">
             <CopyBlock label="CLI" code={snip.cli} />
-            <CopyBlock label="API" code={snip.api} />
-            <div className="border-t border-border pt-3">
-              <CopyBlock label="Connect to Claude Code (MCP)" code={MCP} />
+            <CopyBlock label="API" code={snip.api(base)} />
+            {snip.extra ? (
+              <CopyBlock label={snip.extra.label} code={snip.extra.code(base)} />
+            ) : null}
+            <div className="space-y-3 border-t border-border pt-3">
+              <p className="text-[11px] text-muted-fg">
+                Drive your whole record from Claude Code. Add the MCP server once:
+              </p>
+              <CopyBlock label="Connect to Claude Code (MCP)" code={MCP_ADD} />
+              <CopyBlock label="…or paste into .mcp.json" code={MCP_JSON} />
             </div>
           </div>
         </div>

@@ -6,7 +6,14 @@ import { dbPath, recordDir } from "@/lib/paths";
 import { readSessionsFromRecord } from "@/lib/record";
 import { skillById } from "@/lib/skills";
 import { continuityBlock, continuityFallbackReply } from "@/lib/synthesis";
-import { buildSpark, groundedCrossSourceAnswer, looksLikeDataQuestion, readGrounding } from "@/lib/grounding";
+import {
+  buildSpark,
+  groundedCrossSourceAnswer,
+  looksLikeDataQuestion,
+  looksLikeRecallQuestion,
+  readGrounding,
+} from "@/lib/grounding";
+import { answerRecall } from "@/lib/embeddings";
 import { dailyCatalog, resolveModel, streamMentor } from "@/lib/agent";
 
 export const runtime = "nodejs";
@@ -103,6 +110,24 @@ export async function POST(req: Request) {
   // numbers — no model, no invention. Streamed for a consistent UI.
   if (!cfg?.llmProvider || !cfg?.llmKey) {
     return ndjson(async (send) => {
+      // Semantic recall ("find days that felt like this") — the local embedding index
+      // answers it with no key. Checked first: it's the most specific intent.
+      if (looksLikeRecallQuestion(message)) {
+        const recall = answerRecall(message, history);
+        if (recall) {
+          for (const chunk of chunkText(recall.text)) send({ t: "delta", v: chunk });
+          send({
+            t: "done",
+            skill: skill.id,
+            grounded: true,
+            sources: recall.sources,
+            metrics: [],
+            spark: null,
+            continuity: false,
+          });
+          return;
+        }
+      }
       if (grounding.sources.length >= 2 && looksLikeDataQuestion(message)) {
         const answer = groundedCrossSourceAnswer(grounding, message);
         if (answer) {

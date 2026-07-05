@@ -1,7 +1,8 @@
 import { readConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
 import { appendInboxItem, rebuild, readSessionsFromRecord } from "./record";
-import { groundedCrossSourceAnswer, looksLikeDataQuestion, readGrounding } from "./grounding";
+import { groundedCrossSourceAnswer, looksLikeDataQuestion, looksLikeRecallQuestion, readGrounding } from "./grounding";
+import { answerRecall } from "./embeddings";
 import { continuityBlock, continuityFallbackReply } from "./synthesis";
 import { dailyCatalog, resolveModel, runMentor } from "./agent";
 import { modeOf, memoText } from "./smart-input";
@@ -33,7 +34,7 @@ export interface ComposedReply {
   grounded: boolean; // did the answer draw on real record data?
   sources: string[]; // daily sources the answer cited
   metrics: string[]; // daily metrics the answer cited
-  via: "memo" | "agent" | "cross-source" | "continuity" | "fallback";
+  via: "memo" | "agent" | "cross-source" | "recall" | "continuity" | "fallback";
 }
 
 export interface ComposeReplyInput {
@@ -87,6 +88,21 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   // ---- No key: honest fallback, but a data question over ≥2 sources still gets a
   // real, grounded cross-source answer computed straight from the numbers. --------
   if (!cfg?.llmProvider || !cfg?.llmKey) {
+    // Semantic recall ("find days that felt like this") — the local index answers it
+    // with no key. Most specific intent, so checked first.
+    if (looksLikeRecallQuestion(message)) {
+      const recall = answerRecall(message, history);
+      if (recall) {
+        return {
+          mode: "chat",
+          text: recall.text,
+          grounded: true,
+          sources: recall.sources,
+          metrics: [],
+          via: "recall",
+        };
+      }
+    }
     if (grounding.sources.length >= 2 && looksLikeDataQuestion(message)) {
       const answer = groundedCrossSourceAnswer(grounding, message);
       if (answer) {

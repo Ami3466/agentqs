@@ -1,16 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Eye, EyeOff, Moon, Spinner, Sun } from "@/components/icons";
+import { Check, Eye, EyeOff, Moon, Spinner, Sparkles, Sun } from "@/components/icons";
 import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
 import {
   DEFAULT_MODEL,
   PROVIDERS,
   modelsForProvider,
 } from "@/lib/models";
+import { SKILLS } from "@/lib/skills";
 import type { PublicConfig } from "@/lib/config";
+
+interface EmbedStatus {
+  built: boolean;
+  count: number;
+  stale: boolean;
+  model: string;
+  backend: "sqlite-vec" | "js-cosine" | null;
+  modelId: string;
+}
 
 function Section({
   title,
@@ -47,7 +57,44 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
+  const [embed, setEmbed] = useState<EmbedStatus | null>(null);
+  const [reindexing, setReindexing] = useState(false);
+
   const providerModels = modelsForProvider(provider);
+
+  // Local semantic index status (default-on, no key) for the Semantic search section.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/embeddings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive && d) setEmbed(d as EmbedStatus);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function reindex() {
+    setReindexing(true);
+    try {
+      const res = await fetch("/api/embeddings", { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setEmbed((e) => ({
+          built: true,
+          count: d.count ?? 0,
+          stale: false,
+          model: d.model ?? e?.model ?? "",
+          backend: d.backend ?? e?.backend ?? null,
+          modelId: d.model ?? e?.modelId ?? "",
+        }));
+      }
+    } finally {
+      setReindexing(false);
+    }
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -230,6 +277,74 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               </button>
             );
           })}
+        </div>
+      </Section>
+
+      {/* Semantic search (embeddings) */}
+      <Section
+        title="Semantic search"
+        desc="Find days that felt like this. Embeddings run on a local model — no key, no cost, private. On by default."
+      >
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span
+              className={cn(
+                "inline-flex h-2 w-2 rounded-full",
+                embed?.built ? "bg-accent" : "bg-muted-fg/50",
+              )}
+            />
+            <span className="text-fg">
+              {embed
+                ? embed.built
+                  ? `${embed.count} ${embed.count === 1 ? "entry" : "entries"} indexed`
+                  : "Not indexed yet — runs on your first search"
+                : "Checking…"}
+            </span>
+            {embed?.stale && embed.built ? (
+              <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+                out of date
+              </span>
+            ) : null}
+          </div>
+          <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing}>
+            {reindexing ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
+            {reindexing ? "Reindexing…" : "Reindex now"}
+          </Button>
+        </div>
+        <p className="mt-3 text-xs text-muted-fg">
+          Model <code className="font-mono">{embed?.modelId || "agentqs-local-hash-v1"}</code>
+          {embed?.backend ? (
+            <>
+              {" "}
+              · store <code className="font-mono">{embed.backend}</code>
+            </>
+          ) : null}
+          . Keyword search (FTS5) stays always-on and free alongside it.
+        </p>
+      </Section>
+
+      {/* Personas / skills */}
+      <Section
+        title="Personas"
+        desc="The voices your mentor can take. Switch mid-chat with the skill chip or /skill."
+      >
+        <div className="space-y-2">
+          {SKILLS.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
+            >
+              <span className="mt-0.5 text-accent">
+                <Sparkles width={15} height={15} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-fg">
+                  {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
+                </p>
+                <p className="text-xs text-muted-fg">{s.blurb}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </Section>
 
