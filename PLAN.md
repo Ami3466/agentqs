@@ -35,8 +35,8 @@ Three zones: sessions sidebar (left) · conversation (center, streaming, grounde
 Everything lands raw + free in the inbox (pending bucket). Pay the LLM only on the **Structure** button (clean CSV → direct column map, prose → LLM parse). Then optional **Embed** (default-on local). Keyword FTS5 = always-on, free.
 
 ## Integrations
-- **Tier 1 (official APIs, live sync):** RescueTime, GitHub (commits/day), WHOOP, Google Calendar, Spotify.
-- **Tier 2 (file/script importers):** Apple Health, iPhone backup (calls + iMessage + screen-time), WhatsApp/iMessage history, Notion, Chrome/Firefox/Safari history.
+- **Tier 1 (official APIs, live sync):** RescueTime, GitHub (commits/day), Google Calendar, Spotify. **WHOOP** is a stub today (daily-summary pipeline built + fixture-proven; OAuth connect and the per-minute stream are the next loop).
+- **Tier 2 (file/script importers):** Apple Health, iMessage history, WhatsApp/Notion exports, Chrome/Firefox/Safari history — all live. **iPhone backup** is a stub: a snapshot (files + domains) lands today; calls + iMessage + screen-time extraction is roadmap.
 - **Tier 3 (needs helper):** live location → OwnTracks; Google Timeline → periodic Takeout.
 - Drag-and-drop custom file = escape hatch for any source; the agent structures it.
 

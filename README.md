@@ -7,7 +7,7 @@
     <img src="https://flowengine.cloud/button.svg" alt="Deploy on FlowEngine" height="40">
   </a>
   &nbsp;·&nbsp;
-  <a href="#"><b>Read the story →</b></a>
+  <a href="PLAN.md"><b>Read the story →</b></a>
 </p>
 
 ---
@@ -15,10 +15,10 @@
 You don't fill it in. You live your life, connect your sources, and talk to it like a friend — and the record **builds itself.** Then ask it anything and get an answer grounded in **your** numbers, not generic advice.
 
 - ✅ **Talk to your life** — "why have I felt off this week?" → an answer from your actual sleep, heart rate, calendar and messages
-- ✅ **Every source, one record** — WHOOP, Apple Health, calendar, Spotify, GitHub, browsing, WhatsApp, location — merged into one daily table
+- ✅ **Every source, one record** — Apple Health, calendar, Spotify, GitHub, browsing, iMessage, WhatsApp, location — merged into one daily table
 - ✅ **Capture anything** — type it, drop a file, or hit record for a voice memo; turn it into structured data with one click
 - ✅ **It remembers** — dated mentor sessions and the patterns that emerge across them build over time
-- ✅ **Any AI provider** — Claude, OpenAI, Gemini. Paste your key; models load in.
+- ✅ **Any AI provider** — Claude, OpenAI, Gemini. Paste your key and its live model list loads straight from the provider.
 - ✅ **Built for Claude Code** — every screen shows its CLI command, API call, and MCP config
 
 Runs on **your own server** and **your own AI key**. Your data lives in your own private git repo — nothing leaves except the questions you send your model.
@@ -40,17 +40,17 @@ Connect a source or two, ask your first question, and you're in. No terminal req
 | 1. Connect data | 2. Ask anything | 3. Capture | 4. Bring your AI |
 |---|---|---|---|
 | ![Connect](docs/images/onboarding-connect.png) | ![Ask](docs/images/onboarding-chat.png) | ![Capture](docs/images/onboarding-capture.png) | ![AI](docs/images/onboarding-ai.png) |
-| Link APIs or drop a file | Get a grounded answer | Type, voice-memo, or drag-drop | Paste any key — models load in |
+| Link APIs or drop a file | Get a grounded answer | Type, voice-memo, or drag-drop | Paste any key — its live models load |
 
 ## Chat — your mentor
 
 One conversation, Claude-Code style. Plain text talks to the mentor. `>>` logs a memo. `/` runs a command.
 
-Or **start a live voice session** — talk it out with a therapist grounded in the methodology *you* choose (CBT, ACT, schema, IFS…), or any persona you build. It listens, reflects, and quietly **writes the key points back into your daily record.** No forms, no data entry — **the database builds itself from your conversations.**
+Or **start a live voice session** *(add an ElevenLabs key — config-gated)* — talk it out with a therapist grounded in the methodology *you* choose (CBT, ACT, schema, IFS…), or any mentor you build. It listens, reflects, and quietly **writes the key points back into your daily record.** No forms, no data entry — **the database builds itself from your conversations.**
 
 Replies **stream in token-by-token** and always quote your real numbers — a grounded
 answer lands with a **grounded in your record** badge and an inline **sparkline** of the
-metric it cited (its shape over time, plus the latest / avg / range). Switch persona any time.
+metric it cited (its shape over time, plus the latest / avg / range). Switch mentor any time.
 
 ![Chat](docs/images/chat.png)
 
@@ -77,21 +77,21 @@ A Supabase-style bar on top surfaces the **CLI command** and **API call** for wh
 One daily record, fed from wherever your life happens.
 
 **Body & health**
-- **WHOOP — per-minute.** Not just a daily score: **minute-by-minute heart rate**, HRV, recovery, sleep stages and strain. This is what makes correlations *real* — "that meeting spiked me to 110," "this person costs me +10 bpm," "I never recover on days I skip lunch." Most tools only ever see your daily average. **agentqs sees every minute.**
+- **WHOOP** *(roadmap)* — recovery, HRV and resting heart rate. The normalize → merge → rebuild pipeline is built and fixture-proven, but its OAuth connect flow isn't wired for a one-shot run yet, so the Data tab marks it **not-live** for now. The aim is per-minute heart rate off the app connection — "that meeting spiked me to 110," "this person costs me +10 bpm" — where most tools only ever see your daily average.
 - **Apple Health** — steps, heart rate, sleep, workouts, energy.
 
 **Focus & work**
 - **RescueTime** — where your hours actually go
 - **GitHub** — commits per day
 - **Browsing** — what you read (Chrome/Firefox/Safari history)
-- **Screen Time** — per-app usage from your iPhone
+- **iPhone backup** *(roadmap)* — a backup snapshot (files + domains) lands today; per-app screen time, calls and messages are the next step
 
 **Life**
 - **Google Calendar** — meetings, and how they land on your body
 - **Spotify** — what you listened to
-- **Notion** — your journals and notes
-- **WhatsApp / iMessage** — conversation history
-- **Location** — where you were (OwnTracks live, or Google Timeline)
+- **Notion** — your journals and notes (drop an export)
+- **WhatsApp / iMessage** — conversation history (iMessage reads your local `chat.db`; WhatsApp via a chat export)
+- **Location** — where you were (OwnTracks live, or a Google Timeline export)
 
 **Anything else** — drag-drop any CSV, text export, or screenshot. The agent works out what it is and structures it. No importer required.
 
@@ -268,10 +268,10 @@ can answer:
   index (see below): finds days that *felt* like a described feeling even when they
   share no keywords. SQL for numbers, FTS for exact words, embeddings for vibe.
 
-The persona (mentor / therapist / coach) is the system prompt; a compact schema
+The chosen mentor (therapist, coach, or one you built) is the system prompt; a compact schema
 catalog tells it what's queryable. So *"why have I felt off?"* makes it `SELECT` your
-WHOOP sleep + recovery, then reply *"sleep dropped to 6.1h and recovery fell to 41%
-— your lowest in the window."* The reply **streams token-by-token** into the Chat tab
+Apple Health sleep + heart rate, then reply *"sleep dropped to 6.1h and resting HR rose
+to 61 bpm — your worst night in the window."* The reply **streams token-by-token** into the Chat tab
 (NDJSON over the `curl -N` endpoint); when it closes, a **grounded in your record**
 badge names the sources the tools touched and an inline **sparkline** plots a cited
 metric over time.
@@ -297,8 +297,8 @@ npm run chat:test          # ships-when proof (Loop 5): boots the built app, log
 npm run smart:test         # ships-when proof (Loop 6): the shared smart-input contract
                            # routes `>>`/`/`/plain text; then over the built app `>> slept
                            # bad` lands in the inbox raw (no LLM, no daily row), `/sync`
-                           # runs its live pipeline into the daily table, and the skill
-                           # chip switches persona (mentor → therapist → coach)
+                           # runs its live pipeline into the daily table, and the mentor
+                           # chip switches mentor (mentor → therapist → coach)
 ```
 
 ## Sync engine — schedules, lazy-sync, stale badges
@@ -377,14 +377,15 @@ ask it in **Chat**, or hit the API — *"wired, couldn't switch off"* still surf
 day you wrote *"anxious and stressed."*
 
 It runs on a **local embedding model + sqlite-vec**, on by default with **nothing to
-set up** — no key, no cost, nothing to download, works offline on first run:
+set up** — no key, no cost; it downloads a small model once, then runs fully offline:
 
-- **The local model** (`src/lib/embed.ts`) turns text into a vector with a compact,
-  deterministic featurizer — word + char-trigram features (so *slept* ≈ *sleeping*)
-  plus a small concept lexicon that pulls *anxious* and *stressed* (or *tired* and
-  *exhausted*) onto shared axes. Private, byte-deterministic, zero dependencies. It's
-  pluggable behind one `embed()` seam — swap in a neural / API embedder later and bump
-  the model id to reindex.
+- **The local model** (`src/lib/embed.ts`) is a real sentence-transformer —
+  **all-MiniLM-L6-v2** (384-dim) running locally through transformers.js on the ONNX
+  runtime — so *"the deploy finally went out and I could breathe"* lands near
+  *"shipped, huge relief"* with no shared words and no hand-built lexicon. The quantized
+  weights (~23 MB) download once into the data dir, then every run reads them from cache,
+  offline. Private, no key. It's pluggable behind one `embed()` seam — swap in an API
+  embedder later and bump the model id to reindex.
 - **sqlite-vec** (`src/lib/embeddings.ts`) stores the vectors and runs the nearest-
   neighbour search inside SQLite. It self-heals: the index is a separate derived file
   (never committed, kept out of the byte-deterministic main cache) that rebuilds
@@ -491,8 +492,8 @@ npm run channels:test      # ships-when proof (Loop 14): a Telegram DM "why tire
 ## Good to know
 
 - **Private by design.** Your data lives in your own git repo and your own server. Nothing is sent anywhere except the slices you ask your model about. BYO key.
-- **WHOOP per-minute** rides your WHOOP app connection, not the limited public API — use your own account.
+- **WHOOP is on the roadmap.** The daily recovery/HRV/resting-HR importer is built and fixture-proven; the OAuth connect and the per-minute stream (off your WHOOP app connection, not the limited public API) land next.
 - **Local-first.** Everything works offline except API syncs and the messaging bots.
 - **Cheap by design.** Raw capture is free; you only spend tokens when you press *Structure* or ask a question. Embeddings run locally.
 
-MIT licensed. Full build plan in [agentqs-plan.md](agentqs-plan.md).
+MIT licensed. Full build plan in [PLAN.md](PLAN.md).
