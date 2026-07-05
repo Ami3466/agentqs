@@ -9,7 +9,9 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, Inbox, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
+import { Sparkline } from "@/components/sparkline";
 import { Card, cn } from "@/components/ui";
+import type { SparkPayload } from "@/lib/grounding";
 import { DEFAULT_SKILL, SKILLS, skillById } from "@/lib/skills";
 
 // ---- Smart-input model ----------------------------------------------------
@@ -46,6 +48,8 @@ interface Msg {
   session?: SavedSession; // recap: the synthesized session being viewed
   grounded?: boolean; // assistant reply cited the daily record
   sources?: string[]; // sources the grounded reply drew on
+  spark?: SparkPayload; // inline sparkline of a cited metric
+  streaming?: boolean; // assistant reply is still arriving token-by-token
 }
 
 /** A persisted session's synthesis (from /api/sessions) — no raw transcript. */
@@ -71,6 +75,7 @@ export function Chat() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState(false);
   const [viewingId, setViewingId] = useState<string | null>(null);
@@ -273,6 +278,14 @@ export function Chat() {
     push({ role: "note", tone: "error", text: `Unknown command "/${cmd}". Try ${COMMANDS.map((c) => c.cmd).join(" · ")}.` });
   }
 
+  /** Mutate one message in place by id (used to stream tokens into its bubble). */
+  function patch(id: string, up: (m: Msg) => Msg) {
+    setMessages((prev) => prev.map((m) => (m.id === id ? up(m) : m)));
+  }
+  function drop(id: string) {
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+  }
+
   async function sendChat(raw: string) {
     const text = raw.trim();
     const history = messages
@@ -282,28 +295,80 @@ export function Chat() {
     setViewingId(null);
     setInput("");
     setBusy(true);
+
+    // Drop in an empty assistant bubble the stream fills token-by-token.
+    const aid = nid();
+    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", skill, streaming: true }]);
+    setStreamingId(aid);
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: text, skill, history }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        drop(aid);
         push({ role: "note", tone: "error", text: data.error || "The model didn't answer." });
-      } else {
-        push({
-          role: "assistant",
-          text: data.reply,
-          skill: data.skill,
-          grounded: Boolean(data.grounded),
-          sources: Array.isArray(data.sources) ? data.sources : undefined,
-        });
+        return;
       }
+
+      // Read the NDJSON stream: {t:"delta"} tokens, then one {t:"done"} (or {t:"error"}).
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let failed = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let f: {
+            t?: string;
+            v?: string;
+            error?: string;
+            skill?: string;
+            grounded?: boolean;
+            sources?: string[];
+            spark?: SparkPayload | null;
+          };
+          try {
+            f = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (f.t === "delta") {
+            patch(aid, (m) => ({ ...m, text: m.text + (f.v ?? "") }));
+          } else if (f.t === "done") {
+            patch(aid, (m) => ({
+              ...m,
+              streaming: false,
+              text: m.text.trim() ? m.text : "(no reply)",
+              skill: f.skill || m.skill,
+              grounded: Boolean(f.grounded),
+              sources: Array.isArray(f.sources) && f.sources.length ? f.sources : undefined,
+              spark: f.spark ?? undefined,
+            }));
+          } else if (f.t === "error") {
+            failed = true;
+            drop(aid);
+            push({ role: "note", tone: "error", text: f.error || "The model errored mid-reply." });
+          }
+        }
+      }
+      // Stream ended without a terminal frame — stop the caret rather than spin forever.
+      if (!failed) patch(aid, (m) => (m.streaming ? { ...m, streaming: false } : m));
     } catch {
+      drop(aid);
       push({ role: "note", tone: "error", text: "Could not reach the mentor." });
     } finally {
       setBusy(false);
+      setStreamingId(null);
     }
   }
 
@@ -435,7 +500,7 @@ export function Chat() {
           ) : (
             messages.map((m) => <Bubble key={m.id} m={m} />)
           )}
-          {busy ? (
+          {busy && !streamingId ? (
             <div className="flex items-center gap-2 text-xs text-muted-fg">
               <Spinner width={14} height={14} /> working…
             </div>
@@ -660,6 +725,16 @@ function Bubble({ m }: { m: Msg }) {
         ) : null}
         <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-muted px-3.5 py-2 text-sm text-fg">
           {m.text}
+          {m.streaming ? (
+            m.text ? (
+              <span
+                className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-[2px] animate-pulse rounded-sm bg-accent align-middle"
+                aria-hidden
+              />
+            ) : (
+              <TypingDots />
+            )
+          ) : null}
         </div>
         {m.grounded ? (
           <p className="mt-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-accent">
@@ -669,6 +744,57 @@ function Bubble({ m }: { m: Msg }) {
             ) : null}
           </p>
         ) : null}
+        {m.grounded && m.spark ? <ReplySpark spark={m.spark} /> : null}
+      </div>
+    </div>
+  );
+}
+
+/** "Thinking…" pips shown in the assistant bubble before the first token lands. */
+function TypingDots() {
+  return (
+    <span className="inline-flex items-center gap-1 py-0.5 align-middle" aria-label="thinking">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-fg/60"
+          style={{ animationDelay: `${i * 160}ms` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** The inline sparkline under a grounded reply: a cited metric's shape over time
+ *  plus the actual latest / avg / range numbers it's grounded in. */
+function ReplySpark({ spark }: { spark: SparkPayload }) {
+  return (
+    <div className="mt-2 max-w-xs rounded-xl border border-border bg-card/60 px-3 py-2">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="truncate font-mono text-[11px] font-medium text-fg">
+          {spark.source} · {spark.metric}
+        </span>
+        <span className="shrink-0 text-[10px] text-muted-fg">{spark.points.length}d</span>
+      </div>
+      <Sparkline
+        points={spark.points}
+        variant="line"
+        title={(p) => `${p.date}: ${p.value}`}
+        ariaLabel={`${spark.source} ${spark.metric} over ${spark.points.length} days`}
+      />
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-fg">
+        <span>
+          latest <b className="font-medium text-fg">{spark.latest}</b>
+        </span>
+        <span>
+          avg <b className="font-medium text-fg">{spark.avg}</b>
+        </span>
+        <span>
+          range{" "}
+          <b className="font-medium text-fg">
+            {spark.min}–{spark.max}
+          </b>
+        </span>
       </div>
     </div>
   );
