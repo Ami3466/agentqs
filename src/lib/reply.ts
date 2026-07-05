@@ -137,7 +137,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const catalog = dailyCatalog(dbFile);
   const memory = continuityBlock(prior);
   const system = [skill.system, catalog.hint, memory].filter(Boolean).join("\n\n");
-  const model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
+  const model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model, cfg.llmModels);
 
   const run = await runMentor({
     model,

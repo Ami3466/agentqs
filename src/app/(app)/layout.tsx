@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
-import { configExists } from "@/lib/config";
+import { configExists, readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 
 // This layout reads cookies + the config file on disk, so it must render per-request.
@@ -17,5 +17,9 @@ export default function AppLayout({
   const user = getCurrentUser();
   if (!user) redirect("/login");
 
-  return <AppShell username={user.username}>{children}</AppShell>;
+  return (
+    <AppShell username={user.username} model={readConfig()?.model || ""}>
+      {children}
+    </AppShell>
+  );
 }

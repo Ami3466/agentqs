@@ -13,9 +13,11 @@ import { Badge } from "./ui";
  */
 export function AppShell({
   username,
+  model = "",
   children,
 }: {
   username: string;
+  model?: string;
   children: ReactNode;
 }) {
   return (
@@ -30,7 +32,7 @@ export function AppShell({
             <Badge>local</Badge>
           </span>
           <div className="ml-auto flex items-center gap-2">
-            <ConnectApi />
+            <ConnectApi model={model} />
             <VoiceMemo />
             <ThemeToggle />
             <UserMenu username={username} />
