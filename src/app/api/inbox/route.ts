@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { appendInboxItem, readRecord, rebuild, updateInboxItems } from "@/lib/record";
+import { autoStructureNewItem } from "@/lib/structure-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export async function GET() {
 }
 
 /** Append verbatim to the inbox, no LLM, then rebuild the cache. Handles both a
- * typed memo (`>>`) and a dropped/uploaded file (source `drop`, meta.filename). */
+ * typed memo (`//`) and a dropped/uploaded file (source `drop`, meta.filename). */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -43,9 +44,16 @@ export async function POST(req: Request) {
     { recordDir: recordDir() },
   );
   rebuild({ recordDir: recordDir() });
+  const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
 
   const pending = readRecord(recordDir()).inbox.filter((i) => i.status === "pending").length;
-  return NextResponse.json({ ok: true, id: item.id, ts: item.ts, pending });
+  return NextResponse.json({
+    ok: true,
+    id: item.id,
+    ts: item.ts,
+    pending,
+    structured: (auto?.structured ?? 0) > 0,
+  });
 }
 
 /** Discard a pending capture (status → discarded), then rebuild. `?id=<id>`. */

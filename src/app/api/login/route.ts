@@ -13,13 +13,16 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => null);
-  const username = String(body?.username ?? "").trim().toLowerCase();
+  const username = String(body?.username ?? "").trim();
   const password = String(body?.password ?? "");
 
-  const ok = username === cfg.username && verifyPassword(password, cfg.passwordHash);
+  // Case-insensitive so a pre-email-signup username ("Amit") still signs in.
+  const ok =
+    username.toLowerCase() === cfg.username.toLowerCase() &&
+    verifyPassword(password, cfg.passwordHash);
   if (!ok) {
     return NextResponse.json(
-      { error: "Invalid email or password." },
+      { error: "Invalid username or password." },
       { status: 401 },
     );
   }

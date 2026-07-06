@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // Overridable so test builds (e.g. `npm run log:test`) can't collide with a
+  // running `next dev` that owns .next.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: true,
   // Native / heavy server-only deps must stay external (not webpack-bundled): the
   // local embedders (transformers.js + onnxruntime), image tooling (sharp, exifr),

@@ -6,7 +6,6 @@ import { TabNav } from "./tab-nav";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu } from "./user-menu";
 import { VoiceMemo } from "./voice-memo";
-import { Badge } from "./ui";
 
 /**
  * Supabase-style two-row chrome: brand + project + Connect/API + account on top,
@@ -25,11 +24,6 @@ export function AppShell({
         {/* top row */}
         <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
           <Brand />
-          <span className="hidden text-border sm:inline">/</span>
-          <span className="hidden items-center gap-2 sm:flex">
-            <span className="text-sm font-medium text-fg">personal</span>
-            <Badge>local</Badge>
-          </span>
           <div className="ml-auto flex items-center gap-2">
             <ConnectApi />
             <TourButton />

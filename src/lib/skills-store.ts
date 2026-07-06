@@ -5,7 +5,8 @@
  * CLI, the /api/skills route, the MCP `skill_*` tools, and the chat brain — so a
  * mentor you add from the terminal answers in the GUI too.
  *
- * Built-in ids are reserved: a custom mentor can't shadow or delete them.
+ * Built-in ids are reserved: a custom mentor can't shadow them. Deleting a built-in
+ * hides it (config.hiddenSkills) so it's restorable from Settings, never lost.
  */
 import { readConfig, writeConfig, type AppConfig } from "./config";
 import { SKILLS, type Skill } from "./skills";
@@ -46,15 +47,22 @@ export function customSkills(cfg: AppConfig | null = readConfig()): Skill[] {
   return out;
 }
 
-/** Every persona the chat can wear: built-ins first, then the user's own. */
-export function listSkills(cfg: AppConfig | null = readConfig()): Skill[] {
-  return [...SKILLS, ...customSkills(cfg)];
+/** Built-in ids the user deleted — hidden from every list, restorable in Settings. */
+export function hiddenBuiltinIds(cfg: AppConfig | null = readConfig()): Set<string> {
+  const raw = Array.isArray(cfg?.hiddenSkills) ? cfg!.hiddenSkills : [];
+  return new Set(raw.filter((id) => BUILTIN_IDS.has(id)));
 }
 
-/** Resolve an id to a persona, falling back to the default mentor (never throws). */
+/** Every persona the chat can wear: visible built-ins first, then the user's own. */
+export function listSkills(cfg: AppConfig | null = readConfig()): Skill[] {
+  const hidden = hiddenBuiltinIds(cfg);
+  return [...SKILLS.filter((s) => !hidden.has(s.id)), ...customSkills(cfg)];
+}
+
+/** Resolve an id to a persona, falling back to the first visible one (never throws). */
 export function resolveSkill(id: string | null | undefined, cfg: AppConfig | null = readConfig()): Skill {
   const all = listSkills(cfg);
-  return all.find((s) => s.id === id) ?? SKILLS[0];
+  return all.find((s) => s.id === id) ?? all[0] ?? SKILLS[0];
 }
 
 export function isBuiltinSkill(id: string): boolean {
@@ -98,16 +106,36 @@ export function upsertSkill(input: UpsertSkillInput): UpsertSkillResult {
   return { skill, created };
 }
 
-/** Delete a custom mentor. Returns false if it doesn't exist; throws on built-ins. */
+/** Delete any skill. A custom one is dropped from config; a built-in is hidden
+ *  (added to hiddenSkills) so "Restore defaults" can bring it back. Returns false
+ *  when there was nothing to remove. */
 export function removeSkill(id: string): boolean {
   const slug = slugSkillId(id);
-  if (BUILTIN_IDS.has(slug)) throw new Error(`"${slug}" is a built-in persona — it can't be removed.`);
   const cfg = readConfig();
   if (!cfg) return false;
+  if (BUILTIN_IDS.has(slug)) {
+    const hidden = hiddenBuiltinIds(cfg);
+    if (hidden.has(slug)) return false;
+    hidden.add(slug);
+    cfg.hiddenSkills = [...hidden];
+    writeConfig(cfg);
+    return true;
+  }
   const existing = Array.isArray(cfg.customSkills) ? cfg.customSkills : [];
   const next = existing.filter((s) => s && (s as Skill).id !== slug);
   if (next.length === existing.length) return false;
   cfg.customSkills = next;
   writeConfig(cfg);
   return true;
+}
+
+/** Un-hide every deleted built-in persona. Returns how many came back. */
+export function restoreBuiltinSkills(): number {
+  const cfg = readConfig();
+  if (!cfg) return 0;
+  const count = hiddenBuiltinIds(cfg).size;
+  if (count === 0) return 0;
+  cfg.hiddenSkills = [];
+  writeConfig(cfg);
+  return count;
 }

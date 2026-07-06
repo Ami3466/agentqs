@@ -8,15 +8,20 @@ import path from "path";
  * Speech-to-text for voice memos — a small pluggable contract with two real
  * backends. A voice memo is: record audio in the browser → POST the bytes here →
  * transcribe → the text lands raw in the inbox (no LLM, no daily row), exactly
- * like a typed `>>` memo. Transcription is the ONLY external step, and it's
+ * like a typed `//` memo. Transcription is the ONLY external step, and it's
  * swappable:
  *
- *   - local   — a local command (whisper.cpp / faster-whisper / any wrapper) set
- *               via WHISPER_BIN. agentqs writes the audio to a temp file, runs
- *               `WHISPER_BIN [WHISPER_ARGS…] <audiofile>`, and reads the transcript
- *               from stdout. Private, no key, no cost — the plan's default.
- *   - openai  — OpenAI Whisper (whisper-1) over HTTP, used when no local binary is
- *               set but an OpenAI key is available. The pluggable cloud fallback.
+ *   - local         — a local command (whisper.cpp / faster-whisper / any wrapper)
+ *                     set via WHISPER_BIN. agentqs writes the audio to a temp file,
+ *                     runs `WHISPER_BIN [WHISPER_ARGS…] <audiofile>`, and reads the
+ *                     transcript from stdout. For users who already run an engine.
+ *   - whisper-local — the built-in Whisper, installed INTO the project from
+ *                     Settings → Voice memos: a quantized ONNX model downloaded
+ *                     once into data/models and run via transformers.js
+ *                     (whisper-local.ts). No binary, no key, no cloud.
+ *   - openai        — OpenAI Whisper (whisper-1) over HTTP, used when nothing
+ *                     local is set but an OpenAI key is available. The cloud
+ *                     fallback.
  *
  * Server-only (spawns processes, touches the fs). The API route builds the env
  * from config + process.env; nothing here reads config, so it stays pure and
@@ -40,6 +45,8 @@ export interface SttBackend {
 export interface SttEnv {
   whisperBin?: string; // WHISPER_BIN — a command that prints a transcript
   whisperArgs?: string; // WHISPER_ARGS — extra args, space-split, before the file
+  whisperModel?: string; // built-in local Whisper installed from Settings ("tiny" | "base" | "small")
+  whisperLang?: string; // spoken language for the built-in model (default "en")
   openaiKey?: string; // OPENAI_API_KEY, or the config key when provider=openai
   openaiModel?: string; // default whisper-1
   fetchImpl?: typeof fetch; // injectable for tests
@@ -110,6 +117,25 @@ export function localWhisperBackend(bin: string, args: string[] = []): SttBacken
   };
 }
 
+// ---- Built-in local Whisper (transformers.js, installed from Settings) -----
+
+/**
+ * The built-in local model — Whisper as a quantized ONNX model downloaded into
+ * data/models from Settings → Voice memos and run in-process via transformers.js
+ * (like the text embedder). Fully on-device after the one-time download. Imported
+ * lazily so this module stays light and pure for tests.
+ */
+export function whisperModelBackend(model: string, lang?: string): SttBackend {
+  return {
+    id: "whisper-local",
+    label: `Local Whisper (${model}, on-device)`,
+    async transcribe({ audio }) {
+      const { transcribeWhisper } = await import("./whisper-local");
+      return transcribeWhisper(audio, model, lang);
+    },
+  };
+}
+
 // ---- OpenAI Whisper backend (HTTP) ----------------------------------------
 
 export function openaiWhisperBackend(
@@ -152,11 +178,15 @@ export function openaiWhisperBackend(
 // ---- Resolution + description --------------------------------------------
 
 /** Pick the active backend from the environment. A local binary is an explicit
- *  opt-in and always wins; otherwise an OpenAI key enables the cloud fallback;
- *  otherwise there's no STT and the mic surfaces a setup hint. */
+ *  opt-in and always wins; then the built-in Whisper installed from Settings;
+ *  otherwise an OpenAI key enables the cloud fallback; otherwise there's no STT
+ *  and the mic surfaces a setup hint. */
 export function resolveSttBackend(env: SttEnv): SttBackend | null {
   if (env.whisperBin && env.whisperBin.trim()) {
     return localWhisperBackend(env.whisperBin.trim(), splitArgs(env.whisperArgs));
+  }
+  if (env.whisperModel && env.whisperModel.trim()) {
+    return whisperModelBackend(env.whisperModel.trim(), env.whisperLang?.trim());
   }
   if (env.openaiKey && env.openaiKey.trim()) {
     return openaiWhisperBackend(env.openaiKey.trim(), env.openaiModel?.trim() || "whisper-1", env.fetchImpl ?? fetch);
@@ -166,7 +196,7 @@ export function resolveSttBackend(env: SttEnv): SttBackend | null {
 
 export interface SttStatus {
   ready: boolean;
-  backend: string | null; // "local" | "openai" | null
+  backend: string | null; // "local" | "whisper-local" | "openai" | null
   label: string;
 }
 
@@ -177,7 +207,7 @@ export function describeStt(env: SttEnv): SttStatus {
   return {
     ready: false,
     backend: null,
-    label: "No speech-to-text configured — set WHISPER_BIN for local Whisper, or an OpenAI key.",
+    label: "No speech-to-text configured — install Whisper under Settings → Voice memos, or add an OpenAI key.",
   };
 }
 

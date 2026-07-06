@@ -128,17 +128,25 @@ function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
   };
 }
 
-/** Generic row for a Tier-1 plugin source. Connected once its record file has
- *  rows; DUE (auto-sync on open) only when live + a credential is resolvable. */
-function pluginRow(cfg: AppConfig | null, dir: string, plugin: (typeof PLUGINS)[number]): SourceView {
-  const file = path.join(dir, "daily", `${plugin.id}.csv`);
+/** Generic row for a Tier-1 plugin source (or one extra ACCOUNT of it — an
+ *  instance id like "spotify-2" with its own credential, CSV and schedule).
+ *  Connected once its record file has rows; DUE (auto-sync on open) only when
+ *  live + a credential is resolvable. */
+function pluginRow(
+  cfg: AppConfig | null,
+  dir: string,
+  plugin: (typeof PLUGINS)[number],
+  instanceId: string = plugin.id,
+): SourceView {
+  const file = path.join(dir, "daily", `${instanceId}.csv`);
   const connected = hasRows(file);
-  const lastSync = cfg?.sourceSyncedAt?.[plugin.id] ?? fileMtimeISO(file);
-  const interval = intervalFor(cfg, plugin.id);
-  const hasCred = Boolean(resolveCredential(plugin, undefined, cfg));
+  const lastSync = cfg?.sourceSyncedAt?.[instanceId] ?? fileMtimeISO(file);
+  const interval = intervalFor(cfg, instanceId);
+  const hasCred = Boolean(resolveCredential(plugin, undefined, cfg, instanceId));
+  const suffix = instanceId !== plugin.id ? instanceId.slice(plugin.id.length + 1) : "";
   return {
-    id: plugin.id,
-    name: plugin.name,
+    id: instanceId,
+    name: suffix ? `${plugin.name} · account ${suffix}` : plugin.name,
     kind: "api",
     detail: plugin.detail,
     connected,
@@ -146,9 +154,31 @@ function pluginRow(cfg: AppConfig | null, dir: string, plugin: (typeof PLUGINS)[
     lastSync,
     stale: false,
     due: plugin.live && connected && hasCred && isDue(lastSync, interval),
-    syncEndpoint: plugin.live ? `/api/import/${plugin.id}` : null,
+    syncEndpoint: plugin.live ? `/api/import/${instanceId}` : null,
     live: plugin.live,
+    plugin: true,
   };
+}
+
+/** Extra-account instance ids already set up for a plugin ("spotify-2", …) —
+ *  anything holding a credential, a schedule, a sync stamp, or a daily file. */
+function pluginInstanceIds(cfg: AppConfig | null, dir: string, plugin: (typeof PLUGINS)[number]): string[] {
+  const re = new RegExp(`^${plugin.id}-(\\d+)$`);
+  const ids = new Set<string>();
+  for (const map of [cfg?.sourceCreds, cfg?.sourceIntervals, cfg?.sourceSyncedAt]) {
+    for (const key of Object.keys(map ?? {})) if (re.test(key)) ids.add(key);
+  }
+  try {
+    for (const f of fs.readdirSync(path.join(dir, "daily"))) {
+      const stem = f.endsWith(".csv") ? f.slice(0, -4) : "";
+      if (stem && re.test(stem)) ids.add(stem);
+    }
+  } catch {
+    /* no daily dir yet */
+  }
+  // An automation recipe could own a colliding slug — automations win that id.
+  const automationIds = new Set(listAutomations(cfg).map((a) => a.id));
+  return [...ids].filter((id) => !automationIds.has(id)).sort();
 }
 
 /** Row for a Tier-2 file importer (Chrome history, iPhone backup). These read a
@@ -217,7 +247,12 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
  *  structured, shows up in the daily table, never as a fake "connected" feed. */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
-  for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
+  for (const plugin of PLUGINS) {
+    out.push(pluginRow(cfg, dir, plugin));
+    for (const instanceId of pluginInstanceIds(cfg, dir, plugin)) {
+      out.push(pluginRow(cfg, dir, plugin, instanceId));
+    }
+  }
   // Tier-2 file importers (Chrome, iPhone) are local-only and off the API roster —
   // surface one only once it actually holds data, so the Connections catalog stays
   // the API roster while imported file data is still manageable under Automated.

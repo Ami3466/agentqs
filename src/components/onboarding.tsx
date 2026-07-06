@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { driver } from "driver.js";
 import "driver.js/dist/driver.css";
-import { Check, Copy, Play, Spinner } from "./icons";
+import { Check, Copy, HelpCircle, Play, Spinner } from "./icons";
 import { Button } from "./ui";
 
 /**
@@ -147,7 +147,7 @@ export function TourButton() {
       title="Replay the tour"
       className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[13px] font-medium text-muted-fg transition-colors hover:bg-muted hover:text-fg"
     >
-      <Play width={14} height={14} />
+      <HelpCircle width={14} height={14} />
       <span className="hidden sm:inline">Tour</span>
     </button>
   );

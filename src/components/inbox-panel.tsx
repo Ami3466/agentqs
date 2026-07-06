@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, RefreshCw, Spinner, Wand, X } from "@/components/icons";
-import { Button, cn } from "@/components/ui";
+import { Inbox, Spinner, Wand, X } from "@/components/icons";
+import { ago, cn } from "@/components/ui";
 
 interface Item {
   id: string;
@@ -21,37 +21,30 @@ interface StructResult {
   message?: string;
 }
 
-function ago(iso: string): string {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
 /**
- * The pending bucket (Loop 6) + the Loop-7 Structure step. Everything captured
- * lands here raw and free — memos (`>>` in Chat) and files from the dropzone above.
- * Structure routes clean CSV → direct column map (no LLM) and prose → the model,
- * writing wide daily rows. Uploading lives in the one hero Dropzone; this panel is
- * just the queue + Structure. `onChanged` bumps the parent so the daily preview
- * refetches; `version` triggers this panel's own refetch after any mutation.
+ * The pending bucket (Loop 6) + the Loop-7 Structure step. Everything captured —
+ * from ANY entry point: `//` memos, voice notes, Telegram/Slack messages, dropped
+ * files, the API — lands here raw and free. Structure routes clean CSV → direct
+ * column map (no LLM) and prose → the model, writing wide daily rows. The header's
+ * Auto-structure checkbox (the same config flag as Settings → Structure) makes new
+ * captures skip this queue entirely. `onChanged` bumps the parent so the daily
+ * preview refetches; `version` triggers this panel's own refetch after any mutation.
  */
 export function InboxPanel({
   version,
   onChanged,
-  onAutomate,
 }: {
   version: number;
   onChanged: () => void;
-  /** Opens the automation setup flow (the Sources → Connections catalog) so a
-   *  recurring feed replaces dropping this file by hand. */
-  onAutomate?: () => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [pending, setPending] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // item id | "all"
   const [flash, setFlash] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  // The auto-structure switch (same setting as Settings → Structure): new captures
+  // skip this queue entirely and merge straight into the daily table. Always
+  // clickable — the settings fetch only syncs the initial value.
+  const [auto, setAuto] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/inbox");
@@ -64,6 +57,30 @@ export function InboxPanel({
   useEffect(() => {
     void load();
   }, [load, version]);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && d && setAuto(Boolean(d.autoStructure)))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function toggleAuto(v: boolean) {
+    setAuto(v); // optimistic — revert on failure
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ autoStructure: v }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      setAuto(!v);
+      say("error", "Could not save the auto-structure setting.");
+    }
+  }
 
   function say(tone: "ok" | "error", text: string) {
     setFlash({ tone, text });
@@ -129,18 +146,19 @@ export function InboxPanel({
             {pending}
           </span>
         ) : null}
-        <div className="ml-auto flex items-center gap-2">
-          {onAutomate ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={onAutomate}
-              title="Set up a recurring feed instead of dropping this by hand"
-            >
-              <RefreshCw width={14} height={14} />
-              Automate imports
-            </Button>
-          ) : null}
+        <div className="ml-auto flex items-center gap-3">
+          <label
+            className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-fg hover:text-fg"
+            title="New captures merge straight into the daily table — nothing waits here."
+          >
+            <input
+              type="checkbox"
+              checked={auto}
+              onChange={(e) => void toggleAuto(e.target.checked)}
+              className="h-3.5 w-3.5 cursor-pointer accent-accent"
+            />
+            Auto-structure
+          </label>
           <button
             type="button"
             onClick={() => structure()}
@@ -153,17 +171,9 @@ export function InboxPanel({
         </div>
       </div>
       <p className="mt-1 text-xs text-muted-fg">
-        Raw captures — dropped files and <code className="font-mono">&gt;&gt;</code> memos. Structure
-        turns them into daily rows; tokens are only spent on prose. Doing this often?{" "}
-        <button
-          type="button"
-          onClick={onAutomate}
-          disabled={!onAutomate}
-          className="font-medium text-accent underline-offset-2 hover:underline disabled:no-underline disabled:opacity-100"
-        >
-          Automate imports
-        </button>{" "}
-        so a source feeds itself.
+        {auto
+          ? "Auto-structure is on — new captures from anywhere become daily rows on arrival; only leftovers wait here."
+          : "Everything you capture lands here first — memos, voice notes, channel messages, dropped files. Structure turns it into daily rows; tokens are only spent on prose."}
       </p>
 
       {flash ? (

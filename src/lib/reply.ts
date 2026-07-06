@@ -1,6 +1,7 @@
 import { activeLlm, readConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
 import { appendInboxItem, rebuild, readSessionsFromRecord } from "./record";
+import { autoStructureNewItem } from "./structure-run";
 import { groundedCrossSourceAnswer, looksLikeDataQuestion, looksLikeRecallQuestion, readGrounding } from "./grounding";
 import { answerRecall } from "./embeddings";
 import { continuityBlock, continuityFallbackReply } from "./synthesis";
@@ -14,7 +15,7 @@ import type { LlmMessage } from "./llm";
  * Telegram DM, a Slack message, or anywhere else — is turned into a reply the same
  * way the Chat box does, but NON-streaming (a bot posts one message back):
  *
- *   `>>` memo     → appended raw to the inbox (source = the channel), no LLM, no
+ *   `//` memo     → appended raw to the inbox (source = the channel), no LLM, no
  *                   daily row; the reply is a short "saved" ack — exactly the
  *                   "saved, no reply" chip from the UI.
  *   plain text /  → the grounded mentor. With an AI key it's the tool-using agent
@@ -42,6 +43,11 @@ export interface ComposeReplyInput {
   channel: string; // "telegram" | "slack" — the inbox source for a memo
   skill?: string | null;
   history?: LlmMessage[];
+  /** false → capture-only channel: EVERY message lands in the inbox, no LLM call.
+   *  (Settings → Channels → "Log only".) Default true. */
+  ai?: boolean;
+  /** Per-channel model override (Settings → Channels); falls back to the app model. */
+  modelOverride?: { providerId?: string; model?: string } | null;
 }
 
 /** Turn one inbound message into a reply. Mirrors the Chat route's decision tree
@@ -51,18 +57,23 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const skill = resolveSkill(input.skill);
   const mode = modeOf(raw);
 
-  // ---- Memo: land it raw in the inbox, no LLM, and ack. -------------------
-  if (mode === "memo") {
-    const text = memoText(raw);
+  // ---- Memo: land it raw in the inbox, no LLM, and ack. A log-only channel
+  // (ai: false) treats EVERY inbound line as a memo — pure capture, zero tokens. ----
+  if (mode === "memo" || input.ai === false) {
+    const text = mode === "memo" ? memoText(raw) : raw;
     const rDir = recordDir();
     if (!text) {
-      return { mode: "memo", text: "Nothing to save — send `>> your note`.", grounded: false, sources: [], metrics: [], via: "memo" };
+      return { mode: "memo", text: "Nothing to save — send `// your note`.", grounded: false, sources: [], metrics: [], via: "memo" };
     }
-    appendInboxItem({ text, source: input.channel || "memo", kind: "text" }, { recordDir: rDir });
+    const item = appendInboxItem({ text, source: input.channel || "memo", kind: "text" }, { recordDir: rDir });
     rebuild({ recordDir: rDir });
+    const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
     return {
       mode: "memo",
-      text: `Saved to your inbox. No reply — press Structure in the app when you want it turned into data.`,
+      text:
+        (auto?.structured ?? 0) > 0
+          ? `Saved and structured straight into your daily table.`
+          : `Saved to your inbox. No reply — press Structure in the app when you want it turned into data.`,
       grounded: false,
       sources: [],
       metrics: [],
@@ -75,7 +86,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const message = mode === "command" ? raw.replace(/^\//, "").trim() : raw;
 
   const cfg = readConfig();
-  const llm = activeLlm(cfg);
+  const llm = activeLlm(cfg, input.modelOverride ?? null);
   const history = Array.isArray(input.history)
     ? input.history
         .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
@@ -125,7 +136,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
       mode: "chat",
       text:
         `I'm your ${skill.name.toLowerCase()}. Add an AI key in Settings and I'll answer this grounded in your real data. ` +
-        `Until then, send \`>> a note\` and I'll keep your record building.`,
+        `Until then, send \`// a note\` and I'll keep your record building.`,
       grounded: false,
       sources: [],
       metrics: [],

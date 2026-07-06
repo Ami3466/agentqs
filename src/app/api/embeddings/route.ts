@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { embeddingEnabled, readConfig } from "@/lib/config";
 import { buildIndex, indexStatus } from "@/lib/embeddings";
 
 export const runtime = "nodejs";
@@ -20,6 +21,9 @@ export async function GET() {
 export async function POST() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  if (!embeddingEnabled(readConfig())) {
+    return NextResponse.json({ error: "Semantic search is turned off in Settings." }, { status: 400 });
   }
   try {
     const result = await buildIndex();

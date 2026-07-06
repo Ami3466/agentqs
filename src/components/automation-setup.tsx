@@ -174,7 +174,7 @@ export function AutomationSetup({
       <div className="mt-4 space-y-3">
         {step === 1 ? (
           <>
-            <Field label="Name" hint="What this feed is — becomes the source name in your daily table.">
+            <Field label="Name" hint="Becomes the source name in the Log.">
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Power bill" />
             </Field>
             <Field label="Start URL" hint="Where the browser opens — usually the login or dashboard page.">
@@ -193,7 +193,7 @@ export function AutomationSetup({
               </Select>
             </Field>
             {credType === "userpass" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field label="Username / email">
                   <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
                 </Field>
@@ -227,7 +227,7 @@ export function AutomationSetup({
               <p className="text-xs text-muted-fg">No credentials — the browser just opens the page and scrapes it.</p>
             )}
             <p className="text-[11px] text-muted-fg">
-              Stored in your data dir and only used to log in. Reference them in a step&apos;s value as{" "}
+              Stored locally, only used to log in. Reference them in a step&apos;s value as{" "}
               <code className="rounded bg-muted px-1">{"{{username}}"}</code> /{" "}
               <code className="rounded bg-muted px-1">{"{{password}}"}</code> /{" "}
               <code className="rounded bg-muted px-1">{"{{token}}"}</code>.
@@ -238,9 +238,9 @@ export function AutomationSetup({
         {step === 3 ? (
           <>
             <p className="text-xs text-muted-fg">
-              The click-path to your data. It runs top to bottom in a real browser; the last{" "}
+              The click-path to the data. It runs top to bottom in a real browser; the last{" "}
               <code className="rounded bg-muted px-1">extractTable</code> scrapes a{" "}
-              <code className="rounded bg-muted px-1">&lt;table&gt;</code> into your daily rows (a date column merges into
+              <code className="rounded bg-muted px-1">&lt;table&gt;</code> into daily rows (a date column merges into
               the timeline). Hit <b>Record trial run</b> to prove it once.
             </p>
             <div className="space-y-2">

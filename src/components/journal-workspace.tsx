@@ -10,7 +10,7 @@ import type { JournalData, JournalView } from "@/lib/journal";
 
 type Mode = "timeline" | "table";
 const MODE_KEY = "agentqs_journal_mode";
-const MODE_LABEL: Record<Mode, string> = { timeline: "Timeline", table: "Log" };
+const MODE_LABEL: Record<Mode, string> = { table: "Table", timeline: "Timeline" };
 
 /**
  * Client shell for the Journal tab. Fetches the pivoted per-day record once and
@@ -20,7 +20,7 @@ const MODE_LABEL: Record<Mode, string> = { timeline: "Timeline", table: "Log" };
 export function JournalWorkspace() {
   const [data, setData] = useState<JournalData | null>(null);
   const [views, setViews] = useState<JournalView[]>([]);
-  const [mode, setMode] = useState<Mode>("timeline");
+  const [mode, setMode] = useState<Mode>("table");
   const [loading, setLoading] = useState(true);
 
   // restore last-used view mode
@@ -79,7 +79,7 @@ export function JournalWorkspace() {
             : " "}
         </p>
         <div className="flex rounded-lg border border-border bg-card p-0.5 text-sm">
-          {(["timeline", "table"] as const).map((m) => (
+          {(["table", "timeline"] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -104,7 +104,7 @@ export function JournalWorkspace() {
       ) : mode === "timeline" ? (
         <JournalTimeline data={data} />
       ) : (
-        <JournalTable data={data} views={views} onViewsChange={persistViews} />
+        <JournalTable data={data} views={views} onViewsChange={persistViews} onData={setData} />
       )}
     </div>
   );

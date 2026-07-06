@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, RefreshCw, sourceIcon, Spinner, Trash } from "@/components/icons";
+import { Check, Plus, RefreshCw, sourceIcon, Spinner, Trash, X } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
@@ -15,11 +15,12 @@ type Tab = "connections" | "automated";
 
 /**
  * The Data-tab Sources card. One fetcher/persister of /api/sources, split into two
- * tabs under the dropzone:
- *   • Connections     — the catalog of integrations you can wire up. A source lives
- *                       here until it has data.
- *   • Automated imports — the ones set up: interval (editable) + Remove, plus the
- *                       "automate a site without an API" wizard entry.
+ * tabs BY TYPE (a source never moves between them when it connects):
+ *   • Connections     — API integrations (GitHub, WHOOP, Tier-1 plugins + extra
+ *                       accounts). Connected rows edit their interval / Remove here.
+ *   • Automated imports — the no-API lane: browser-automation recipes, local file
+ *                       feeds, the no-API roster (Connect opens the wizard), and the
+ *                       "automate a site without an API" entry.
  * A source is only shown as connected when its record actually has rows (derived,
  * never faked). Also owns lazy-sync-on-open: on mount it POSTs every DUE api source,
  * then bumps the shared `version` so downstream panels refetch.
@@ -41,14 +42,24 @@ export function SourcesPanel({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
-  // The automation wizard, optionally seeded from a specific roster source.
+  // Extra-account rows being set up (instance ids like "spotify-2") — ephemeral
+  // until a credential is saved, then /api/sources owns them.
+  const [addingAccounts, setAddingAccounts] = useState<string[]>([]);
+  // The automation wizard, optionally seeded from a specific roster source. It lives
+  // under Automated imports (it becomes one), so opening it lands the user there.
   const [wizardSeed, setWizardSeed] = useState<{ name?: string; url?: string } | null>(null);
   const openWizard = useCallback((seed: { name?: string; url?: string } = {}) => {
+    setTab("automated");
     setWizardSeed(seed);
-    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
   const ranAuto = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const wizardRef = useRef<HTMLDivElement>(null);
+
+  // Bring the freshly opened wizard into view instead of yanking the page to the top.
+  useEffect(() => {
+    if (wizardSeed !== null) wizardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [wizardSeed]);
 
   const load = useCallback(async (): Promise<SourceView[] | null> => {
     const res = await fetch("/api/sources");
@@ -90,14 +101,6 @@ export function SourcesPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
-
-  // Once real data exists, land on Automated imports so the user sees their feeds.
-  const settled = useRef(false);
-  useEffect(() => {
-    if (settled.current || !sources) return;
-    settled.current = true;
-    if (sources.some((s) => s.connected)) setTab("automated");
-  }, [sources]);
 
   // Inbox "Automate imports" → jump to the Automated tab and open the wizard.
   useEffect(() => {
@@ -141,16 +144,36 @@ export function SourcesPanel({
     }
   }
 
-  const connected = (sources ?? []).filter((s) => s.connected);
-  const available = (sources ?? []).filter((s) => !s.connected);
-  const list = tab === "automated" ? connected : available;
-  // In the Automated tab, connected rows can be edited (interval) + removed.
-  const withRemove = tab === "automated";
+  // Split by type: API integrations stay under Connections for good; everything
+  // driven without an API (automations, file feeds, no-API roster) is Automated.
+  const all = sources ?? [];
+  const byConnected = (a: SourceView, b: SourceView) => Number(b.connected) - Number(a.connected);
+  const connections = all.filter((s) => s.kind === "api" && !s.automation).sort(byConnected);
+  const automated = all.filter((s) => s.automation || s.kind !== "api").sort(byConnected);
+  const list = tab === "automated" ? automated : connections;
+
+  // Multi-account: a connected plugin source can be connected AGAIN under a new
+  // instance id ("spotify-2"). Ephemeral rows live here until the credential is
+  // saved server-side, then /api/sources lists them and the local copy drops.
+  const knownIds = new Set(all.map((s) => s.id));
+  const pendingAccounts = addingAccounts.filter((id) => !knownIds.has(id));
+  const accountBases = connections.filter((s) => s.connected && s.plugin && !/-\d+$/.test(s.id));
+
+  function addAccount(baseId: string) {
+    const re = new RegExp(`^${baseId}-(\\d+)$`);
+    let max = 1; // the base connection is account 1
+    for (const id of [...knownIds, ...addingAccounts]) {
+      const m = id.match(re);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    setAddingAccounts((a) => [...a, `${baseId}-${max + 1}`]);
+  }
 
   function row(s: SourceView) {
     const saving = savingId === s.id;
     const removing = removingId === s.id;
-    const onRemove = withRemove ? () => void removeSource(s.id) : undefined;
+    // Any connected row can be removed in place — sources don't switch tabs.
+    const onRemove = s.connected ? () => void removeSource(s.id) : undefined;
     const onIntervalChange = (i: Interval) => void changeInterval(s.id, i);
 
     if (s.automation) {
@@ -231,11 +254,11 @@ export function SourcesPanel({
         <div className="inline-flex rounded-lg border border-border bg-muted p-0.5 text-[13px]">
           <TabButton active={tab === "connections"} onClick={() => setTab("connections")}>
             Connections
-            <TabCount>{available.length}</TabCount>
+            <TabCount>{connections.filter((s) => s.connected).length}</TabCount>
           </TabButton>
           <TabButton active={tab === "automated"} onClick={() => setTab("automated")}>
             Automated imports
-            <TabCount>{connected.length}</TabCount>
+            <TabCount>{automated.filter((s) => s.connected).length}</TabCount>
           </TabButton>
         </div>
       </div>
@@ -253,24 +276,67 @@ export function SourcesPanel({
         </div>
       ) : (
         <>
-          {list.length ? (
-            <div className="divide-y divide-border">{list.map(row)}</div>
-          ) : tab === "automated" ? null : (
-            <p className="p-6 text-center text-xs text-muted-fg">All connected.</p>
-          )}
+          {list.length ? <div className="divide-y divide-border">{list.map(row)}</div> : null}
+
+          {tab === "connections" && pendingAccounts.length ? (
+            <div className="divide-y divide-border border-t border-border">
+              {pendingAccounts.map((id) => (
+                <div key={id}>
+                  <div className="flex items-center justify-between px-4 pt-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+                      New account
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAddingAccounts((a) => a.filter((x) => x !== id))}
+                      className="rounded p-1 text-muted-fg hover:text-fg"
+                      aria-label="Cancel new account"
+                    >
+                      <X width={14} height={14} />
+                    </button>
+                  </div>
+                  <SourceConnect
+                    id={id}
+                    version={version}
+                    onIntervalChange={(i) => void changeInterval(id, i)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {tab === "connections" && accountBases.length ? (
+            <div className="border-t border-border p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+                Add another account
+              </p>
+              <p className="mt-0.5 text-xs text-muted-fg">
+                Already connected — link a second account with its own key and schedule.
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {accountBases.map((s) => (
+                  <Button key={s.id} size="sm" variant="secondary" onClick={() => addAccount(s.id)}>
+                    <Plus width={13} height={13} /> {s.name}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {wizardSeed !== null ? (
-            <AutomationSetup
-              initialName={wizardSeed.name ?? ""}
-              initialUrl={wizardSeed.url ?? ""}
-              onCancel={() => setWizardSeed(null)}
-              onDone={() => {
-                setWizardSeed(null);
-                setTab("automated");
-                void load();
-                onChanged();
-              }}
-            />
+            <div ref={wizardRef} className="scroll-mt-4">
+              <AutomationSetup
+                initialName={wizardSeed.name ?? ""}
+                initialUrl={wizardSeed.url ?? ""}
+                onCancel={() => setWizardSeed(null)}
+                onDone={() => {
+                  setWizardSeed(null);
+                  setTab("automated");
+                  void load();
+                  onChanged();
+                }}
+              />
+            </div>
           ) : tab === "automated" ? (
             <button
               type="button"
@@ -321,9 +387,10 @@ function TabCount({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Minimal source row for a not-yet-live roster integration (Connections) and any
- *  generic connected source (Automated). Connect opens the record-login + scrape
- *  wizard; connected rows expose interval + Remove. Stale is monochrome. */
+/** Minimal source row for the no-API roster and any generic connected source, both
+ *  under Automated imports. Connect opens the record-login + scrape wizard; the row
+ *  matches the layout of the API rows (icon · name · one primary action). Connected
+ *  rows expose interval + Remove. Stale is monochrome. */
 function SourceRow({
   source,
   saving,
@@ -369,12 +436,9 @@ function SourceRow({
             ) : null}
           </>
         ) : (
-          <>
-            <Button size="sm" variant="secondary" onClick={onConnect}>
-              Connect
-            </Button>
-            <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />
-          </>
+          <Button size="sm" variant="primary" onClick={onConnect}>
+            Connect
+          </Button>
         )}
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { readConfig } from "@/lib/config";
 import { channelEnv, getChannelAdapter } from "@/lib/channels/registry";
 import { composeReply } from "@/lib/reply";
 
@@ -13,7 +14,7 @@ export const dynamic = "force-dynamic";
  * The flow is identical for every channel:
  *
  *   raw request → adapter.ingest (verify + parse) → composeReply (the shared brain:
- *   `>>` memo or grounded chat) → adapter.send (reply back out).
+ *   `//` memo or grounded chat) → adapter.send (reply back out).
  *
  * GET is the capability probe for the app/CLI (is this bot wired up?) and does use
  * the session cookie.
@@ -54,7 +55,20 @@ export async function POST(req: Request, { params }: { params: { channel: string
   }
 
   const inbound = verdict.message;
-  const reply = await composeReply({ message: inbound.text, channel: adapter.id });
+  // Per-channel reply prefs from Settings: AI vs log-only, the persona, and an
+  // optional model override — so a bot can answer as a different skill/model than
+  // the app, or just capture everything with zero tokens.
+  const prefs = readConfig()?.channels?.replies?.[adapter.id];
+  const reply = await composeReply({
+    message: inbound.text,
+    channel: adapter.id,
+    skill: prefs?.skill,
+    ai: prefs?.ai,
+    modelOverride:
+      prefs?.providerId || prefs?.model
+        ? { providerId: prefs.providerId, model: prefs.model }
+        : null,
+  });
 
   try {
     await adapter.send(env, inbound.target, reply.text);

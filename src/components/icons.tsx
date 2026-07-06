@@ -158,6 +158,13 @@ export const X = (p: P) => (
   </svg>
 );
 
+export const Pencil = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    <path d="m15 5 4 4" />
+  </svg>
+);
+
 export const Table = (p: P) => (
   <svg {...base} {...p}>
     <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -213,6 +220,14 @@ export const Trash = (p: P) => (
 export const Play = (p: P) => (
   <svg {...base} fill="currentColor" stroke="none" {...p}>
     <path d="M6 4.5v15a1 1 0 0 0 1.53.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 6 4.5z" />
+  </svg>
+);
+
+export const HelpCircle = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="12" r="10" />
+    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+    <path d="M12 17h.01" />
   </svg>
 );
 
@@ -350,12 +365,15 @@ export const Notion = (p: P) => (
   </svg>
 );
 
-/** Oura has no simple-icons mark — a clean ring (the Oura Ring) is its real form,
- *  not a placeholder. */
+/** Oura's real brand mark — the "Ō" (ring + macron) from the official ŌURA
+ *  wordmark, geometry scaled from ouraring.com's logo SVG. */
 export const OuraRing = (p: P) => (
-  <svg {...base} {...p}>
-    <circle cx="12" cy="12" r="9" />
-    <circle cx="12" cy="12" r="4.5" />
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path
+      fillRule="evenodd"
+      d="M12 5.53a8.16 8.16 0 1 0 0 16.32 8.16 8.16 0 0 0 0-16.32Zm0 1.76a6.4 6.4 0 1 0 0 12.8 6.4 6.4 0 0 0 0-12.8Z"
+    />
+    <path d="M7.92 2h8.16v1.76H7.92Z" />
   </svg>
 );
 
@@ -390,9 +408,9 @@ export const Instapaper = (p: P) => (
 );
 
 /** Product-form glyphs for brands with no simple-icons mark — each is the source's
- *  real shape (Apple Health = heart, Apple Watch = watch, Withings = a smart scale,
- *  Health Connect = a linked heart, Apple Weather = sun-behind-cloud), not a
- *  placeholder. Kept monochrome/stroke so they sit beside the filled brand marks. */
+ *  real shape (Apple Health = heart, Apple Watch = watch, Health Connect = a
+ *  linked heart, Apple Weather = sun-behind-cloud), not a placeholder. Kept
+ *  monochrome/stroke so they sit beside the filled brand marks. */
 export const HeartPulse = (p: P) => (
   <svg {...base} {...p}>
     <path d="M20.5 6.5a5 5 0 0 0-8.5-3 5 5 0 0 0-8.5 3.6c0 4 4.5 7.4 8.5 10.4 4-3 8.5-6.4 8.5-10.4a5 5 0 0 0 0-.6Z" />
@@ -404,15 +422,6 @@ export const Watch = (p: P) => (
   <svg {...base} {...p}>
     <rect x="6" y="6" width="12" height="12" rx="3" />
     <path d="M8 6l.7-3.2A1 1 0 0 1 9.7 2h4.6a1 1 0 0 1 1 .8L16 6M16 18l-.7 3.2a1 1 0 0 1-1 .8H9.7a1 1 0 0 1-1-.8L8 18M12 9.5V12l1.5 1.5" />
-  </svg>
-);
-
-export const Scale = (p: P) => (
-  <svg {...base} {...p}>
-    <rect x="3" y="3" width="18" height="18" rx="3" />
-    <path d="M8.5 7.5h7" />
-    <path d="M12 8v3M12 11l-2.2-2" />
-    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
   </svg>
 );
 
@@ -448,15 +457,19 @@ export const GoogleCalendar = (p: P) => (
   </svg>
 );
 
-/** WHOOP has no simple-icons mark — a bold recovery-ring donut is its real logo
- *  form (distinct from Oura's thin double ring), not a placeholder glyph. */
+/** WHOOP's real brand mark — the disconnected-stroke "W" monogram from the
+ *  official WHOOP wordmark, geometry scaled from whoop.com's logo SVG. */
 export const Whoop = (p: P) => (
   <svg {...base} fill="currentColor" stroke="none" {...p}>
-    <path
-      fillRule="evenodd"
-      clipRule="evenodd"
-      d="M12 2.5a9.5 9.5 0 1 0 0 19 9.5 9.5 0 0 0 0-19Zm0 4.75a4.75 4.75 0 1 0 0 9.5 4.75 4.75 0 0 0 0-9.5Z"
-    />
+    <path d="M3.77 4.51H2l2.83 9.32h1.78L3.77 4.51ZM11.11 4.51 6.56 19.49h1.77l4.56-14.98h-1.78ZM16.55 16.57l-1.94-6.4h-1.78l2.84 9.32h1.77L22 4.51h-1.78l-3.67 12.06Z" />
+  </svg>
+);
+
+/** Withings' real brand mark — the lowercase "w" glyph (its favicon/app icon),
+ *  geometry scaled from withings.com's official logotype SVG. */
+export const Withings = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M2 5.27h2.56l3.19 9.95 3.3-9.99h1.99l3.3 9.99 3.19-9.95h2.47l-4.68 13.51h-2.03L12.01 9.14l-3.3 9.64H6.68L2 5.27Z" />
   </svg>
 );
 
@@ -481,7 +494,7 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   garmin: Garmin,
   mastodon: Mastodon,
   instapaper: Instapaper,
-  withings: Scale,
+  withings: Withings,
   "health-connect": ShieldHeart,
   "apple-weather": Apple,
   // Tier-2 file importers keep their real marks when they hold data.

@@ -1,18 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Check,
-  Eye,
-  EyeOff,
-  RefreshCw,
-  sourceIcon,
-  Spinner,
-  Trash,
-} from "@/components/icons";
+import { Check, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
-import { Badge, Button, Input, cn } from "@/components/ui";
-import { ago, type Interval } from "@/lib/sources";
+import { Button, Input, cn } from "@/components/ui";
+import { type Interval } from "@/lib/sources";
 
 /**
  * Generic connect/sync row for a single-credential Tier-1 plugin source
@@ -78,7 +70,6 @@ export function SourceConnect({
   id,
   version = 0,
   interval = "off",
-  due = false,
   savingInterval = false,
   removing = false,
   onIntervalChange,
@@ -143,12 +134,6 @@ export function SourceConnect({
   const connected = status?.connected;
   const live = status?.live ?? true;
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred);
-  const dayLabel = status ? `${status.days} day${status.days === 1 ? "" : "s"}` : "";
-  const headline = status
-    ? status.average != null
-      ? `${status.average} ${status.unit || status.primaryMetric} · ${dayLabel}`
-      : dayLabel
-    : "";
 
   return (
     <div className="p-4">
@@ -157,32 +142,10 @@ export function SourceConnect({
           <Icon width={18} height={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <p className="truncate text-sm font-medium text-fg">{status?.name ?? id}</p>
-            <Badge>api</Badge>
-            {!live ? (
-              <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-                stub · OAuth soon
-              </span>
-            ) : null}
-            {connected ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
-                <Check width={12} height={12} /> connected
-              </span>
-            ) : null}
-            {live && connected && interval !== "off" ? (
-              <span
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-fg"
-                title={due ? "Overdue — auto-syncs when the Data tab opens" : "Scheduled auto-sync"}
-              >
-                <RefreshCw width={11} height={11} />
-                {due ? "auto-syncs on open" : `syncs ${interval}`}
-              </span>
-            ) : null}
+            {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
-          <p className="truncate text-xs text-muted-fg">
-            {connected ? `${headline} · synced ${ago(status?.syncedAt ?? null)}` : status?.detail ?? ""}
-          </p>
         </div>
         <div className="flex items-center gap-2">
           {live && connected && onIntervalChange ? (
@@ -232,10 +195,6 @@ export function SourceConnect({
 
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
-          <p className="text-xs text-muted-fg">
-            Paste a {status?.credentialLabel ?? "credential"}. Stored in your data dir; used only to
-            read {status?.name ?? "this source"}.
-          </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Input
@@ -263,7 +222,6 @@ export function SourceConnect({
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-fg">Auto-sync</span>
             <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
-            <span className="text-[11px] text-muted-fg">Change it anytime after connecting.</span>
           </div>
         </div>
       ) : null}

@@ -100,10 +100,19 @@ export function saveAutomation(input: SaveAutomationInput): PublicAutomation {
   if (!/^(https?|file):\/\//i.test(url)) throw new Error("Enter a full start URL (https://…).");
 
   const existingId = input.id?.trim();
-  const id = existingId || slugifyId(name);
+  let id = existingId || slugifyId(name);
   if (!id) throw new Error("Could not derive an id from the name.");
 
   const recipes = [...(cfg.automations ?? [])];
+  if (!existingId) {
+    // Creating by name: never silently overwrite a same-named recipe — a second
+    // "Garmin" is a second ACCOUNT, so suffix to a free id (garmin-2, garmin-3…).
+    const base = id;
+    let n = 2;
+    while (recipes.some((a) => a.id === id) || RESERVED_SOURCE_IDS.includes(id)) {
+      id = `${base}-${n++}`;
+    }
+  }
   const idx = recipes.findIndex((a) => a.id === id);
   if (idx < 0 && RESERVED_SOURCE_IDS.includes(id)) {
     throw new Error(`"${id}" is a built-in source id. Pick another name.`);

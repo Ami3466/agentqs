@@ -5,8 +5,8 @@ import { readConfig, writeConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv, rebuild } from "@/lib/record";
-import { pluginById } from "@/lib/importers/registry";
-import { importPlugin, resolveCredential, windowDays, type ImporterPlugin } from "@/lib/importers/plugin";
+import { pluginInstanceById, pluginInstanceName, type PluginInstance } from "@/lib/importers/registry";
+import { importPlugin, resolveCredential, windowDays } from "@/lib/importers/plugin";
 import { wipeDemoOnImport } from "@/lib/demo";
 
 export const runtime = "nodejs";
@@ -17,22 +17,23 @@ interface SeriesPoint {
   value: number;
 }
 
-/** Read record/daily/<id>.csv and summarize the plugin's primary metric. */
-function status(plugin: ImporterPlugin) {
-  const file = path.join(recordDir(), "daily", `${plugin.id}.csv`);
+/** Read record/daily/<instanceId>.csv and summarize the plugin's primary metric.
+ *  Instance ids ("spotify-2") let one integration hold several accounts. */
+function status({ plugin, instanceId }: PluginInstance) {
+  const file = path.join(recordDir(), "daily", `${instanceId}.csv`);
   const cfg = readConfig();
   const out = {
-    id: plugin.id,
-    name: plugin.name,
+    id: instanceId,
+    name: pluginInstanceName({ plugin, instanceId }),
     detail: plugin.detail,
     live: plugin.live,
     connected: false,
-    hasCredential: Boolean(resolveCredential(plugin, undefined, cfg)),
+    hasCredential: Boolean(resolveCredential(plugin, undefined, cfg, instanceId)),
     credentialLabel: plugin.credentialLabel,
     credentialPlaceholder: plugin.credentialPlaceholder,
     primaryMetric: plugin.primaryMetric,
     unit: plugin.unit ?? "",
-    syncedAt: cfg?.sourceSyncedAt?.[plugin.id] ?? null,
+    syncedAt: cfg?.sourceSyncedAt?.[instanceId] ?? null,
     days: 0,
     latest: null as number | null,
     average: null as number | null,
@@ -67,9 +68,9 @@ export async function GET(_req: Request, { params }: { params: { source: string 
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const plugin = pluginById(params.source);
-  if (!plugin) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
-  return NextResponse.json(status(plugin));
+  const inst = pluginInstanceById(params.source);
+  if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
+  return NextResponse.json(status(inst));
 }
 
 /** Run the importer, persist a freshly given credential + sync time, rebuild. */
@@ -77,12 +78,13 @@ export async function POST(req: Request, { params }: { params: { source: string 
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const plugin = pluginById(params.source);
-  if (!plugin) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
+  const inst = pluginInstanceById(params.source);
+  if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
+  const { plugin, instanceId } = inst;
 
   const body = (await req.json().catch(() => ({}))) as { credential?: string; days?: number };
   const cfg = readConfig();
-  const credential = resolveCredential(plugin, body.credential, cfg);
+  const credential = resolveCredential(plugin, body.credential, cfg, instanceId);
   if (plugin.requiresCredential && !credential) {
     return NextResponse.json(
       { error: `Add a ${plugin.credentialLabel} to sync ${plugin.name}.` },
@@ -96,7 +98,7 @@ export async function POST(req: Request, { params }: { params: { source: string 
 
   let summary;
   try {
-    summary = await importPlugin(plugin, { credential, from, to }, recordDir());
+    summary = await importPlugin(plugin, { credential, from, to }, recordDir(), instanceId);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
@@ -104,9 +106,9 @@ export async function POST(req: Request, { params }: { params: { source: string 
   // Persist a freshly supplied credential + the sync time so status survives reloads.
   if (cfg) {
     if (body.credential && body.credential.trim()) {
-      cfg.sourceCreds = { ...(cfg.sourceCreds ?? {}), [plugin.id]: body.credential.trim() };
+      cfg.sourceCreds = { ...(cfg.sourceCreds ?? {}), [instanceId]: body.credential.trim() };
     }
-    cfg.sourceSyncedAt = { ...(cfg.sourceSyncedAt ?? {}), [plugin.id]: new Date().toISOString() };
+    cfg.sourceSyncedAt = { ...(cfg.sourceSyncedAt ?? {}), [instanceId]: new Date().toISOString() };
     try {
       writeConfig(cfg);
     } catch {
@@ -118,14 +120,14 @@ export async function POST(req: Request, { params }: { params: { source: string 
 
   return NextResponse.json({
     ok: true,
-    id: plugin.id,
-    name: plugin.name,
+    id: instanceId,
+    name: pluginInstanceName(inst),
     from: summary.from,
     to: summary.to,
     days: summary.daysWithData,
     metrics: summary.metrics,
     cells: summary.cells,
     dailyRows: r.daily,
-    syncedAt: cfg?.sourceSyncedAt?.[plugin.id] ?? null,
+    syncedAt: cfg?.sourceSyncedAt?.[instanceId] ?? null,
   });
 }

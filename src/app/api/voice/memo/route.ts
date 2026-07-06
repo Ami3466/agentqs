@@ -3,7 +3,9 @@ import { getCurrentUser } from "@/lib/session";
 import { effectiveProviders, readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import { appendInboxItem, readRecord, rebuild } from "@/lib/record";
+import { autoStructureNewItem } from "@/lib/structure-run";
 import { describeStt, transcribeMemo, type SttEnv } from "@/lib/voice";
+import { whisperInstalled } from "@/lib/whisper-local";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,16 +13,20 @@ export const dynamic = "force-dynamic";
 // Guard against a hostile upload; a spoken memo is small.
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB (also OpenAI Whisper's file cap)
 
-/** Build the STT environment from process.env + config. An OpenAI key from either
- *  a dedicated env var or an added OpenAI provider account enables the cloud Whisper
- *  fallback; WHISPER_BIN enables local transcription. */
+/** Build the STT environment from process.env + config. WHISPER_BIN wins; then the
+ *  built-in Whisper installed from Settings (only while its weights are actually on
+ *  disk, so the mic capability stays truthful); then an OpenAI key — from a
+ *  dedicated env var or an added OpenAI provider account — as the cloud fallback. */
 function sttEnv(): SttEnv {
   const cfg = readConfig();
   const openaiAcct = effectiveProviders(cfg).find((p) => p.type === "openai" && p.apiKey);
   const openaiKey = process.env.OPENAI_API_KEY || openaiAcct?.apiKey || "";
+  const installed = cfg?.voice?.whisperModel || "";
   return {
     whisperBin: process.env.WHISPER_BIN || "",
     whisperArgs: process.env.WHISPER_ARGS || "",
+    whisperModel: installed && whisperInstalled(installed) ? installed : "",
+    whisperLang: cfg?.voice?.whisperLang || "en",
     openaiKey,
     openaiModel: process.env.WHISPER_MODEL || "whisper-1",
   };
@@ -38,7 +44,7 @@ export async function GET() {
  * A voice memo. Accepts the recorded audio (multipart `audio`, or a raw audio/*
  * body), transcribes it with the configured backend, and appends the transcript
  * to the inbox verbatim — source `voice`, status pending, no LLM parse and no
- * daily row, exactly like a typed `>>` memo. The cache is rebuilt so the memo is
+ * daily row, exactly like a typed `//` memo. The cache is rebuilt so the memo is
  * immediately visible. Returns the transcript + the new pending count.
  */
 export async function POST(req: Request) {
@@ -110,7 +116,15 @@ export async function POST(req: Request) {
     { recordDir: rDir },
   );
   rebuild({ recordDir: rDir });
+  const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
 
   const pending = readRecord(rDir).inbox.filter((i) => i.status === "pending").length;
-  return NextResponse.json({ ok: true, id: item.id, text, backend, pending });
+  return NextResponse.json({
+    ok: true,
+    id: item.id,
+    text,
+    backend,
+    pending,
+    structured: (auto?.structured ?? 0) > 0,
+  });
 }

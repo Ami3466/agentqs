@@ -5,7 +5,7 @@
  * — clean CSV maps straight to columns (free, no LLM); prose goes through the
  * model to the same wide shape (paid, only here). Server-only (fs + provider).
  */
-import { activeLlm, readConfig } from "./config";
+import { activeLlm, autoStructureEnabled, readConfig } from "./config";
 import { recordDir } from "./paths";
 import { mergeDailyCsv, readRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
 import { llmComplete } from "./llm";
@@ -47,6 +47,18 @@ function filenameOf(item: InboxItem): string | undefined {
     if (typeof f === "string" && f.trim()) return f;
   }
   return undefined;
+}
+
+/** Auto-structure (Settings): structure a fresh capture immediately so it skips the
+ *  pending inbox. No-op when the toggle is off. Never throws — a failed attempt just
+ *  leaves the item pending, exactly as it was before. */
+export async function autoStructureNewItem(id: string): Promise<StructureRunResult | null> {
+  if (!autoStructureEnabled(readConfig())) return null;
+  try {
+    return await structurePending({ id });
+  } catch {
+    return null;
+  }
 }
 
 /** Drain pending inbox items into daily rows. `{id}` structures one; `{}` drains all. */
@@ -122,6 +134,9 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
         source,
         cells: merge.cells,
         metrics: merge.metrics,
+        // Exact cells this item changed (with prior values) — lets the Log's
+        // Reject undo the merge by replaying them in reverse.
+        applied: merge.applied,
       },
     });
     results.push({

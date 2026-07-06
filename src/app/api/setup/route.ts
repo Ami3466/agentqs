@@ -7,11 +7,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * First-run signup: email + password + confirm, nothing else. The email is stored
- * in the config `username` field (username = email). The AI provider, key and model
+ * First-run signup: email OR username, password + confirm, nothing else. What you
+ * type is stored in the config `username` field. The AI provider, key and model
  * are added later in Settings or from the CLI.
  */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,62}$/;
 
 export async function POST(req: Request) {
   if (configExists()) {
@@ -23,8 +24,11 @@ export async function POST(req: Request) {
   const password = String(body?.password ?? "");
   const confirm = String(body?.confirm ?? "");
 
-  if (!EMAIL_RE.test(username)) {
-    return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
+  if (!EMAIL_RE.test(username) && !USERNAME_RE.test(username)) {
+    return NextResponse.json(
+      { error: "Enter a valid email or username (letters/numbers, 2+ characters)." },
+      { status: 400 },
+    );
   }
   if (password.length < 6) {
     return NextResponse.json(

@@ -1,10 +1,11 @@
 import fs from "fs";
-import { configPath, dataDir } from "./paths";
+import { configPath, dataDir, recordDir } from "./paths";
 import type { JournalView } from "./journal";
 import type { Interval } from "./sources";
 import type { Skill } from "./skills";
 import type { AutomationCreds, AutomationRecipe } from "./automation-types";
 import type { WhoopCreds } from "./importers/whoop";
+import { recordInAppRepoEnabled } from "./record-git";
 import {
   accountBase,
   isProvider,
@@ -18,16 +19,31 @@ import {
  *  network. An optional API model + key upgrades fidelity. */
 export interface EmbeddingConfig {
   mode: "local" | "api";
+  enabled?: boolean; // semantic search on at all (default true)
+  autoIndex?: boolean; // rebuild the vector index automatically when the record changes (default true)
   model?: string;
   providerId?: string; // reuse a provider account's key, or…
   apiKey?: string; // …a standalone key
 }
 
-/** Voice model config: the live in-chat session backend + its key. */
+/** Voice model config: the live in-chat session backend + its key, plus the
+ *  built-in memo transcriber installed from Settings. */
 export interface VoiceConfig {
   provider: "" | "elevenlabs" | "google-live";
-  apiKey?: string;
+  providerId?: string; // reuse a provider account's key (Google Live = the Gemini key), or…
+  apiKey?: string; // …a standalone key
   agentId?: string; // ElevenLabs agent id
+  whisperModel?: string; // built-in local Whisper for memos ("tiny" | "base" | "small"), set on install
+  whisperLang?: string; // spoken language for the built-in Whisper (default "en")
+}
+
+/** How one channel answers: AI replies (the grounded agent) or log-only capture,
+ *  plus an optional persona + model override for that channel. */
+export interface ChannelReplyPrefs {
+  ai?: boolean; // false → every inbound message lands in the inbox, no LLM
+  skill?: string; // persona id the channel replies as
+  providerId?: string; // model override for this channel (defaults to the app model)
+  model?: string;
 }
 
 /** Channel links set from Settings (fall back to process.env when unset). */
@@ -36,6 +52,7 @@ export interface ChannelsConfig {
   telegramWebhookSecret?: string;
   slackBotToken?: string;
   slackSigningSecret?: string;
+  replies?: Record<string, ChannelReplyPrefs>; // per-channel reply behaviour, keyed by channel id
 }
 
 /**
@@ -63,11 +80,29 @@ export interface AppConfig {
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
+  hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
   whoopCreds?: WhoopCreds; // WHOOP unofficial app login: email + password + cached/rotated tokens
   apiKey?: string; // bearer token for the HTTP API over the wire (generated in Connect)
   demoSeeded?: boolean; // generic demo data is loaded; auto-wiped on the first real import
+  autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)
+}
+
+/** Are semantic embeddings on at all? Default true — the Settings checkbox flips it off. */
+export function embeddingEnabled(cfg: AppConfig | null): boolean {
+  return cfg?.embedding?.enabled !== false;
+}
+
+/** Should the vector index rebuild itself when the record changes? Default true;
+ *  off = only the manual "Reindex now" button (or CLI) builds it. */
+export function autoIndexEnabled(cfg: AppConfig | null): boolean {
+  return embeddingEnabled(cfg) && cfg?.embedding?.autoIndex !== false;
+}
+
+/** Should a new capture be structured immediately instead of waiting pending? Default false. */
+export function autoStructureEnabled(cfg: AppConfig | null): boolean {
+  return cfg?.autoStructure === true;
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.
@@ -144,6 +179,16 @@ export function effectiveProviders(cfg: AppConfig | null): ProviderAccount[] {
   return [];
 }
 
+/** Resolve the key for a secondary feature (embedding / voice): a linked provider
+ *  account's key wins (one key, entered once, reused), else the standalone key. */
+export function linkedApiKey(cfg: AppConfig | null, providerId?: string, own?: string): string {
+  if (providerId) {
+    const acct = effectiveProviders(cfg).find((p) => p.id === providerId);
+    if (acct?.apiKey) return acct.apiKey;
+  }
+  return own || "";
+}
+
 /** Resolve the active call target (protocol + key + base + model), honouring an
  *  optional per-request override from the chat model chip. Null when no key is set. */
 export function activeLlm(
@@ -202,11 +247,28 @@ export interface PublicConfig {
   username: string;
   providers: PublicProvider[];
   selectedModel: ModelSelection | null;
-  embedding: { mode: "local" | "api"; model: string; hasKey: boolean };
-  voice: { provider: string; hasKey: boolean; agentId: string };
-  channels: { telegram: boolean; slack: boolean };
+  embedding: {
+    mode: "local" | "api";
+    enabled: boolean;
+    autoIndex: boolean;
+    model: string;
+    hasKey: boolean;
+    providerId: string;
+  };
+  autoStructure: boolean;
+  voice: {
+    provider: string;
+    hasKey: boolean;
+    agentId: string;
+    providerId: string;
+    whisperModel: string;
+    whisperLang: string;
+  };
+  channels: { telegram: boolean; slack: boolean; replies: Record<string, ChannelReplyPrefs> };
   theme: string;
   dataDir: string;
+  recordDir: string;
+  recordInAppRepo: boolean;
   createdAt: string;
 }
 
@@ -230,23 +292,30 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     selectedModel,
     embedding: {
       mode: emb?.mode === "api" ? "api" : "local",
+      enabled: embeddingEnabled(cfg),
+      autoIndex: autoIndexEnabled(cfg),
       model: emb?.model || "",
-      hasKey: Boolean(emb?.apiKey),
+      hasKey: Boolean(linkedApiKey(cfg, emb?.providerId, emb?.apiKey)),
+      providerId: emb?.providerId || "",
     },
+    autoStructure: autoStructureEnabled(cfg),
     voice: {
       provider: voice?.provider || "",
-      hasKey: Boolean(voice?.apiKey),
+      hasKey: Boolean(linkedApiKey(cfg, voice?.providerId, voice?.apiKey)),
       agentId: voice?.agentId || "",
+      providerId: voice?.providerId || "",
+      whisperModel: voice?.whisperModel || "",
+      whisperLang: voice?.whisperLang || "en",
     },
     channels: {
       telegram: Boolean(ch?.telegramBotToken),
       slack: Boolean(ch?.slackBotToken),
+      replies: ch?.replies ?? {},
     },
     theme: cfg.theme,
     dataDir: dataDir(),
+    recordDir: recordDir(),
+    recordInAppRepo: recordInAppRepoEnabled(),
     createdAt: cfg.createdAt,
   };
 }
-
-// protocolOf re-export kept for call sites that resolve a raw account type.
-export { protocolOf };
