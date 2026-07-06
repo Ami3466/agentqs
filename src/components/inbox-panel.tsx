@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, Spinner, Wand, X } from "@/components/icons";
-import { cn } from "@/components/ui";
+import { Inbox, RefreshCw, Spinner, Wand, X } from "@/components/icons";
+import { Button, cn } from "@/components/ui";
 
 interface Item {
   id: string;
@@ -40,9 +40,13 @@ function ago(iso: string): string {
 export function InboxPanel({
   version,
   onChanged,
+  onAutomate,
 }: {
   version: number;
   onChanged: () => void;
+  /** Opens the automation setup flow (the Sources → Connections catalog) so a
+   *  recurring feed replaces dropping this file by hand. */
+  onAutomate?: () => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [pending, setPending] = useState<number | null>(null);
@@ -125,19 +129,41 @@ export function InboxPanel({
             {pending}
           </span>
         ) : null}
-        <button
-          type="button"
-          onClick={() => structure()}
-          disabled={!pending || anyBusy}
-          className="ml-auto inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[13px] font-medium text-accent-fg transition-colors hover:opacity-90 disabled:opacity-40"
-        >
-          {busy === "all" ? <Spinner width={14} height={14} /> : <Wand width={14} height={14} />}
-          Structure all
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {onAutomate ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={onAutomate}
+              title="Set up a recurring feed instead of dropping this by hand"
+            >
+              <RefreshCw width={14} height={14} />
+              Automate imports
+            </Button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => structure()}
+            disabled={!pending || anyBusy}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[13px] font-medium text-accent-fg transition-colors hover:opacity-90 disabled:opacity-40"
+          >
+            {busy === "all" ? <Spinner width={14} height={14} /> : <Wand width={14} height={14} />}
+            Structure all
+          </button>
+        </div>
       </div>
       <p className="mt-1 text-xs text-muted-fg">
         Raw captures — dropped files and <code className="font-mono">&gt;&gt;</code> memos. Structure
-        turns them into daily rows; tokens are only spent on prose.
+        turns them into daily rows; tokens are only spent on prose. Doing this often?{" "}
+        <button
+          type="button"
+          onClick={onAutomate}
+          disabled={!onAutomate}
+          className="font-medium text-accent underline-offset-2 hover:underline disabled:no-underline disabled:opacity-100"
+        >
+          Automate imports
+        </button>{" "}
+        so a source feeds itself.
       </p>
 
       {flash ? (
