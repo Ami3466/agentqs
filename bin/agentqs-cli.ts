@@ -155,6 +155,18 @@ source
   });
 
 source
+  .command("remove <id>")
+  .alias("disconnect")
+  .description("remove an automated import: drop its data, credential + schedule")
+  .action((id: string) => {
+    try {
+      out(core.disconnectSource(id), (d) => `Removed ${d.id} → ${d.dailyRows} daily rows.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+source
   .command("file <id>")
   .description("import a Tier-2 local file source: chrome | iphone")
   .option("-p, --path <file>", "explicit file/backup path")

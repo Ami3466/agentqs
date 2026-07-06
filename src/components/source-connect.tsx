@@ -1,17 +1,14 @@
 "use client";
 
-import { useEffect, useState, type ComponentType, type SVGProps } from "react";
+import { useEffect, useState } from "react";
 import {
-  Activity,
-  Calendar,
   Check,
   Eye,
   EyeOff,
-  Gauge,
-  Music,
-  Plug,
   RefreshCw,
+  sourceIcon,
   Spinner,
+  Trash,
 } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, Input, cn } from "@/components/ui";
@@ -48,13 +45,6 @@ interface Status {
   series: Point[];
 }
 
-const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
-  rescuetime: Gauge,
-  gcal: Calendar,
-  spotify: Music,
-  whoop: Activity,
-};
-
 /** Dependency-free bar sparkline of the primary metric, accent-coloured. */
 function Spark({ data }: { data: Point[] }) {
   if (!data.length) return null;
@@ -90,14 +80,18 @@ export function SourceConnect({
   interval = "off",
   due = false,
   savingInterval = false,
+  removing = false,
   onIntervalChange,
+  onRemove,
 }: {
   id: string;
   version?: number;
   interval?: Interval;
   due?: boolean;
   savingInterval?: boolean;
+  removing?: boolean;
   onIntervalChange?: (i: Interval) => void;
+  onRemove?: () => void;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
@@ -139,7 +133,7 @@ export function SourceConnect({
     setTimeout(() => setMsg(""), 6000);
   }
 
-  const Icon = ICONS[id] ?? Plug;
+  const Icon = sourceIcon(id);
   const connected = status?.connected;
   const live = status?.live ?? true;
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred);
@@ -192,10 +186,24 @@ export function SourceConnect({
             </div>
           ) : null}
           {connected ? (
-            <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
-              {busy ? <Spinner width={14} height={14} /> : null}
-              {busy ? "Syncing…" : "Sync"}
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
+                {busy ? <Spinner width={14} height={14} /> : null}
+                {busy ? "Syncing…" : "Sync"}
+              </Button>
+              {onRemove ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={onRemove}
+                  disabled={removing}
+                  title="Remove this automated import"
+                >
+                  {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
+                  Remove
+                </Button>
+              ) : null}
+            </>
           ) : (
             <Button
               size="sm"

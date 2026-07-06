@@ -136,6 +136,16 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "disconnect_source",
+    {
+      title: "Remove an automated import",
+      description: "Drop a source's data, credential, and schedule so it returns to the catalog.",
+      inputSchema: { source: z.string() },
+    },
+    async ({ source }) => guard(() => core.disconnectSource(source)),
+  );
+
+  server.registerTool(
     "rebuild",
     {
       title: "Rebuild the cache",

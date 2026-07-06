@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, GitHub, RefreshCw, Spinner } from "@/components/icons";
+import { Check, Eye, EyeOff, GitHub, RefreshCw, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
 import { Badge, Button, Input, cn } from "@/components/ui";
@@ -37,13 +37,17 @@ export function GithubConnect({
   interval = "off",
   due = false,
   savingInterval = false,
+  removing = false,
   onIntervalChange,
+  onRemove,
 }: {
   version?: number;
   interval?: Interval;
   due?: boolean;
   savingInterval?: boolean;
+  removing?: boolean;
   onIntervalChange?: (i: Interval) => void;
+  onRemove?: () => void;
 } = {}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
@@ -130,10 +134,24 @@ export function GithubConnect({
             </div>
           ) : null}
           {connected ? (
-            <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
-              {busy ? <Spinner width={14} height={14} /> : null}
-              {busy ? "Syncing…" : "Sync"}
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
+                {busy ? <Spinner width={14} height={14} /> : null}
+                {busy ? "Syncing…" : "Sync"}
+              </Button>
+              {onRemove ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={onRemove}
+                  disabled={removing}
+                  title="Remove this automated import"
+                >
+                  {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
+                  Remove
+                </Button>
+              ) : null}
+            </>
           ) : (
             <Button
               size="sm"
