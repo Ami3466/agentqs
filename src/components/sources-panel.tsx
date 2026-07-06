@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Clock, Spinner } from "@/components/icons";
+import { AlertTriangle, Check, Clock, Plug, Spinner } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { SourceConnect } from "@/components/source-connect";
 import { IntervalSelect } from "@/components/interval-select";
@@ -95,6 +95,16 @@ export function SourcesPanel({
 
   return (
     <div>
+      <div className="border-b border-border p-4">
+        <div className="flex items-center gap-2">
+          <Plug width={16} height={16} className="text-muted-fg" />
+          <p className="text-sm font-semibold text-fg">Sources</p>
+        </div>
+        <p className="mt-1 text-xs text-muted-fg">
+          Live feeds that sync on a schedule. Connect once with a key; set how often to pull.
+        </p>
+      </div>
+
       {autoMsg ? (
         <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-xs text-accent">
           {syncing ? <Spinner width={13} height={13} /> : <Check width={13} height={13} />}
