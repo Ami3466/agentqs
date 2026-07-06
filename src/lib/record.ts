@@ -270,6 +270,7 @@ export interface AppendInboxInput {
   source?: string; // memo | drop | chat | telegram | ...  (default: memo)
   kind?: string; // text | csv | file | ...                (default: text)
   meta?: unknown;
+  ts?: string; // capture time override (demo/backfill); defaults to now
 }
 
 /**
@@ -287,7 +288,7 @@ export function appendInboxItem(
 
   const item: InboxItem = {
     id: crypto.randomUUID(),
-    ts: new Date().toISOString(),
+    ts: input.ts || new Date().toISOString(),
     source: input.source?.trim() || "memo",
     kind: input.kind?.trim() || "text",
     text: input.text,
@@ -456,6 +457,13 @@ export function serializeCsv(header: string[], rows: string[][]): string {
   return lines.join("\n") + "\n";
 }
 
+export interface AppliedCell {
+  d: string; // date
+  m: string; // metric
+  p: string | null; // value before this write (null = the cell didn't exist)
+  v?: string; // value this write set (absent on items structured before it was recorded)
+}
+
 export interface DailyMergeResult {
   file: string;
   source: string;
@@ -463,6 +471,40 @@ export interface DailyMergeResult {
   metrics: string[]; // metric columns the incoming data actually wrote
   dates: string[]; // distinct dates the incoming data touched
   cells: number; // non-empty incoming metric cells applied (= daily rows added)
+  applied: AppliedCell[]; // cells whose value actually changed, in write order — replay in reverse to undo
+}
+
+/** date → {metric: value} plus the metric column order, as read from one daily CSV. */
+interface DailyTable {
+  metricOrder: string[];
+  table: Map<string, Map<string, string>>;
+}
+
+function loadDailyTable(file: string): DailyTable {
+  const metricOrder: string[] = [];
+  const seen = new Set<string>();
+  const table = new Map<string, Map<string, string>>();
+  if (!fs.existsSync(file)) return { metricOrder, table };
+  const { header, rows } = parseCsv(fs.readFileSync(file, "utf8"));
+  for (let c = 1; c < header.length; c++) {
+    const m = header[c].trim();
+    if (m && !seen.has(m)) {
+      seen.add(m);
+      metricOrder.push(m);
+    }
+  }
+  for (const r of rows) {
+    const date = (r[0] ?? "").trim();
+    if (!date) continue;
+    const row = table.get(date) ?? new Map<string, string>();
+    for (let c = 1; c < header.length; c++) {
+      const m = header[c].trim();
+      const v = (r[c] ?? "").trim();
+      if (m && v !== "") row.set(m, v);
+    }
+    table.set(date, row);
+  }
+  return { metricOrder, table };
 }
 
 /**
@@ -481,9 +523,9 @@ export function mergeDailyCsv(
   fs.mkdirSync(dailyDir, { recursive: true });
   const file = path.join(dailyDir, `${source}.csv`);
 
-  const table = new Map<string, Map<string, string>>();
-  const metricOrder: string[] = [];
-  const seen = new Set<string>();
+  // Load the current file (if any) into date → {metric: value}.
+  const { metricOrder, table } = loadDailyTable(file);
+  const seen = new Set<string>(metricOrder);
   const addMetric = (m: string) => {
     if (m && !seen.has(m)) {
       seen.add(m);
@@ -491,27 +533,11 @@ export function mergeDailyCsv(
     }
   };
 
-  // Load the current file (if any) into date → {metric: value}.
-  if (fs.existsSync(file)) {
-    const { header, rows } = parseCsv(fs.readFileSync(file, "utf8"));
-    for (let c = 1; c < header.length; c++) addMetric(header[c].trim());
-    for (const r of rows) {
-      const date = (r[0] ?? "").trim();
-      if (!date) continue;
-      const row = table.get(date) ?? new Map<string, string>();
-      for (let c = 1; c < header.length; c++) {
-        const m = header[c].trim();
-        const v = (r[c] ?? "").trim();
-        if (m && v !== "") row.set(m, v);
-      }
-      table.set(date, row);
-    }
-  }
-
   // Apply the incoming rows.
   const touchedMetrics: string[] = [];
   const touchedM = new Set<string>();
   const touchedD = new Set<string>();
+  const applied: AppliedCell[] = [];
   let cells = 0;
   for (const r of incoming.rows) {
     const date = (r[0] ?? "").trim();
@@ -522,6 +548,8 @@ export function mergeDailyCsv(
       const v = (r[c] ?? "").trim();
       if (!m || v === "") continue;
       addMetric(m);
+      const prev = row.get(m);
+      if (prev !== v) applied.push({ d: date, m, p: prev ?? null, v });
       row.set(m, v);
       if (!touchedM.has(m)) {
         touchedM.add(m);
@@ -548,7 +576,127 @@ export function mergeDailyCsv(
     metrics: touchedMetrics,
     dates: [...touchedD].sort(cmp),
     cells,
+    applied,
   };
+}
+
+// ---- Edits ------------------------------------------------------------------
+
+export type DailyEdit =
+  | { op: "set"; source: string; metric: string; date: string; value: string } // "" clears the cell
+  | { op: "deleteColumn"; source: string; metric: string }
+  | { op: "deleteRow"; date: string }; // removes the date across every source
+
+export interface DailyEditResult {
+  sets: number;
+  clears: number;
+  deletedColumns: number;
+  deletedRows: number;
+}
+
+/** Sources become filenames under record/daily — keep them to the same slug shape
+ *  the importers produce so an edit can never write outside the daily dir. */
+function safeSource(raw: string): string {
+  const s = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^[_-]+|[_-]+$/g, "")
+    .slice(0, 40);
+  return s || "manual";
+}
+
+/** Serialize a DailyTable back to its CSV, dropping metrics/dates that no longer
+ *  hold any value; an empty table deletes the file. */
+function writeDailyTable(file: string, t: DailyTable): void {
+  const liveMetrics = t.metricOrder.filter((m) =>
+    [...t.table.values()].some((row) => row.has(m)),
+  );
+  const dates = [...t.table.keys()]
+    .filter((d) => liveMetrics.some((m) => t.table.get(d)!.has(m)))
+    .sort(cmp);
+  if (!liveMetrics.length || !dates.length) {
+    if (fs.existsSync(file)) fs.rmSync(file);
+    return;
+  }
+  const header = ["date", ...liveMetrics];
+  const rows = dates.map((d) => {
+    const row = t.table.get(d)!;
+    return [d, ...liveMetrics.map((m) => row.get(m) ?? "")];
+  });
+  fs.writeFileSync(file, serializeCsv(header, rows), "utf8");
+}
+
+/**
+ * Apply manual edits to the daily record — the write path behind the Journal
+ * table's Edit mode and the Log's reject-revert. Cells set/cleared in order, so
+ * replaying a merge's `applied` list in reverse restores the pre-merge state.
+ * The caller rebuilds the SQLite cache afterwards.
+ */
+export function applyDailyEdits(
+  edits: DailyEdit[],
+  opts: { recordDir?: string; dataDir?: string } = {},
+): DailyEditResult {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const dailyDir = path.join(rDir, "daily");
+  fs.mkdirSync(dailyDir, { recursive: true });
+
+  const touched = new Map<string, DailyTable>();
+  const fileOf = (source: string) => path.join(dailyDir, `${source}.csv`);
+  const load = (source: string): DailyTable => {
+    let t = touched.get(source);
+    if (!t) {
+      t = loadDailyTable(fileOf(source));
+      touched.set(source, t);
+    }
+    return t;
+  };
+  const allSources = (): string[] =>
+    fs
+      .readdirSync(dailyDir)
+      .filter((f) => f.toLowerCase().endsWith(".csv"))
+      .map((f) => f.replace(/\.csv$/i, ""));
+
+  const result: DailyEditResult = { sets: 0, clears: 0, deletedColumns: 0, deletedRows: 0 };
+
+  for (const e of edits) {
+    if (e.op === "set") {
+      const date = e.date.trim();
+      const metric = e.metric.trim();
+      const value = e.value.trim();
+      if (!date || !metric) continue;
+      const t = load(safeSource(e.source));
+      if (value === "") {
+        if (t.table.get(date)?.delete(metric)) result.clears++;
+        continue;
+      }
+      if (!t.metricOrder.includes(metric)) t.metricOrder.push(metric);
+      const row = t.table.get(date) ?? new Map<string, string>();
+      row.set(metric, value);
+      t.table.set(date, row);
+      result.sets++;
+    } else if (e.op === "deleteColumn") {
+      const metric = e.metric.trim();
+      const t = load(safeSource(e.source));
+      const i = t.metricOrder.indexOf(metric);
+      if (i >= 0) {
+        t.metricOrder.splice(i, 1);
+        result.deletedColumns++;
+      }
+      for (const row of t.table.values()) row.delete(metric);
+    } else {
+      const date = e.date.trim();
+      if (!date) continue;
+      let removed = false;
+      for (const source of new Set([...allSources(), ...touched.keys()])) {
+        if (load(source).table.delete(date)) removed = true;
+      }
+      if (removed) result.deletedRows++;
+    }
+  }
+
+  for (const [source, t] of touched) writeDailyTable(fileOf(source), t);
+  return result;
 }
 
 // ---- Rebuild --------------------------------------------------------------
@@ -626,7 +774,11 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
         .join("\n");
       insSearch.run(`session:${s.id}`, "session", body);
     }
-    for (const it of rec.inbox) insSearch.run(`inbox:${it.id}`, "inbox", it.text);
+    // Skip image captures — their body is a base64 data URL, not searchable text.
+    for (const it of rec.inbox) {
+      if (it.kind === "image") continue;
+      insSearch.run(`inbox:${it.id}`, "inbox", it.text);
+    }
 
     const insMeta = db.prepare("INSERT INTO meta (key,value) VALUES (?,?)");
     insMeta.run("schema_version", String(SCHEMA_VERSION));

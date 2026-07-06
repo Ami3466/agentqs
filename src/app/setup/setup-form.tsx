@@ -7,7 +7,7 @@ import { Button, Field, Input } from "@/components/ui";
 
 export function SetupForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,7 @@ export function SetupForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!email.includes("@")) return setError("Enter a valid email.");
+    if (username.trim().length < 2) return setError("Enter a valid email or username.");
     if (password.length < 6) return setError("Password must be at least 6 characters.");
     if (password !== confirm) return setError("Passwords don't match.");
 
@@ -24,7 +24,7 @@ export function SetupForm() {
     const res = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: email.trim().toLowerCase(), password, confirm }),
+      body: JSON.stringify({ username: username.trim().toLowerCase(), password, confirm }),
     });
     setBusy(false);
 
@@ -39,14 +39,14 @@ export function SetupForm() {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Field label="Email" htmlFor="email">
+      <Field label="Email or username" htmlFor="username">
         <Input
-          id="email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          autoComplete="email"
+          id="username"
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="you@example.com or a username"
+          autoComplete="username"
           autoFocus
         />
       </Field>

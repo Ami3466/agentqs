@@ -79,7 +79,7 @@ export function VoiceSession() {
   }
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="static shrink-0 sm:relative" ref={ref}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -103,7 +103,7 @@ export function VoiceSession() {
       </button>
 
       {open ? (
-        <div className="absolute bottom-full left-0 z-50 mb-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+        <div className="absolute bottom-full left-2 right-2 z-50 mb-2 overflow-hidden rounded-xl border border-border bg-card shadow-xl sm:left-0 sm:right-auto sm:w-72 sm:max-w-[calc(100vw-2rem)]">
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
             <Waveform width={14} height={14} className="text-accent" />
             <span className="text-[13px] font-semibold text-fg">Live voice session</span>

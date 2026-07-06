@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Eye, EyeOff, Moon, Plus, RefreshCw, Spinner, Sparkles, Sun, Trash } from "@/components/icons";
-import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
+import { Check, Copy, Eye, EyeOff, Moon, Plus, RefreshCw, Spinner, Sparkles, Sun, Trash } from "@/components/icons";
+import { Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
-import type { PublicConfig } from "@/lib/config";
+import type { ChannelReplyPrefs, PublicConfig } from "@/lib/config";
 
 interface EmbedStatus {
   built: boolean;
@@ -17,6 +17,47 @@ interface EmbedStatus {
   backend: "sqlite-vec" | "js-cosine" | null;
   modelId: string;
 }
+
+/** One built-in Whisper model as /api/voice/whisper reports it. */
+interface WhisperModelRow {
+  id: string;
+  size: string;
+  hint: string;
+  installed: boolean;
+}
+
+interface WhisperStatus {
+  active: string; // the model memos use, "" when none
+  lang: string;
+  models: WhisperModelRow[];
+}
+
+/** What will transcribe a memo right now (from the mic capability probe). */
+interface SttCap {
+  ready: boolean;
+  backend: string | null;
+  label: string;
+}
+
+/** Whisper is multilingual but can't auto-detect (yet) — the memo language is a
+ *  setting. Token → label, the common ones; Whisper accepts ~100. */
+const WHISPER_LANGS: [string, string][] = [
+  ["en", "English"],
+  ["he", "Hebrew"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["pt", "Portuguese"],
+  ["it", "Italian"],
+  ["nl", "Dutch"],
+  ["ru", "Russian"],
+  ["uk", "Ukrainian"],
+  ["ar", "Arabic"],
+  ["hi", "Hindi"],
+  ["zh", "Chinese"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+];
 
 /** One editable provider account row in the list. */
 interface ProviderRow {
@@ -34,15 +75,27 @@ interface ProviderRow {
 let rid = 0;
 const newId = (type: string) => `${type}-${Date.now().toString(36)}-${(rid++).toString(36)}`;
 
-function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
+/** Settings row: heading + blurb on the left, the controls card on the right.
+ *  `id` makes the section a deep-link target (e.g. /settings#skills from the chat). */
+function Section({
+  id,
+  title,
+  desc,
+  children,
+}: {
+  id?: string;
+  title: string;
+  desc?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Card className="p-5 sm:p-6">
-      <div className="mb-4">
-        <h2 className="text-base font-semibold text-fg">{title}</h2>
-        {desc ? <p className="mt-0.5 text-sm text-muted-fg">{desc}</p> : null}
+    <section id={id} className="grid grid-cols-1 scroll-mt-4 items-start gap-3 md:grid-cols-[240px_1fr] md:gap-10 lg:grid-cols-[280px_1fr]">
+      <div className="md:pt-1.5">
+        <h2 className="text-sm font-semibold text-fg">{title}</h2>
+        {desc ? <p className="mt-1 text-[13px] leading-snug text-muted-fg">{desc}</p> : null}
       </div>
-      {children}
-    </Card>
+      <Card className="min-w-0 p-5 sm:p-6">{children}</Card>
+    </section>
   );
 }
 
@@ -69,15 +122,45 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   );
   const [sel, setSel] = useState(config.selectedModel);
 
-  // Embedding / Voice / Channels
+  // Embedding / Voice / Channels. Embedding + Google voice ride the SAME APIs as
+  // the AI providers, so their key defaults to a linked provider account ("" = own key).
   const [embMode, setEmbMode] = useState<"local" | "api">(config.embedding.mode);
+  const [embEnabled, setEmbEnabled] = useState(config.embedding.enabled);
+  const [embAutoIndex, setEmbAutoIndex] = useState(config.embedding.autoIndex);
   const [embModel, setEmbModel] = useState(config.embedding.model);
   const [embKey, setEmbKey] = useState("");
+  const [embProviderId, setEmbProviderId] = useState(config.embedding.providerId);
+  // Structure: auto-drain new captures into the daily table (skip the pending inbox).
+  const [autoStructure, setAutoStructure] = useState(config.autoStructure);
+  const [recordInAppRepo, setRecordInAppRepo] = useState(config.recordInAppRepo);
+  const [recordPrivateConfirmed, setRecordPrivateConfirmed] = useState(config.recordInAppRepo);
   const [voiceProvider, setVoiceProvider] = useState(config.voice.provider);
   const [voiceKey, setVoiceKey] = useState("");
+  const [voiceProviderId, setVoiceProviderId] = useState(config.voice.providerId);
   const [voiceAgent, setVoiceAgent] = useState(config.voice.agentId);
+
+  // Voice memos — the built-in local Whisper (install state + language).
+  const [whisper, setWhisper] = useState<WhisperStatus | null>(null);
+  const [whisperSel, setWhisperSel] = useState(config.voice.whisperModel || "base");
+  const [whisperLang, setWhisperLang] = useState(config.voice.whisperLang || "en");
+  const [whisperBusy, setWhisperBusy] = useState(false);
+  const [whisperErr, setWhisperErr] = useState("");
+  const [stt, setStt] = useState<SttCap | null>(null);
   const [tgToken, setTgToken] = useState("");
   const [slackToken, setSlackToken] = useState("");
+  // Per-channel reply behaviour: AI replies vs log-only, persona, model override.
+  const [replies, setReplies] = useState<Record<string, ChannelReplyPrefs>>({
+    telegram: { ai: true, ...config.channels.replies.telegram },
+    slack: { ai: true, ...config.channels.replies.slack },
+  });
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    if (typeof window !== "undefined") setOrigin(window.location.origin);
+  }, []);
+
+  function patchReplies(channel: string, up: Partial<ChannelReplyPrefs>) {
+    setReplies((r) => ({ ...r, [channel]: { ...r[channel], ...up } }));
+  }
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -173,6 +256,16 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     await refreshSkills();
   }
 
+  /** Bring back the default personas the user deleted (they're hidden, never lost). */
+  async function restoreDefaultSkills() {
+    await fetch("/api/skills", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ restoreDefaults: true }),
+    }).catch(() => {});
+    await refreshSkills();
+  }
+
   useEffect(() => {
     let alive = true;
     fetch("/api/embeddings")
@@ -183,10 +276,49 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => alive && d && Array.isArray(d.skills) && setSkills(d.skills))
       .catch(() => {});
+    fetch("/api/voice/whisper")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive || !d) return;
+        setWhisper(d as WhisperStatus);
+        if (d.active) setWhisperSel(d.active);
+      })
+      .catch(() => {});
+    fetch("/api/voice/memo")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && d && setStt(d as SttCap))
+      .catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
+
+  /** Install (download once) or switch to a built-in Whisper model, then refresh
+   *  what the mic will actually use. Remove deletes the weights from disk. */
+  async function whisperAction(method: "POST" | "DELETE") {
+    setWhisperBusy(true);
+    setWhisperErr("");
+    try {
+      const res = await fetch(
+        method === "POST" ? "/api/voice/whisper" : `/api/voice/whisper?model=${encodeURIComponent(whisperSel)}`,
+        method === "POST"
+          ? { method, headers: { "content-type": "application/json" }, body: JSON.stringify({ model: whisperSel }) }
+          : { method },
+      );
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setWhisperErr(d.error || "That didn't work — try again.");
+        return;
+      }
+      setWhisper(d as WhisperStatus);
+      const cap = await fetch("/api/voice/memo").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (cap) setStt(cap as SttCap);
+    } catch {
+      setWhisperErr("Could not reach the server.");
+    } finally {
+      setWhisperBusy(false);
+    }
+  }
 
   async function reindex() {
     setReindexing(true);
@@ -225,11 +357,28 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         baseUrl: p.baseUrl.trim(),
       })),
       selectedModel: sel ?? null,
-      embedding: { mode: embMode, model: embModel, ...(embKey ? { apiKey: embKey } : {}) },
-      voice: { provider: voiceProvider, agentId: voiceAgent, ...(voiceKey ? { apiKey: voiceKey } : {}) },
+      embedding: {
+        mode: embMode,
+        enabled: embEnabled,
+        autoIndex: embAutoIndex,
+        model: embModel,
+        providerId: embProviderId,
+        ...(embKey ? { apiKey: embKey } : {}),
+      },
+      autoStructure,
+      recordInAppRepo,
+      recordInAppRepoPrivateConfirmed: recordPrivateConfirmed,
+      voice: {
+        provider: voiceProvider,
+        providerId: voiceProviderId,
+        agentId: voiceAgent,
+        whisperLang,
+        ...(voiceKey ? { apiKey: voiceKey } : {}),
+      },
       channels: {
         ...(tgToken ? { telegramBotToken: tgToken } : {}),
         ...(slackToken ? { slackBotToken: slackToken } : {}),
+        replies,
       },
     };
     if (password) body.password = password;
@@ -261,10 +410,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const selRow = providers.find((p) => p.id === sel?.providerId);
 
   return (
-    <form onSubmit={save} className="max-w-2xl space-y-5">
+    <form onSubmit={save} className="space-y-6 md:space-y-8">
       {/* Profile */}
-      <Section title="Profile">
-        <div className="grid gap-4 sm:grid-cols-2">
+      <Section title="Profile" desc="Login email and password.">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Email" htmlFor="username">
             <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
           </Field>
@@ -282,7 +431,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       </Section>
 
       {/* AI providers list */}
-      <Section title="AI providers">
+      <Section title="AI providers" desc="API accounts that power chat. Add as many as you like, then pick the default model.">
         <div className="space-y-3">
           {providers.length === 0 ? (
             <p className="text-sm text-muted-fg">No providers added.</p>
@@ -303,42 +452,46 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
 
         {/* Default chat model */}
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <Field label="Default model — provider">
-            <Select
-              value={sel?.providerId ?? ""}
-              onChange={(e) => setSel(e.target.value ? { providerId: e.target.value, model: "" } : null)}
-            >
-              <option value="">None</option>
-              {keyedProviders.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label || providerTypeOf(p.type)?.label || p.type}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Default model — id">
-            <Select
-              value={sel?.model ?? ""}
-              disabled={!selRow}
-              onChange={(e) => sel && setSel({ providerId: sel.providerId, model: e.target.value })}
-            >
-              {selRow?.models.length ? (
-                selRow.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
+        <div className="mt-5 border-t border-border pt-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Default model — provider">
+              <Select
+                value={selRow ? selRow.id : ""}
+                onChange={(e) => setSel(e.target.value ? { providerId: e.target.value, model: "" } : null)}
+              >
+                <option value="">None</option>
+                {keyedProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label || providerTypeOf(p.type)?.label || p.type}
                   </option>
-                ))
-              ) : (
-                <option value={sel?.model ?? ""}>{sel?.model || "Load models on the provider"}</option>
-              )}
-            </Select>
-          </Field>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Default model — id">
+              <Select
+                value={selRow ? (sel?.model ?? "") : ""}
+                disabled={!selRow}
+                onChange={(e) => sel && setSel({ providerId: sel.providerId, model: e.target.value })}
+              >
+                {selRow?.models.length ? (
+                  selRow.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))
+                ) : (
+                  <option value={selRow ? (sel?.model ?? "") : ""}>
+                    {selRow ? sel?.model || "Load models on the provider" : "Pick a provider first"}
+                  </option>
+                )}
+              </Select>
+            </Field>
+          </div>
         </div>
       </Section>
 
       {/* Embedding model */}
-      <Section title="Embedding model">
+      <Section title="Embedding model" desc="Powers semantic search over your journal. Local runs on-device.">
         <div className="grid max-w-xs grid-cols-2 gap-2">
           {(["local", "api"] as const).map((m) => (
             <button
@@ -359,28 +512,61 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
             all-MiniLM, on-device. No key, no network. Stored in <code className="font-mono">{config.dataDir}</code>.
           </p>
         ) : (
-          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Model">
               <Input value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="text-embedding-3-small" />
             </Field>
-            <Field label="API key" hint={config.embedding.hasKey ? "A key is saved. Enter a new one to replace it." : undefined}>
-              <Input type="password" value={embKey} onChange={(e) => setEmbKey(e.target.value)} placeholder="key" className="font-mono" />
+            <Field label="Key" hint="Embeddings use the same API as your AI providers — reuse that key.">
+              <Select value={embProviderId} onChange={(e) => setEmbProviderId(e.target.value)}>
+                <option value="">Separate key…</option>
+                {keyedProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    Use {p.label || providerTypeOf(p.type)?.label || p.type} key
+                  </option>
+                ))}
+              </Select>
             </Field>
+            {!embProviderId ? (
+              <Field label="API key" hint={config.embedding.hasKey ? "A key is saved. Enter a new one to replace it." : undefined}>
+                <Input type="password" value={embKey} onChange={(e) => setEmbKey(e.target.value)} placeholder="key" className="font-mono" />
+              </Field>
+            ) : null}
           </div>
         )}
       </Section>
 
       {/* Voice model */}
-      <Section title="Voice model">
-        <div className="grid gap-4 sm:grid-cols-2">
+      <Section title="Voice model" desc="Speech provider for voice sessions.">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Provider">
-            <Select value={voiceProvider} onChange={(e) => setVoiceProvider(e.target.value as typeof voiceProvider)}>
+            <Select
+              value={voiceProvider}
+              onChange={(e) => {
+                const p = e.target.value as typeof voiceProvider;
+                setVoiceProvider(p);
+                if (p !== "google-live") setVoiceProviderId(""); // linked keys are Google-only
+              }}
+            >
               <option value="">None</option>
               <option value="elevenlabs">ElevenLabs</option>
               <option value="google-live">Google Live</option>
             </Select>
           </Field>
-          {voiceProvider ? (
+          {voiceProvider === "google-live" ? (
+            <Field label="Key" hint="Google Live uses the same Gemini API — reuse your Google provider key.">
+              <Select value={voiceProviderId} onChange={(e) => setVoiceProviderId(e.target.value)}>
+                <option value="">Separate key…</option>
+                {keyedProviders
+                  .filter((p) => p.type === "google")
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      Use {p.label || providerTypeOf(p.type)?.label || p.type} key
+                    </option>
+                  ))}
+              </Select>
+            </Field>
+          ) : null}
+          {voiceProvider && !voiceProviderId ? (
             <Field label="API key" hint={config.voice.hasKey ? "A key is saved. Enter a new one to replace it." : undefined}>
               <Input type="password" value={voiceKey} onChange={(e) => setVoiceKey(e.target.value)} placeholder="key" className="font-mono" />
             </Field>
@@ -393,35 +579,174 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
-      {/* Channels */}
-      <Section title="Channels">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Telegram bot token" hint={config.channels.telegram ? "Linked. Enter a new token to replace it." : undefined}>
-            <Input type="password" value={tgToken} onChange={(e) => setTgToken(e.target.value)} placeholder="123456:ABC…" className="font-mono" />
-          </Field>
-          <Field label="Slack bot token" hint={config.channels.slack ? "Linked. Enter a new token to replace it." : undefined}>
-            <Input type="password" value={slackToken} onChange={(e) => setSlackToken(e.target.value)} placeholder="xoxb-…" className="font-mono" />
-          </Field>
+      {/* Voice memos — the built-in local Whisper for the top-bar mic */}
+      <Section
+        id="memos"
+        title="Voice memos"
+        desc="How the top-bar mic transcribes. Install Whisper into the app for private, offline transcription — no key, no cloud, audio never leaves this machine."
+      >
+        <div className="space-y-4">
+          {/* What will transcribe a memo right now */}
+          <div className="flex items-center gap-2 text-sm">
+            <span className={cn("inline-flex h-2 w-2 shrink-0 rounded-full", stt?.ready ? "bg-accent" : "bg-muted-fg/50")} />
+            <span className="text-fg">{stt ? (stt.ready ? stt.label : "No transcriber configured") : "Checking…"}</span>
+          </div>
+
+          {/* Model picker — one download, cached in data/models like the embedder */}
+          {whisper ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {whisper.models.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setWhisperSel(m.id)}
+                  className={cn(
+                    "rounded-lg border px-3 py-2 text-left transition-colors",
+                    whisperSel === m.id ? "border-accent bg-accent/10" : "border-border bg-card hover:bg-muted",
+                  )}
+                >
+                  <span className="flex items-center gap-1.5 text-sm font-medium capitalize text-fg">
+                    {m.id}
+                    {whisper.active === m.id ? <Check width={13} height={13} className="text-accent" /> : null}
+                  </span>
+                  <span className="block text-[11px] text-muted-fg">
+                    {m.size} · {m.hint}
+                    {m.installed && whisper.active !== m.id ? " · installed" : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-fg">Checking installed models…</p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            {whisper?.active === whisperSel && whisper?.active ? (
+              <Button type="button" size="sm" onClick={() => void whisperAction("DELETE")} disabled={whisperBusy}>
+                {whisperBusy ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
+                {whisperBusy ? "Removing…" : "Remove"}
+              </Button>
+            ) : (
+              <Button type="button" size="sm" onClick={() => void whisperAction("POST")} disabled={whisperBusy || !whisper}>
+                {whisperBusy ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
+                {whisperBusy
+                  ? "Downloading…"
+                  : whisper?.models.find((m) => m.id === whisperSel)?.installed
+                    ? `Use ${whisperSel}`
+                    : `Install ${whisperSel} (${whisper?.models.find((m) => m.id === whisperSel)?.size ?? ""})`}
+              </Button>
+            )}
+            {whisperErr ? <span className="text-xs text-destructive">{whisperErr}</span> : null}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 border-t border-border pt-4 sm:grid-cols-2">
+            <Field label="Spoken language" hint="Whisper can't auto-detect yet — tell it what you speak. Saved with the form.">
+              <Select value={whisperLang} onChange={(e) => setWhisperLang(e.target.value)}>
+                {WHISPER_LANGS.map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          <p className="text-xs text-muted-fg">
+            The model downloads once into <code className="font-mono">data/models</code> and runs on-device.{" "}
+            <code className="font-mono">WHISPER_BIN</code> (your own engine) still takes priority; an OpenAI key stays
+            the cloud fallback.
+          </p>
         </div>
-        <p className="mt-3 text-xs text-muted-fg">
-          Webhook path <code className="font-mono">/api/channels/telegram</code> · <code className="font-mono">/api/channels/slack</code>.
-        </p>
+      </Section>
+
+      {/* Channels */}
+      <Section
+        title="Channels"
+        desc="Talk to your record from Telegram or Slack — the same brain as the chat. Each channel can answer with AI (pick the skill + model) or just log everything to your inbox."
+      >
+        <div className="space-y-4">
+          <ChannelCard
+            name="Telegram"
+            linked={config.channels.telegram}
+            token={tgToken}
+            onToken={setTgToken}
+            tokenPlaceholder="123456:ABC…"
+            webhook={`${origin || "https://<your-host>"}/api/channels/telegram`}
+            steps={[
+              "Message @BotFather in Telegram → /newbot → copy the bot token.",
+              "Paste the token below and save.",
+              "Register the webhook: open https://api.telegram.org/bot<TOKEN>/setWebhook?url=<webhook URL> once in your browser.",
+              "DM your bot. Plain text chats with your record; “// a note” logs a memo with zero tokens.",
+            ]}
+            prefs={replies.telegram}
+            onPrefs={(up) => patchReplies("telegram", up)}
+            skills={skills}
+            providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
+          />
+          <ChannelCard
+            name="Slack"
+            linked={config.channels.slack}
+            token={slackToken}
+            onToken={setSlackToken}
+            tokenPlaceholder="xoxb-…"
+            webhook={`${origin || "https://<your-host>"}/api/channels/slack`}
+            steps={[
+              "Create an app at api.slack.com/apps → OAuth & Permissions → add the chat:write, im:history and app_mentions:read bot scopes.",
+              "Install the app to your workspace and copy the xoxb- bot token below.",
+              "Event Subscriptions → enable, set the Request URL to the webhook URL, subscribe to message.im and app_mention.",
+              "DM the bot or @mention it. Plain text chats with your record; “// a note” logs a memo.",
+            ]}
+            prefs={replies.slack}
+            onPrefs={(up) => patchReplies("slack", up)}
+            skills={skills}
+            providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
+          />
+        </div>
       </Section>
 
       {/* Data */}
-      <Section title="Data">
+      <Section title="Data" desc="Where local files live. Keep personal data out of public repositories.">
+        <Field label="Record folder">
+          <div className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[13px] text-fg">
+            {config.recordDir}
+          </div>
+        </Field>
+        <p className="mt-2 text-xs text-muted-fg">
+          This is the plain-text journal record. Only sync it to a private repo or private folder, never this public
+          app checkout.
+        </p>
         <Field label="Data directory">
           <div className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[13px] text-fg">
             {config.dataDir}
           </div>
         </Field>
         <p className="mt-2 text-xs text-muted-fg">
-          Set with <code className="font-mono">AGENTQS_DATA_DIR</code> (a restart applies it).
+          Set with <code className="font-mono">AGENTQS_DATA_DIR</code> (a restart applies it). Keep the broader data
+          directory out of git: it also holds config, model downloads, thumbnails, and rebuildable SQLite caches.
         </p>
+        <div className="mt-4 border-t border-border pt-4">
+          <Checkbox
+            label="Allow this repo to track data/record"
+            hint="Only enable this if this GitHub repository is private. When off, /data stays ignored and accidental pushes will not include your record."
+            checked={recordInAppRepo}
+            onChange={(checked) => {
+              if (!checked) {
+                setRecordInAppRepo(false);
+                setRecordPrivateConfirmed(false);
+                return;
+              }
+              const ok = window.confirm(
+                "Warning: data/record contains your personal journal record. Only enable this if this GitHub repository is private. If this repo is public, your data can be pushed publicly. Continue?",
+              );
+              setRecordInAppRepo(ok);
+              setRecordPrivateConfirmed(ok);
+            }}
+          />
+        </div>
       </Section>
 
       {/* Appearance */}
-      <Section title="Appearance">
+      <Section title="Appearance" desc="Theme for the whole app.">
         <div className="grid max-w-xs grid-cols-2 gap-2">
           {(["light", "dark"] as const).map((t) => {
             const active = theme === t;
@@ -445,9 +770,37 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
+      {/* Structure (the pending inbox) */}
+      <Section
+        title="Structure"
+        desc="How new captures — memos, voice notes, dropped files, channel messages — become daily rows."
+      >
+        <Checkbox
+          label="Auto-structure new captures"
+          hint="Skips the pending inbox: each capture merges straight into your daily table. Prose uses your AI model; off = review and press Structure yourself."
+          checked={autoStructure}
+          onChange={setAutoStructure}
+        />
+      </Section>
+
       {/* Semantic search (embeddings) */}
-      <Section title="Semantic search">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+      <Section title="Semantic search" desc="The vector index over your entries. Reindex after big imports.">
+        <div className="space-y-3">
+          <Checkbox
+            label="Embed entries for semantic search"
+            hint="On by default — the local model runs on-device, no key. Off = no vectors; chat recall and search fall back to keywords."
+            checked={embEnabled}
+            onChange={setEmbEnabled}
+          />
+          <Checkbox
+            label="Auto-index"
+            hint="Rebuild the index automatically whenever new entries land. Off = only the Reindex button updates it."
+            checked={embAutoIndex}
+            onChange={setEmbAutoIndex}
+            disabled={!embEnabled}
+          />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-border pt-4">
           <div className="flex items-center gap-2 text-sm">
             <span className={cn("inline-flex h-2 w-2 rounded-full", embed?.built ? "bg-accent" : "bg-muted-fg/50")} />
             <span className="text-fg">
@@ -461,7 +814,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">out of date</span>
             ) : null}
           </div>
-          <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing}>
+          <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing || !embEnabled}>
             {reindexing ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
             {reindexing ? "Reindexing…" : "Reindex now"}
           </Button>
@@ -469,7 +822,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       </Section>
 
       {/* Skills */}
-      <Section title="Skills">
+      <Section id="skills" title="Skills" desc="Personas you can invoke in chat with /name. Any skill can be deleted — defaults are restorable.">
         <div className="space-y-2">
           {skills.map((s) => (
             <div key={s.id} className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
@@ -480,18 +833,25 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 </p>
                 <p className="text-xs text-muted-fg">{s.blurb}</p>
               </div>
-              {s.builtin ? null : (
-                <button
-                  type="button"
-                  onClick={() => void removeSkill(s.id)}
-                  className="shrink-0 rounded p-1 text-muted-fg hover:text-destructive"
-                  aria-label={`Remove ${s.name}`}
-                >
-                  <Trash width={15} height={15} />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => void removeSkill(s.id)}
+                className="shrink-0 rounded p-1 text-muted-fg hover:text-destructive"
+                aria-label={`Remove ${s.name}`}
+              >
+                <Trash width={15} height={15} />
+              </button>
             </div>
           ))}
+          {SKILLS.some((b) => !skills.some((s) => s.id === b.id)) ? (
+            <button
+              type="button"
+              onClick={() => void restoreDefaultSkills()}
+              className="text-xs font-medium text-muted-fg underline decoration-border underline-offset-2 hover:text-fg"
+            >
+              Restore default skills
+            </button>
+          ) : null}
         </div>
 
         <div className="mt-4 space-y-2 rounded-lg border border-border p-3">
@@ -513,18 +873,23 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
-      {/* Save bar */}
-      <div className="flex items-center gap-3">
-        <Button type="submit" variant="primary" disabled={saving}>
-          {saving ? <Spinner width={16} height={16} /> : null}
-          {saving ? "Saving…" : "Save changes"}
-        </Button>
-        {saved ? (
-          <span className="inline-flex items-center gap-1.5 text-sm text-accent">
-            <Check width={16} height={16} /> Saved
-          </span>
-        ) : null}
-        {error ? <span className="text-sm text-destructive">{error}</span> : null}
+      {/* Save bar — sticky so it stays reachable on this long page */}
+      <div className="sticky bottom-0 z-10 border-t border-border bg-bg/90 py-3 backdrop-blur">
+        <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] md:gap-10 lg:grid-cols-[280px_1fr]">
+          <div className="hidden md:block" />
+          <div className="flex items-center gap-3">
+            <Button type="submit" variant="primary" disabled={saving}>
+              {saving ? <Spinner width={16} height={16} /> : null}
+              {saving ? "Saving…" : "Save changes"}
+            </Button>
+            {saved ? (
+              <span className="inline-flex items-center gap-1.5 text-sm text-accent">
+                <Check width={16} height={16} /> Saved
+              </span>
+            ) : null}
+            {error ? <span className="text-sm text-destructive">{error}</span> : null}
+          </div>
+        </div>
       </div>
     </form>
   );
@@ -553,7 +918,7 @@ function ProviderCard({
             const type = e.target.value;
             onChange({ type, baseUrl: row.baseUrl && row.baseUrl !== defaultBaseFor(row.type) ? row.baseUrl : defaultBaseFor(type), models: [] });
           }}
-          className="w-40"
+          className="w-40 shrink-0"
         >
           {PROVIDER_TYPES.map((p) => (
             <option key={p.type} value={p.type}>
@@ -572,7 +937,7 @@ function ProviderCard({
         </button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="relative">
           <Input
             type={showKey ? "text" : "password"}
@@ -603,6 +968,167 @@ function ProviderCard({
           <span className="text-xs text-muted-fg">{row.models.length} models</span>
         ) : null}
         {row.err ? <span className="text-xs text-destructive">{row.err}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One channel (Telegram / Slack): status, a step-by-step connect guide, the bot
+ * token, the webhook URL (copyable), and how the bot answers — AI replies with a
+ * chosen skill + optional model override, or log-only capture (no LLM, no tokens).
+ */
+function ChannelCard({
+  name,
+  linked,
+  token,
+  onToken,
+  tokenPlaceholder,
+  webhook,
+  steps,
+  prefs,
+  onPrefs,
+  skills,
+  providers,
+}: {
+  name: string;
+  linked: boolean;
+  token: string;
+  onToken: (v: string) => void;
+  tokenPlaceholder: string;
+  webhook: string;
+  steps: string[];
+  prefs: ChannelReplyPrefs;
+  onPrefs: (up: Partial<ChannelReplyPrefs>) => void;
+  skills: Skill[];
+  providers: { id: string; label: string }[];
+}) {
+  // The guide starts open until the bot is linked, then folds away.
+  const [guideOpen, setGuideOpen] = useState(!linked);
+  const [copied, setCopied] = useState(false);
+  const ai = prefs.ai !== false;
+
+  function copyWebhook() {
+    navigator.clipboard?.writeText(webhook);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-4">
+      <div className="flex items-center gap-2">
+        <span className={cn("h-2 w-2 shrink-0 rounded-full", linked ? "bg-accent" : "bg-muted-fg/40")} aria-hidden />
+        <p className="text-sm font-semibold text-fg">{name}</p>
+        <span className="text-xs text-muted-fg">{linked ? "Linked" : "Not linked"}</span>
+        <button
+          type="button"
+          onClick={() => setGuideOpen((v) => !v)}
+          className="ml-auto text-xs font-medium text-muted-fg underline decoration-border underline-offset-2 hover:text-fg"
+        >
+          {guideOpen ? "Hide guide" : "How it works"}
+        </button>
+      </div>
+
+      {guideOpen ? (
+        <ol className="space-y-1 rounded-lg bg-muted/40 p-3 text-xs text-muted-fg">
+          {steps.map((s, i) => (
+            <li key={i} className="flex gap-2">
+              <span className="w-4 shrink-0 text-right tabular-nums text-fg">{i + 1}.</span>
+              <span>{s}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Bot token" hint={linked ? "Linked. Enter a new token to replace it." : undefined}>
+          <Input
+            type="password"
+            value={token}
+            onChange={(e) => onToken(e.target.value)}
+            placeholder={tokenPlaceholder}
+            className="font-mono"
+          />
+        </Field>
+        <Field label="Webhook URL" hint="Point the platform's events here.">
+          <div className="flex h-10 items-center gap-1.5 rounded-lg border border-border bg-muted/40 pl-3 pr-1">
+            <code className="scrollbar-none flex-1 overflow-x-auto whitespace-nowrap font-mono text-[12px] text-fg">
+              {webhook}
+            </code>
+            <button
+              type="button"
+              onClick={copyWebhook}
+              aria-label="Copy webhook URL"
+              className="shrink-0 rounded-md p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+            >
+              {copied ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
+            </button>
+          </div>
+        </Field>
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-sm font-medium text-fg">Replies</p>
+        <div className="grid max-w-xs grid-cols-2 gap-2">
+          {([
+            { value: true, label: "AI replies", hint: "grounded chat" },
+            { value: false, label: "Log only", hint: "no AI, no tokens" },
+          ] as const).map((opt) => (
+            <button
+              key={String(opt.value)}
+              type="button"
+              onClick={() => onPrefs({ ai: opt.value })}
+              className={cn(
+                "rounded-lg border px-3 py-2 text-left transition-colors",
+                ai === opt.value ? "border-accent bg-accent/10" : "border-border bg-card hover:bg-muted",
+              )}
+            >
+              <span className="block text-sm font-medium text-fg">{opt.label}</span>
+              <span className="block text-[11px] text-muted-fg">{opt.hint}</span>
+            </button>
+          ))}
+        </div>
+        {ai ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Field label="Skill">
+              <Select value={prefs.skill ?? ""} onChange={(e) => onPrefs({ skill: e.target.value || undefined })}>
+                <option value="">Default</option>
+                {skills.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Model — provider">
+              <Select
+                value={prefs.providerId ?? ""}
+                onChange={(e) => onPrefs({ providerId: e.target.value || undefined, model: undefined })}
+              >
+                <option value="">App default</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {prefs.providerId ? (
+              <Field label="Model — id">
+                <Input
+                  value={prefs.model ?? ""}
+                  onChange={(e) => onPrefs({ model: e.target.value || undefined })}
+                  placeholder="provider default"
+                  className="font-mono text-[13px]"
+                />
+              </Field>
+            ) : null}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-muted-fg">
+            Every message lands in your inbox as a memo — structure it later from the Data tab.
+          </p>
+        )}
       </div>
     </div>
   );

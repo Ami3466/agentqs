@@ -150,7 +150,13 @@ async function main() {
   if (key) {
     try {
       const live = await runMentor({
-        model: resolveModel("anthropic", key),
+        model: resolveModel({
+          type: "anthropic",
+          protocol: "anthropic",
+          apiKey: key,
+          baseUrl: "https://api.anthropic.com/v1",
+          model: "claude-sonnet-4-5",
+        }),
         system:
           "You are the mentor. Use the tools to fetch the user's real numbers before answering; cite specific figures.",
         messages: [{ role: "user", content: question }],

@@ -297,9 +297,9 @@ program
   .command("import <file>")
   .description("import any file into the record (CSV structures instantly)")
   .option("-n, --name <source>", "source name for the daily table")
-  .action((file: string, opts: { name?: string }) => {
+  .action(async (file: string, opts: { name?: string }) => {
     try {
-      out(core.importRaw({ file, name: opts.name }), (d) => d.note);
+      out(await core.importRaw({ file, name: opts.name }), (d) => d.note);
     } catch (e) {
       die(e);
     }

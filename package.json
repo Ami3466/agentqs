@@ -2,6 +2,7 @@
   "name": "agentqs",
   "version": "0.1.0",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "bin": {
     "agentqs": "bin/agentqs.mjs"
   },
@@ -29,9 +30,12 @@
     "voice:test": "tsx scripts/voice-memo.ts",
     "channels:test": "tsx scripts/channels.ts",
     "semantic:test": "tsx scripts/embeddings.ts",
+    "flags:test": "tsx scripts/auto-flags.ts",
     "photos:test": "tsx scripts/photos.ts",
     "agent:test": "tsx scripts/agent-brain.ts",
-    "automation:test": "tsx scripts/automation.ts"
+    "automation:test": "tsx scripts/automation.ts",
+    "edit:test": "tsx scripts/journal-edit.ts",
+    "log:test": "NEXT_DIST_DIR=.next-e2e next build && NEXT_DIST_DIR=.next-e2e tsx scripts/data-log-e2e.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.8",
@@ -50,6 +54,7 @@
     "react-dom": "18.3.1",
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.9",
+    "tailwind-merge": "^3.6.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

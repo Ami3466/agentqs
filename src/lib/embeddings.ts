@@ -3,6 +3,7 @@ import path from "path";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { recordDir as recordDirFor, vecPath } from "./paths";
+import { autoIndexEnabled, embeddingEnabled, readConfig } from "./config";
 import { readInboxFromRecord, readSessionsFromRecord, recordHash } from "./record";
 import { blobToVector, cosine, vectorToBlob } from "./embed";
 import { getTextEmbedder } from "./embedder";
@@ -218,10 +219,13 @@ export async function indexStatus(
 }
 
 /** Build the index on first use and whenever the record/model changes. This is the
- *  "default-on, background-index on first run" behaviour — callers just call it. */
+ *  "default-on, background-index on first run" behaviour — callers just call it.
+ *  Settings can turn auto-indexing off; then only an explicit `buildIndex` (the
+ *  "Reindex now" button / CLI) refreshes the index. */
 export async function ensureIndex(
   opts: { recordDir?: string; vecFile?: string } = {},
 ): Promise<BuildResult | null> {
+  if (!autoIndexEnabled(readConfig())) return null;
   const status = await indexStatus(opts);
   if (status.built && !status.stale) return null;
   return buildIndex(opts);
@@ -259,6 +263,8 @@ export interface SearchOptions {
 export async function semanticSearch(query: string, opts: SearchOptions = {}): Promise<SemanticHit[]> {
   const q = query.trim();
   if (!q) return [];
+  // Settings kill-switch: embeddings off → no vectors, callers fall back to keywords.
+  if (!embeddingEnabled(readConfig())) return [];
   const file = opts.vecFile ?? vecPath();
   const limit = Math.max(1, Math.min(opts.limit ?? 5, 25));
   const minScore = opts.minScore ?? 0.05;

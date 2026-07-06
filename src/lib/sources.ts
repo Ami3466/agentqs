@@ -101,4 +101,5 @@ export interface SourceView {
   automation?: boolean; // a browser-automation recipe (Playwright-driven, no API)
   automationStatus?: "ok" | "error" | null; // last replay outcome (automation rows)
   automationError?: string | null; // last replay error, if any
+  plugin?: boolean; // a Tier-1 plugin source — supports extra accounts ("<id>-2" instances)
 }

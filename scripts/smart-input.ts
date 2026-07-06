@@ -3,12 +3,12 @@
  * Ships-when proof for Loop 6 · Smart input modes.
  *
  * The Chat box routes one typed line three ways by its prefix — plain text = chat,
- * `>>` = a memo (raw to the inbox, no LLM), `/` = a command — and a skill chip
+ * `//` = a memo (raw to the inbox, no LLM), `/` = a command — and a skill chip
  * switches persona. This proves all of it end to end:
  *
  *   1. the dispatch contract (src/lib/smart-input.ts) — the SAME module the input
- *      box imports — routes `>> slept bad`, `/sync`, and plain text correctly;
- *   2. over the built app's real routes: `>> slept bad` lands in the inbox as a
+ *      box imports — routes `// slept bad`, `/sync`, and plain text correctly;
+ *   2. over the built app's real routes: `// slept bad` lands in the inbox as a
  *      raw pending memo with NO LLM (no daily row, no key set);
  *   3. `/sync` is wired to a live route that runs its logic, and the fetch →
  *      normalize → merge → rebuild pipeline it drives lands commits in the daily
@@ -101,8 +101,8 @@ async function main() {
   // ---- 1. The dispatch contract (pure, shared with the input box) ---------
   console.log("\nRouting one typed line by its prefix (the shared smart-input contract)…\n");
   check('plain text → "chat" mode', modeOf("why have I felt off?") === "chat");
-  check('">> slept bad" → "memo" mode', modeOf(">> slept bad") === "memo");
-  check('">> slept bad" memo text is stripped', memoText(">> slept bad") === "slept bad");
+  check('"// slept bad" → "memo" mode', modeOf("// slept bad") === "memo");
+  check('"// slept bad" memo text is stripped', memoText("// slept bad") === "slept bad");
   check('"/sync" → "command" mode', modeOf("/sync") === "command");
   check('parseCommand("/sync torvalds") splits cmd + args',
     (() => { const p = parseCommand("/sync torvalds"); return p.cmd === "sync" && p.args[0] === "torvalds"; })());
@@ -149,14 +149,14 @@ async function main() {
     check("session cookie issued", Boolean(cookie));
     const auth = { "content-type": "application/json", cookie };
 
-    // ---- 2. `>> slept bad` lands in the inbox, raw, no LLM ---------------
-    console.log('\n  >> slept bad\n');
+    // ---- 2. `// slept bad` lands in the inbox, raw, no LLM ---------------
+    console.log('\n  // slept bad\n');
     const before = await (await fetch(`${base}/api/inbox`, { headers: { cookie } })).json();
     const memo = await fetch(`${base}/api/inbox`, {
       method: "POST",
       headers: auth,
-      // exactly what the memo path sends: the `>>` stripped, source "memo".
-      body: JSON.stringify({ text: memoText(">> slept bad"), source: "memo" }),
+      // exactly what the memo path sends: the `//` stripped, source "memo".
+      body: JSON.stringify({ text: memoText("// slept bad"), source: "memo" }),
     });
     const memoData = await memo.json();
     check("memo POST accepted", memo.ok, `pending ${memoData.pending}`);
@@ -211,7 +211,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    "\n✓ Smart input ships: `>> slept bad` lands in the inbox raw (no LLM), `/sync` runs its live pipeline into the daily table, and the skill chip switches persona.\n",
+    "\n✓ Smart input ships: `// slept bad` lands in the inbox raw (no LLM), `/sync` runs its live pipeline into the daily table, and the skill chip switches persona.\n",
   );
 }
 

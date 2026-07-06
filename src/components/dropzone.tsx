@@ -5,6 +5,11 @@ import { Spinner, Upload } from "@/components/icons";
 import { cn } from "@/components/ui";
 
 const TEXT_EXT = /\.(csv|tsv|tab|psv|txt|md|markdown|json|jsonl|ndjson|log|ics|vcf|xml|yaml|yml)$/i;
+type UploadItem = { file: File; path: string };
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntry | null;
+};
+
 function looksTextual(f: File): boolean {
   return f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
 }
@@ -28,12 +33,76 @@ function readDataUrl(f: File): Promise<string> {
   });
 }
 
+function uploadItems(files: FileList | File[]): UploadItem[] {
+  return Array.from(files).map((file) => ({
+    file,
+    path: file.webkitRelativePath || file.name,
+  }));
+}
+
+function isUploadItems(input: FileList | File[] | UploadItem[]): input is UploadItem[] {
+  return Array.isArray(input) && input.every((item) => "file" in item);
+}
+
+function fileFromEntry(entry: FileSystemFileEntry, path: string): Promise<UploadItem> {
+  return new Promise((resolve, reject) => {
+    entry.file(
+      (file) => resolve({ file, path }),
+      (err) => reject(err),
+    );
+  });
+}
+
+function readDirectoryEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemEntry[]> {
+  const reader = entry.createReader();
+  const entries: FileSystemEntry[] = [];
+  return new Promise((resolve, reject) => {
+    function readBatch() {
+      reader.readEntries(
+        (batch) => {
+          if (!batch.length) {
+            resolve(entries);
+            return;
+          }
+          entries.push(...batch);
+          readBatch();
+        },
+        (err) => reject(err),
+      );
+    }
+    readBatch();
+  });
+}
+
+async function itemsFromEntry(entry: FileSystemEntry, parent = ""): Promise<UploadItem[]> {
+  const path = parent ? `${parent}/${entry.name}` : entry.name;
+  if (entry.isFile) return [await fileFromEntry(entry as FileSystemFileEntry, path)];
+  if (!entry.isDirectory) return [];
+
+  const children = await readDirectoryEntries(entry as FileSystemDirectoryEntry);
+  const nested = await Promise.all(children.map((child) => itemsFromEntry(child, path)));
+  return nested.flat();
+}
+
+async function droppedItems(dataTransfer: DataTransfer): Promise<UploadItem[]> {
+  const items = Array.from(dataTransfer.items ?? []);
+  const entries = items
+    .map((item) => (item as DataTransferItemWithEntry).webkitGetAsEntry?.() ?? null)
+    .filter((entry): entry is FileSystemEntry => Boolean(entry));
+
+  if (entries.length) {
+    const nested = await Promise.all(entries.map((entry) => itemsFromEntry(entry)));
+    return nested.flat();
+  }
+  return uploadItems(dataTransfer.files);
+}
+
 /**
  * The one manual ingest path. Drag & drop — or click to browse — ANY file,
- * including images. Text files land verbatim in the pending inbox; images are read
- * as a data URL and land there too (embedded on Structure). This is the ONLY drop
- * target on the page: sources are live feeds, a dropped file is not a connection.
- * Bumps the shared `version` so the inbox refetches.
+ * including folders and images. Text files land verbatim in the pending inbox;
+ * images are read as a data URL and land there too (embedded on Structure). This is
+ * the ONLY drop target on the page: sources are live feeds, a dropped file is not a
+ * connection. Bumps the shared `version` so the inbox refetches.
  */
 export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
   const [drag, setDrag] = useState(false);
@@ -48,8 +117,8 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
   }
 
   const upload = useCallback(
-    async (files: FileList | File[]) => {
-      const list = Array.from(files);
+    async (input: FileList | File[] | UploadItem[]) => {
+      const list = isUploadItems(input) ? input : uploadItems(input);
       if (!list.length) return;
       setBusy(true);
       let ok = 0;
@@ -63,42 +132,44 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
         return res.ok;
       }
       try {
-        for (const f of list) {
+        for (const item of list) {
+          const f = item.file;
+          const filename = item.path || f.name;
           if (f.type.startsWith("image/")) {
             let dataUrl = "";
             try {
               dataUrl = await readDataUrl(f);
             } catch {
-              skipped.push(f.name);
+              skipped.push(filename);
               continue;
             }
             const done = await post({
               text: dataUrl,
               kind: "image",
-              meta: { filename: f.name, bytes: f.size, mime: f.type },
+              meta: { filename, bytes: f.size, mime: f.type },
             });
             if (done) ok++;
-            else skipped.push(f.name);
+            else skipped.push(filename);
             continue;
           }
           let text = "";
           try {
             text = await f.text();
           } catch {
-            skipped.push(f.name);
+            skipped.push(filename);
             continue;
           }
           if (!text.trim() || (!looksTextual(f) && isBinary(text))) {
-            skipped.push(f.name);
+            skipped.push(filename);
             continue;
           }
           const done = await post({
             text,
-            kind: kindOf(f.name),
-            meta: { filename: f.name, bytes: f.size },
+            kind: kindOf(filename),
+            meta: { filename, bytes: f.size },
           });
           if (done) ok++;
-          else skipped.push(f.name);
+          else skipped.push(filename);
         }
         if (ok) {
           say("ok", `${ok} file${ok === 1 ? "" : "s"} added — Structure below.`);
@@ -131,7 +202,11 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
     e.preventDefault();
     dragDepth.current = 0;
     setDrag(false);
-    if (e.dataTransfer?.files?.length) void upload(e.dataTransfer.files);
+    if (e.dataTransfer?.items?.length || e.dataTransfer?.files?.length) {
+      void droppedItems(e.dataTransfer)
+        .then((items) => upload(items))
+        .catch(() => say("error", "Couldn't read that folder."));
+    }
   }
 
   return (
@@ -164,7 +239,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           {busy ? "Adding…" : "Drop data here"}
         </p>
         <p className="max-w-md text-sm text-muted-fg">
-          Any file. Photos will be embedded.
+          Files or folders. Photos will be embedded.
         </p>
       </div>
       <input

@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, GitHub, RefreshCw, Spinner, Trash } from "@/components/icons";
+import { Check, Eye, EyeOff, GitHub, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
-import { Badge, Button, Input, cn } from "@/components/ui";
-import { ago, type Interval } from "@/lib/sources";
+import { Button, Input, cn } from "@/components/ui";
+import { type Interval } from "@/lib/sources";
 
 interface Day {
   date: string;
@@ -35,7 +35,6 @@ function Spark({ data }: { data: Day[] }) {
 export function GithubConnect({
   version = 0,
   interval = "off",
-  due = false,
   savingInterval = false,
   removing = false,
   onIntervalChange,
@@ -109,29 +108,10 @@ export function GithubConnect({
           <GitHub width={18} height={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <p className="truncate text-sm font-medium text-fg">GitHub</p>
-            <Badge>api</Badge>
-            {connected ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
-                <Check width={12} height={12} /> connected
-              </span>
-            ) : null}
-            {connected && interval !== "off" ? (
-              <span
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-fg"
-                title={due ? "Overdue — auto-syncs when the Data tab opens" : "Scheduled auto-sync"}
-              >
-                <RefreshCw width={11} height={11} />
-                {due ? "auto-syncs on open" : `syncs ${interval}`}
-              </span>
-            ) : null}
+            {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
-          <p className="truncate text-xs text-muted-fg">
-            {connected
-              ? `${status?.total} commits · synced ${ago(status?.syncedAt ?? null)}`
-              : "commits per day"}
-          </p>
         </div>
         <div className="flex items-center gap-2">
           {connected && onIntervalChange ? (
@@ -181,12 +161,6 @@ export function GithubConnect({
 
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
-          <p className="text-xs text-muted-fg">
-            Paste a GitHub token (a fine-grained PAT, read-only, or a classic{" "}
-            <code className="font-mono">repo</code> token). Stored in your data dir; used only to
-            read your commit counts. Or set <code className="font-mono">GITHUB_TOKEN</code> in the
-            environment.
-          </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Input
@@ -214,7 +188,6 @@ export function GithubConnect({
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-fg">Auto-sync</span>
             <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
-            <span className="text-[11px] text-muted-fg">Change it anytime after connecting.</span>
           </div>
         </div>
       ) : null}

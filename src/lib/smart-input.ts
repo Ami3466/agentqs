@@ -13,6 +13,11 @@
 
 export type Mode = "chat" | "memo" | "command";
 
+/** sessionStorage key for a one-shot chat draft handed over from another tab
+ *  (e.g. the Data Log's "Ask AI" tags a capture for review). Chat consumes and
+ *  clears it on mount. */
+export const DRAFT_KEY = "agentqs.draft";
+
 /** Which mode a raw input line falls into, purely from its prefix. */
 export function modeOf(text: string): Mode {
   if (text.startsWith("//")) return "memo";

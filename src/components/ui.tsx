@@ -7,9 +7,20 @@ import {
   type ReactNode,
   type SelectHTMLAttributes,
 } from "react";
+import { twMerge } from "tailwind-merge";
 
+/** Joins class names and resolves Tailwind conflicts (a passed `w-40` beats a base `w-full`). */
 export function cn(...parts: Array<string | false | null | undefined>): string {
-  return parts.filter(Boolean).join(" ");
+  return twMerge(parts.filter(Boolean).join(" "));
+}
+
+/** Compact relative timestamp for list rows: "just now", "5m ago", "3d ago". */
+export function ago(iso: string): string {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ---- Button ---------------------------------------------------------------
@@ -80,17 +91,34 @@ export const Select = forwardRef<
   HTMLSelectElement,
   SelectHTMLAttributes<HTMLSelectElement>
 >(({ className, children, ...props }, ref) => (
-  <select
-    ref={ref}
-    className={cn(
-      "h-10 w-full rounded-lg border border-input bg-bg px-3 text-sm text-fg",
-      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:border-ring/60",
-      className,
-    )}
-    {...props}
-  >
-    {children}
-  </select>
+  // className lands on both layers: layout (w-*, flex-*) sizes the wrapper,
+  // control styles (h-*, text-*) size the select; the select always fills the wrapper.
+  <div className={cn("relative w-full", className)}>
+    <select
+      ref={ref}
+      className={cn(
+        "h-10 w-full appearance-none rounded-lg border border-input bg-bg pl-3 pr-8 text-sm text-fg",
+        "transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:border-ring/60",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </select>
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-fg"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  </div>
 ));
 Select.displayName = "Select";
 
@@ -99,12 +127,15 @@ Select.displayName = "Select";
 export function Card({
   className,
   children,
+  id,
 }: {
   className?: string;
   children: ReactNode;
+  id?: string; // anchor target (e.g. /settings#skills)
 }) {
   return (
     <div
+      id={id}
       className={cn(
         "rounded-xl border border-border bg-card text-card-fg shadow-sm",
         className,
@@ -137,6 +168,37 @@ export function Field({
       {children}
       {hint ? <p className="text-xs text-muted-fg">{hint}</p> : null}
     </div>
+  );
+}
+
+/** Labelled checkbox with an optional hint line — the standard settings toggle. */
+export function Checkbox({
+  label,
+  hint,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className={cn("flex items-start gap-2.5", disabled ? "opacity-50" : "cursor-pointer")}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+      />
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-fg">{label}</span>
+        {hint ? <span className="block text-xs text-muted-fg">{hint}</span> : null}
+      </span>
+    </label>
   );
 }
 

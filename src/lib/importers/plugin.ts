@@ -54,15 +54,20 @@ export interface ImporterPlugin {
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }
 
-/** Credential precedence: explicit arg → env var → saved config (sourceCreds[id]). */
+/** Credential precedence: explicit arg → env var → saved config (sourceCreds[key]).
+ *  `credKey` is the multi-account instance id ("spotify-2"); the env fallback only
+ *  applies to the base account so extra accounts never silently share one login. */
 export function resolveCredential(
   plugin: ImporterPlugin,
   explicit?: string,
   cfg: AppConfig | null = readConfig(),
+  credKey: string = plugin.id,
 ): string | undefined {
   if (explicit && explicit.trim()) return explicit.trim();
-  if (plugin.envKey && process.env[plugin.envKey]) return process.env[plugin.envKey];
-  return cfg?.sourceCreds?.[plugin.id]?.trim() || undefined;
+  if (credKey === plugin.id && plugin.envKey && process.env[plugin.envKey]) {
+    return process.env[plugin.envKey];
+  }
+  return cfg?.sourceCreds?.[credKey]?.trim() || undefined;
 }
 
 export interface PluginImportSummary extends DailyMergeResult {
@@ -75,7 +80,9 @@ export interface PluginImportSummary extends DailyMergeResult {
 }
 
 /**
- * Run one plugin end to end: fetch → normalize → merge into record/daily/<id>.csv.
+ * Run one plugin end to end: fetch → normalize → merge into record/daily/<fileId>.csv.
+ * `fileId` defaults to the plugin id; a multi-account instance passes its own id
+ * ("spotify-2") so each account keeps its own daily file + journal columns.
  * Rebuilding the SQLite cache is the caller's job (route / CLI), exactly like the
  * GitHub importer.
  */
@@ -83,15 +90,16 @@ export async function importPlugin(
   plugin: ImporterPlugin,
   ctx: ImporterContext,
   dir: string = recordDir(),
+  fileId: string = plugin.id,
 ): Promise<PluginImportSummary> {
   if (plugin.requiresCredential && !ctx.fetchImpl && !ctx.credential) {
     throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}.`);
   }
   const result = await plugin.fetch(ctx);
-  const merge = mergeDailyCsv(dir, plugin.id, result.table);
+  const merge = mergeDailyCsv(dir, fileId, result.table);
   return {
     ...merge,
-    id: plugin.id,
+    id: fileId,
     name: plugin.name,
     from: ctx.from,
     to: ctx.to,

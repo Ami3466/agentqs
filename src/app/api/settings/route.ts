@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { hashPassword } from "@/lib/auth";
-import { publicConfig, readConfig, sanitizeProviders, sessionSecretFor, writeConfig } from "@/lib/config";
+import {
+  effectiveProviders,
+  publicConfig,
+  readConfig,
+  sanitizeProviders,
+  sessionSecretFor,
+  writeConfig,
+  type ChannelReplyPrefs,
+} from "@/lib/config";
+import { recordInAppRepoEnabled, setRecordInAppRepoEnabled } from "@/lib/record-git";
 import { getCurrentUser, setSessionCookie } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -21,6 +30,26 @@ export async function GET() {
 function keepOrSet(incoming: unknown, prev: string | undefined): string | undefined {
   if (typeof incoming === "string" && incoming.trim()) return incoming;
   return prev;
+}
+
+/** Coerce untrusted per-channel reply prefs (mode / skill / model override). */
+function sanitizeChannelReplies(
+  input: unknown,
+  prev: Record<string, ChannelReplyPrefs> | undefined,
+): Record<string, ChannelReplyPrefs> | undefined {
+  if (!input || typeof input !== "object") return prev;
+  const out: Record<string, ChannelReplyPrefs> = {};
+  for (const [channel, raw] of Object.entries(input as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object" || !/^[a-z0-9-]{1,30}$/.test(channel)) continue;
+    const v = raw as Record<string, unknown>;
+    out[channel] = {
+      ai: v.ai !== false,
+      skill: typeof v.skill === "string" ? v.skill.slice(0, 60) : undefined,
+      providerId: typeof v.providerId === "string" ? v.providerId.slice(0, 60) : undefined,
+      model: typeof v.model === "string" ? v.model.slice(0, 100) : undefined,
+    };
+  }
+  return out;
 }
 
 export async function POST(req: Request) {
@@ -55,7 +84,9 @@ export async function POST(req: Request) {
   // the legacy single-provider fields.
   if (Array.isArray(body.providers)) {
     const incoming = sanitizeProviders(body.providers);
-    const prevById = new Map((cfg.providers ?? []).map((p) => [p.id, p]));
+    // effectiveProviders, not cfg.providers: a legacy single-key config shows up in
+    // the form as a row too, and its stored key must survive a blank-key save.
+    const prevById = new Map(effectiveProviders(cfg).map((p) => [p.id, p]));
     cfg.providers = incoming.map((p) => ({
       ...p,
       apiKey: p.apiKey || prevById.get(p.id)?.apiKey || "",
@@ -75,29 +106,43 @@ export async function POST(req: Request) {
     }
   }
 
-  // Embedding model
+  // Embedding model + the semantic-search switches (absent booleans keep the stored value)
   if (body.embedding && typeof body.embedding === "object") {
     const e = body.embedding;
     cfg.embedding = {
       mode: e.mode === "api" ? "api" : "local",
+      enabled: typeof e.enabled === "boolean" ? e.enabled : cfg.embedding?.enabled,
+      autoIndex: typeof e.autoIndex === "boolean" ? e.autoIndex : cfg.embedding?.autoIndex,
       model: typeof e.model === "string" ? e.model.trim() : cfg.embedding?.model,
       providerId: typeof e.providerId === "string" ? e.providerId : cfg.embedding?.providerId,
       apiKey: keepOrSet(e.apiKey, cfg.embedding?.apiKey),
     };
   }
 
-  // Voice model
+  // Auto-structure: new captures skip the pending inbox and merge straight into daily
+  if (typeof body.autoStructure === "boolean") {
+    cfg.autoStructure = body.autoStructure;
+  }
+
+  // Voice model. whisperModel is managed by /api/voice/whisper (install/remove),
+  // so a form save preserves it; the language rides along with the form.
   if (body.voice && typeof body.voice === "object") {
     const v = body.voice;
     const provider = v.provider === "elevenlabs" || v.provider === "google-live" ? v.provider : "";
     cfg.voice = {
       provider,
+      providerId: typeof v.providerId === "string" ? v.providerId : cfg.voice?.providerId,
       apiKey: keepOrSet(v.apiKey, cfg.voice?.apiKey),
       agentId: typeof v.agentId === "string" ? v.agentId.trim() : cfg.voice?.agentId,
+      whisperModel: cfg.voice?.whisperModel,
+      whisperLang:
+        typeof v.whisperLang === "string" && /^[a-z]{2,3}$/.test(v.whisperLang)
+          ? v.whisperLang
+          : cfg.voice?.whisperLang,
     };
   }
 
-  // Channels (Telegram + Slack)
+  // Channels (Telegram + Slack) — tokens + per-channel reply behaviour
   if (body.channels && typeof body.channels === "object") {
     const c = body.channels;
     cfg.channels = {
@@ -105,12 +150,31 @@ export async function POST(req: Request) {
       telegramWebhookSecret: keepOrSet(c.telegramWebhookSecret, cfg.channels?.telegramWebhookSecret),
       slackBotToken: keepOrSet(c.slackBotToken, cfg.channels?.slackBotToken),
       slackSigningSecret: keepOrSet(c.slackSigningSecret, cfg.channels?.slackSigningSecret),
+      replies: sanitizeChannelReplies(c.replies, cfg.channels?.replies),
     };
   }
 
   // Appearance (persisted server-side too; client localStorage drives paint)
   if (body.theme === "light" || body.theme === "dark" || body.theme === "system") {
     cfg.theme = body.theme;
+  }
+
+  // Git tracking for data/record. Default is ignored. Enabling is dangerous for
+  // public forks, so the client must send an explicit confirmation bit.
+  if (typeof body.recordInAppRepo === "boolean") {
+    if (body.recordInAppRepo && body.recordInAppRepoPrivateConfirmed !== true) {
+      return NextResponse.json(
+        { error: "Confirm that this repository is private before tracking data/record." },
+        { status: 400 },
+      );
+    }
+    if (recordInAppRepoEnabled() !== body.recordInAppRepo) {
+      try {
+        setRecordInAppRepoEnabled(body.recordInAppRepo);
+      } catch {
+        return NextResponse.json({ error: "Could not update .gitignore." }, { status: 500 });
+      }
+    }
   }
 
   try {

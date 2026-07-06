@@ -29,11 +29,11 @@ import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken } from "./importers/github";
 import { importWhoop, whoopFixtureFetch, whoopHrDir, type WhoopCreds } from "./importers/whoop";
 import { importPlugin, resolveCredential, windowDays, type FetchLike } from "./importers/plugin";
-import { pluginById, PLUGINS } from "./importers/registry";
+import { pluginInstanceById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { structureCsv, sourceName } from "./structure";
-import { structurePending } from "./structure-run";
+import { autoStructureNewItem, structurePending } from "./structure-run";
 import {
   isAutomation,
   listPublicAutomations,
@@ -125,9 +125,10 @@ export function sources() {
   return buildSources(readConfig());
 }
 
-/** Save an API source's credential (Tier-1 plugin). This is "connect a source". */
+/** Save an API source's credential (Tier-1 plugin). This is "connect a source".
+ *  An instance id ("spotify-2") connects an EXTRA account of the same source. */
 export function connectSource(id: string, credential: string): { id: string; saved: boolean } {
-  const plugin = pluginById(id);
+  const plugin = pluginInstanceById(id)?.plugin;
   if (!plugin && id !== "github") {
     throw new Error(`Unknown API source "${id}". Try: github, ${PLUGINS.map((p) => p.id).join(", ")}`);
   }
@@ -177,7 +178,7 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
     automation ||
     id === "github" ||
     id === "whoop" ||
-    Boolean(pluginById(id)) ||
+    Boolean(pluginInstanceById(id)) || // includes "<plugin>-<n>" extra accounts
     Boolean(fileImporterById(id));
   if (!known) {
     throw new Error(
@@ -311,20 +312,21 @@ export async function syncSource(opts: {
     };
   }
 
-  const plugin = pluginById(opts.id);
-  if (!plugin) {
+  const inst = pluginInstanceById(opts.id);
+  if (!inst) {
     throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
   }
-  const credential = resolveCredential(plugin, opts.credential, cfg);
+  const { plugin, instanceId } = inst;
+  const credential = resolveCredential(plugin, opts.credential, cfg, instanceId);
   const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
   if (plugin.requiresCredential && !credential && !fetchImpl) {
-    throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${plugin.id} <cred>'.`);
+    throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${instanceId} <cred>'.`);
   }
-  const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir);
+  const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir, instanceId);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
-  persistSync(plugin.id, opts.credential, now);
+  persistSync(instanceId, opts.credential, now);
   return {
-    id: plugin.id, name: plugin.name, from: summary.from, to: summary.to,
+    id: instanceId, name: plugin.name, from: summary.from, to: summary.to,
     days: summary.daysWithData, metrics: summary.metrics, cells: summary.cells,
     dailyRows, syncedAt: now,
   };
@@ -337,13 +339,18 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
   const skipped: { id: string; reason: string }[] = [];
   const cfg = readConfig();
   const candidates = ["github", "whoop", ...PLUGINS.filter((p) => p.live).map((p) => p.id)];
+  // Extra accounts ("spotify-2") carry their own credential — sync them too.
+  for (const key of Object.keys(cfg?.sourceCreds ?? {})) {
+    const inst = pluginInstanceById(key);
+    if (inst && inst.plugin.live && key !== inst.plugin.id && !candidates.includes(key)) candidates.push(key);
+  }
   for (const id of candidates) {
     const hasCred =
       id === "github"
         ? Boolean(resolveGithubToken())
         : id === "whoop"
           ? Boolean(cfg?.whoopCreds?.email && (cfg.whoopCreds.password || cfg.whoopCreds.refreshToken))
-          : Boolean(resolveCredential(pluginById(id)!, undefined, cfg));
+          : Boolean(resolveCredential(pluginInstanceById(id)!.plugin, undefined, cfg, id));
     if (!hasCred) {
       skipped.push({ id, reason: "no credential" });
       continue;
@@ -408,7 +415,7 @@ export interface ImportRawResult {
  * (`agentqs structure`, which pays the LLM only then). This is the universal
  * escape hatch — the agent can absorb any source.
  */
-export function importRaw(opts: { file?: string; text?: string; name?: string }): ImportRawResult {
+export async function importRaw(opts: { file?: string; text?: string; name?: string }): Promise<ImportRawResult> {
   let text = opts.text;
   let hint = opts.name;
   if (opts.file) {
@@ -442,6 +449,19 @@ export function importRaw(opts: { file?: string; text?: string; name?: string })
   }
 
   rebuild({ recordDir: rDir });
+
+  // Auto-structure (Settings): prose skips the pending queue via the LLM route.
+  const auto = await autoStructureNewItem(item.id);
+  const autoHit = auto?.results.find((r) => r.id === item.id && r.status === "structured");
+  if (auto && autoHit) {
+    return {
+      inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source: autoHit.source,
+      metrics: autoHit.metrics, cells: autoHit.rowsAdded, dailyRows: auto.dailyRows ?? undefined,
+      pending: auto.pending,
+      note: `Auto-structured ${autoHit.rowsAdded ?? 0} cells into daily/${autoHit.source}.csv.`,
+    };
+  }
+
   return {
     inboxId: item.id, bytes: Buffer.byteLength(text), structured: false,
     pending: countPending(rDir),

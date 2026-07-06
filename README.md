@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/logo.svg" alt="agentqs" width="200" />
+</p>
+
 <h1 align="center">agentqs</h1>
 <p align="center"><b>A journal that builds itself — and the best mentor and therapist you've ever had.</b></p>
 <p align="center">It knows everything about you. It finds your patterns, helps you replicate what works, keeps you on your good habits, and gives you real clarity and awareness over your own life.</p>
@@ -6,6 +10,8 @@
   <a href="#run-locally"><b>Run locally →</b></a>
   &nbsp;·&nbsp;
   <a href="#self-host-with-docker"><b>Self-host with Docker →</b></a>
+  &nbsp;·&nbsp;
+  <a href="#license"><b>License →</b></a>
 </p>
 
 ---
@@ -33,36 +39,28 @@ Runs on **your own server** and **your own AI key**. Your data lives in your own
 
 ## Set up in 4 steps
 
-Connect a source or two, ask your first question, and you're in. No terminal required — though it's right there if you want it.
+Sign in with an email or username, connect a source or two, ask your first question, and you're in. No terminal required — though it's right there if you want it.
 
-| 1. Connect data | 2. Ask anything | 3. Capture | 4. Bring your AI |
-|---|---|---|---|
-| ![Connect](docs/images/onboarding-connect.png) | ![Ask](docs/images/onboarding-chat.png) | ![Capture](docs/images/onboarding-capture.png) | ![AI](docs/images/onboarding-ai.png) |
-| Link APIs or drop a file | Get a grounded answer | Type, voice-memo, or drag-drop | Paste any key — models load in |
+1. **Connect data** — link APIs from the Data tab, or just drop a file
+2. **Ask anything** — get an answer grounded in your own record
+3. **Capture** — type `//`, voice-memo, or drag-and-drop
+4. **Bring your AI** — paste any key in the header **Connect / API** panel; models load in live
 
 ## Chat — your mentor
 
-One conversation, Claude-Code style. Plain text talks to the mentor. `>>` logs a memo. `/` runs a command.
+One conversation, Claude-Code style. Plain text talks to the mentor. `//` logs a memo — appended raw to your inbox, no LLM, no reply. `/` runs a command.
 
 Or **start a live voice session** — talk it out with a therapist grounded in the methodology *you* choose (CBT, ACT, schema, IFS…), or any persona you build. It listens, reflects, and quietly **writes the key points back into your daily record.** No forms, no data entry — **the database builds itself from your conversations.**
 
-Replies **stream in token-by-token** and always quote your real numbers — a grounded
-answer lands with a **grounded in your record** badge and an inline **sparkline** of the
-metric it cited (its shape over time, plus the latest / avg / range). Switch persona any time.
-
-![Chat](docs/images/chat.png)
+Replies **stream in token-by-token** and always quote your real numbers — a grounded answer lands with a **grounded in your record** badge and an inline **sparkline** of the metric it cited (its shape over time, plus the latest / avg / range). Switch persona any time.
 
 ## Journal — your life on one timeline
 
-Every day in one place: metrics, memos, and the mentor session you had that day, side by side. Flip to a Notion-style table to show/hide, reorder and resize columns — then save the layout as a named view (like a **Sleep** view that shows only your sleep column). Your views are stored with your account and come back every time.
-
-![Journal](docs/images/journal.png)
+Every day in one place: metrics, memos, and the mentor session you had that day, side by side. The Notion-style table is the default — reorder and resize columns, then save the layout as a named view (like a **Sleep** view that shows only your sleep column); your views are stored with your account and come back every time. Hit **Edit** to change any cell, add or delete rows and columns — **Save** writes straight back to the record's CSVs (`POST /api/journal/edit`). Flip to **Timeline** for the narrative view.
 
 ## Data — one pipe, all your sources
 
-Connect apps, set a sync interval per source, and drop files into the inbox. Hit **Structure** to turn raw notes and exports into clean daily data — you only pay the AI when you press the button. A **Photos** panel folds your pictures in too (EXIF + thumbnails + local CLIP recall — see [Photos](#photos--your-pictures-in-the-record-searchable-by-meaning)).
-
-![Data](docs/images/data.png)
+Connect apps, set a sync interval per source, and drop files into the inbox. Hit **Structure** to turn raw notes and exports into clean daily data — you only pay the AI when you press the button. Below it, a **Log** keeps every capture that entered the record (`GET /api/log`): click one to review the exact cells Structure wrote as a before → after diff, **Reject** it (`POST /api/log/reject` — undoes those cells), or **Ask AI** to hand it to Chat for a review or an improved structuring. A **Photos** panel folds your pictures in too (EXIF + thumbnails + local CLIP recall — see [Photos](#photos--your-pictures-in-the-record-searchable-by-meaning)).
 
 **No API? Automate the site.** For a source with no ready API, the Data tab's **Connections → Automate a site without an API** wizard walks you through it: pick the source, hand it a login, record the click-path to your data once (a real headless browser scrapes the table via Playwright), then schedule how often it replays. The result lands under **Automated imports** as an editable feed — same interval, Run-now, and Remove as any other source. A scraped table with a date column merges into your daily timeline; anything else lands in the inbox for Structure. Needs a one-time `npx playwright install chromium`.
 
@@ -73,8 +71,6 @@ Every capability is reachable three ways off **one core** (`src/lib/cli-core.ts`
 for Claude Code. The GUI is just a fourth face on the same core — nothing is
 GUI-only. A Supabase-style bar on top surfaces the exact CLI command + API call for
 whatever screen you're on, plus one-click **Connect to Claude Code**.
-
-![API bar](docs/images/api-bar.png)
 
 **Install the CLI** (private repo — `npm link` exposes the `agentqs` command; or use `npm run cli -- …`):
 
@@ -98,12 +94,13 @@ agentqs sync whoop                               # pull per-minute HR + HRV + re
 agentqs source interval github daily             # schedule an automated import
 agentqs source remove chrome                     # remove an automated import (data + schedule)
 agentqs sync github                              # run one source now (omit to sync all connected)
-agentqs source file chrome                        # import a local-disk source (Chrome/iPhone)
+agentqs source file chrome                       # import a local-disk source (Chrome/iPhone)
 agentqs automation add "Power bill" --url https://… --cred-type userpass \
   --username you --password ••• --table "table.usage"   # automate a site with no API
 agentqs automation run power-bill                # replay it now (Playwright; --headed to watch)
 agentqs automation schedule power-bill weekly    # set its cron cadence
 agentqs automation list                          # your automations + last-run status
+agentqs photos ~/Pictures/export                 # fold photos into the record (local, keyless)
 agentqs skill add "Stoic" --system "…"           # add a mentor — answers everywhere
 agentqs skill list                               # built-ins + your own
 agentqs config set model claude-sonnet-4-5       # provider · model · key · theme
@@ -112,7 +109,8 @@ agentqs rebuild --verify                         # rebuild the cache (assert det
 
 Add `--json` to any command for machine-readable output. The **same core** backs
 `/api/chat`, `/api/journal`, `/api/skills`, `/api/import/[source]`, `/api/structure`,
-`/api/models` (live model list from your provider), `/api/keys`, `/api/demo`, …
+`/api/log`, `/api/journal/edit`, `/api/models` (live model list from your provider),
+`/api/keys`, `/api/demo`, …
 
 **API key:** mint one in the header **Connect / API** panel (or `POST /api/keys`). Pass
 it as `Authorization: Bearer <key>` to reach every endpoint from a headless agent — the
@@ -125,7 +123,7 @@ first real import** — no mixing.
 **Connect to Claude Code (MCP):** `agentqs serve --mcp` speaks MCP over stdio and
 exposes the whole core as tools (`chat`, `query`, `journal`, `sources`, `sync`,
 `sync_file`, `import_file`, `structure`, `connect_source`, `set_interval`, `rebuild`,
-`config_*`, `skill_*`). Register it once:
+`config_*`, `skill_*`, `photos_*`). Register it once:
 
 ```bash
 claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'
@@ -211,9 +209,12 @@ record/
   daily/<source>.csv   one wide CSV per source, first column `date`
   inbox.jsonl          one raw capture per line (the pending bucket)
   sessions.jsonl       one mentor/therapy session per line
+  photos.jsonl         one photo pointer per line (EXIF, never the bytes)
 ```
 
 Each `daily/*.csv` is melted into long form — `(date, source, metric, value)` — so any new source, or any CSV you drop in, adds its columns with **zero schema migration**.
+
+By default the record lives under `data/` and stays **out of the app repo** (`.gitignore`) — you point it at its own private repo. Prefer one repo for app + record? Flip **Settings → Data → Allow this repo to track data/record** and the managed `.gitignore` lines swap so `data/record/` is versioned with the app (everything else under `data/` — cache, models, thumbnails — stays ignored). Only enable it if the repo is **private**; the switch makes you confirm exactly that.
 
 Rebuild the cache from the record any time — it's pure, so the same record always yields the same database:
 
@@ -361,19 +362,12 @@ record and, only with `--push`, pushes it — so a remote/Docker agentqs sees yo
 Chrome history and everything else after it pulls, without ever reaching your
 laptop's disk.
 
-```bash
-npm run files:test         # ships-when proof (Loop 12): the Chrome import command
-                           # reads a real local History SQLite and lands per-day
-                           # rows in the record + rebuilt daily table; the iPhone
-                           # stub lands a snapshot; daemon sync commits the record.
-```
-
 ### The agent brain — a mentor that queries your own record
 
 With an AI key the mentor is a real **tool-using agent** (`src/lib/agent.ts`), built
 on the **Vercel AI SDK** so it's provider-agnostic — default **Claude**, or paste an
 OpenAI / Gemini key and the same agent runs on that model. It doesn't get your
-numbers stuffed into its prompt; it **fetches them**, calling three tools until it
+numbers stuffed into its prompt; it **fetches them**, calling its tools until it
 can answer:
 
 - **`query_daily`** — runs a read-only SQL `SELECT` over your long/tidy `daily`
@@ -401,26 +395,6 @@ numbers (`src/lib/grounding.ts`) — two metrics from different sources are line
 their shared days and the relationship reported (e.g. *"commits run 13.25 on your
 high-productivity days vs 3 on the low ones"*).
 
-```bash
-npm run agent:test         # ships-when proof: the agent calls the SQL + FTS tools
-                           # and answers "why have I felt off?" citing a number that
-                           # genuinely exists in the daily table
-
-npm run integration:test   # keyless cross-source: GitHub + RescueTime + Calendar +
-                           # Spotify feed one record, a question cites 2+ sources
-
-npm run chat:test          # ships-when proof (Loop 5): boots the built app, logs in,
-                           # and hits POST /api/chat like the Chat tab — asserts the
-                           # reply streams in NDJSON delta frames and the closing frame
-                           # carries ≥2 grounded sources + a sparkline of a cited metric
-
-npm run smart:test         # ships-when proof (Loop 6): the shared smart-input contract
-                           # routes `>>`/`/`/plain text; then over the built app `>> slept
-                           # bad` lands in the inbox raw (no LLM, no daily row), `/sync`
-                           # runs its live pipeline into the daily table, and the skill
-                           # chip switches persona (mentor → therapist → coach)
-```
-
 ## Sync engine — schedules, lazy-sync, stale badges
 
 The **Data** tab lists every source with its type (`api` / `manual`), last-sync,
@@ -443,17 +417,15 @@ of known integrations plus any manual sources discovered in `record/daily/*.csv`
 the schedule math (`isDue` / `isStale`) is a pure, browser-safe module
 (`src/lib/sources.ts`) shared by the API and the UI.
 
-```bash
-npm run sync:test          # ships-when proof: "GitHub: daily" is due on reopen,
-                           # and an overdue manual source is flagged stale
-```
-
 ## Structure — raw → daily
 
-Anything you capture lands raw and free in the **pending inbox**: memos (`>>` in
-Chat), and any CSV or text file you **drag-and-drop** (or Upload) onto the Data
-tab. Nothing is parsed until you press **Structure** — that's the only place you
-spend tokens, and only for prose.
+Anything you capture lands raw and free in the **pending inbox**: memos (`//` in
+Chat), voice notes, and any CSV or text file you **drag-and-drop** (or Upload) onto
+the Data tab. Nothing is parsed until you press **Structure** — that's the only
+place you spend tokens, and only for prose. Prefer zero clicks? Turn on **Settings →
+Structure → Auto-structure new captures** and every capture (memo, voice note,
+file, channel message) merges straight into the daily table, skipping the pending
+queue; prose that can't structure (no key, no dated metrics) just stays pending.
 
 - **Clean CSV / TSV → direct column map, no LLM.** The first date column becomes
   `date` (ISO), the rest become metrics, and it's merged into
@@ -464,7 +436,9 @@ spend tokens, and only for prose.
 
 Either way the cache is rebuilt and the new rows appear in the **daily table**
 preview right below the inbox — long form `(date, source, metric, value)`, the
-same table the mentor reasons over.
+same table the mentor reasons over. And every structure lands in the Data tab's
+**Log**, where you can audit the exact cells it wrote, reject them, or hand them
+to Chat for a better pass.
 
 ## Sessions — memory that carries
 
@@ -485,11 +459,6 @@ stored for provenance, but the agent never reads it back.
 Sessions surface as dated entries on the **Journal timeline**, side by side with
 that day's metrics and memos — one storage layer (typed + synthesis), one merged
 view.
-
-```bash
-npm run session:test       # ships-when proof: a new session references a prior
-                           # session's commitment (no AI key required)
-```
 
 ## Semantic search — find days that felt like this
 
@@ -520,16 +489,9 @@ Every memo and session synthesis is indexed with its date; a query collapses to 
 best-matching **days**. SQL (`query_daily`) still answers numbers and FTS5
 (`search_notes`) still answers exact keywords — embeddings add *vibe*. It all works
 with **no AI key**; the mentor also calls it as the `find_similar` tool when a key is
-set. Settings shows the index status and a one-click **Reindex**.
-
-```bash
-npm run semantic:test      # ships-when proof (Loop 15): the local model + sqlite-vec
-                           # build an index from a seeded record and match days by
-                           # MEANING (queries that share no words with the day they
-                           # hit); then over the built app with NO AI key, /api/search
-                           # returns the right day and Chat answers "find days that
-                           # felt like this" grounded — all keyless.
-```
+set. Settings shows the index status and a one-click **Reindex**, plus two switches:
+**Embed entries** (default on; off = no vectors, recall/search fall back to keywords)
+and **Auto-index** (default on; off = the index only updates when you press Reindex).
 
 ## Photos — your pictures in the record, searchable by meaning
 
@@ -558,8 +520,6 @@ agentqs photos ~/Pictures/export      # import a folder (EXIF + thumbnails + CLI
 agentqs photos --library --caption    # the Mac Photos library, with scene captions
 agentqs photos status                 # counts: imported · indexed · geotagged
 agentqs photos search "beach sunset"  # text → image recall (local CLIP, no key)
-npm run photos:test                   # ships-when proof: EXIF+thumbnails, CLIP recall,
-                                      # captions/correlation — all local, keyless.
 ```
 
 Flags: `--since <date>` (only newer files), `--caption` (scene tags), `--push` (git
@@ -572,15 +532,22 @@ Two separate voice paths, both landing in the same record.
 
 **Global mic → voice memo.** The mic in the top bar (every tab) records audio,
 transcribes it, and drops the transcript **raw into your inbox** — no LLM, no
-daily row, exactly like a typed `>>` memo. Structure it later like anything else.
+daily row, exactly like a typed `//` memo. Structure it later like anything else.
 Transcription is the only external step, and it's **pluggable**
 (`src/lib/voice.ts`):
 
-- **Local Whisper (default, private, no cost).** Point `WHISPER_BIN` at any
-  command that takes an audio file path and prints the transcript — wrap
+- **Built-in local Whisper (one click, private, no cost).** Settings → Voice
+  memos installs Whisper INTO the app: a quantized ONNX model (tiny ~45 MB /
+  base ~85 MB / small ~265 MB) downloaded once into `data/models` — the same
+  local-model cache as search embeddings — and run on-device via transformers.js
+  (`src/lib/whisper-local.ts`). No binary, no key, no cloud; audio never leaves
+  the machine. Pick the spoken language there too (Whisper can't auto-detect
+  yet). Manage it over HTTP with `GET/POST/DELETE /api/voice/whisper`.
+- **Your own engine (`WHISPER_BIN`, overrides everything).** Point `WHISPER_BIN`
+  at any command that takes an audio file path and prints the transcript — wrap
   whisper.cpp, faster-whisper, or a one-line shell script (`WHISPER_ARGS` passes
   extra args before the file). Preferred when set.
-- **OpenAI Whisper (cloud fallback).** With no local binary, agentqs uses OpenAI
+- **OpenAI Whisper (cloud fallback).** With nothing local, agentqs uses OpenAI
   Whisper if an OpenAI key is available (`OPENAI_API_KEY`, or your saved key when
   the provider is OpenAI).
 - **No backend wired?** The mic stays config-gated — it explains what to set
@@ -594,34 +561,30 @@ dashboard) and the session's key points written back to your record. It's
 are set. Once configured, `POST /api/voice/session` mints the signed URL the
 ElevenLabs Conversational AI widget connects to.
 
-```bash
-npm run voice:test         # ships-when proof (Loop 13): a local transcriber is
-                           # wired, POST /api/voice/memo transcribes a recording,
-                           # and the transcript lands in the inbox as a raw `voice`
-                           # memo (no LLM, no daily row); the ElevenLabs in-chat
-                           # session reports config-gated when unset.
-```
-
 ## Channels — talk to your record from Telegram or Slack
 
 Your mentor doesn't have to live in the browser. Point a **Telegram** or **Slack**
 bot at your running instance and DM it — *"why am I so tired lately?"* comes back
-with the same grounded answer the Chat tab gives, and `>> slept badly` still lands
+with the same grounded answer the Chat tab gives, and `// slept badly` still lands
 raw in your inbox. It's the cloud replica's job: **message in → memo or grounded
 chat → reply out.**
 
 Every channel is the same channel-agnostic adapter
 (`src/lib/channels/*`) — a thin shell around the shared reply brain
-(`src/lib/reply.ts`, the exact `>>`-memo / grounded-chat logic the Chat box uses,
+(`src/lib/reply.ts`, the exact `//`-memo / grounded-chat logic the Chat box uses,
 just non-streaming):
 
 - **ingest** — verify the request came from the platform (a Telegram shared secret,
   a Slack signing-secret signature) and parse it into one normalized message.
-- **composeReply** — the shared brain: a `>>` line is appended raw to the inbox
+- **composeReply** — the shared brain: a `//` line is appended raw to the inbox
   (no LLM, no daily row) and acked; anything else is answered grounded — the
   tool-using agent with a key, the deterministic cross-source answer without one.
 - **send** — post the reply back out via the platform's official API
   (Telegram `sendMessage` · Slack `chat.postMessage`).
+
+Per channel, **Settings → Channels** sets how it replies: AI replies on/off, which
+persona answers, and an optional provider/model override — so Telegram can be the
+terse coach on a cheap model while the web Chat stays your full mentor.
 
 Adding a channel is one small file plus a registry entry — the brain, the record,
 and the grounding never change. Each is a webhook at `/api/channels/<channel>`:
@@ -639,12 +602,29 @@ Channels are official APIs only — **WhatsApp will use the official Cloud API**
 an unofficial bridge (data + ban risk). The transport carries the message; your
 sensitive data never leaves your store.
 
+## Tests — every feature ships with its proof
+
+Each loop of the build plan lands with an executable ships-when proof — real
+modules, real built app, offline fixtures, no mocks of the thing under test:
+
 ```bash
-npm run channels:test      # ships-when proof (Loop 14): a Telegram DM "why tired?"
-                           # is grounded against a real 2-source record and the
-                           # reply is posted back out via the Bot API; the identical
-                           # Slack message gives the identical reply through the same
-                           # adapter; a `>>` memo lands raw in the inbox (no LLM).
+npm run chat:test          # grounded NDJSON streaming into the Chat tab
+npm run smart:test         # the `//` memo / `/` command / plain-chat contract
+npm run session:test       # a new session picks up a prior session's commitment
+npm run sync:test          # due/stale schedule math over real sources
+npm run integration:test   # keyless cross-source answer cites 2+ sources
+npm run api:test           # every API plugin end to end against fixtures
+npm run whoop:test         # the unofficial-login WHOOP pipeline
+npm run files:test         # Chrome-history + iPhone file importers + daemon sync
+npm run voice:test         # voice memo → transcript → raw inbox (local Whisper)
+npm run channels:test      # Telegram + Slack webhooks → grounded reply out
+npm run semantic:test      # local embeddings + sqlite-vec match days by meaning
+npm run flags:test         # auto-structure + embed/auto-index switches
+npm run photos:test        # EXIF + thumbnails + CLIP recall, all local
+npm run agent:test         # the agent calls SQL + FTS tools and cites real numbers
+npm run automation:test    # the no-API site automation (Playwright)
+npm run edit:test          # journal cell edits write back to the record CSVs
+npm run log:test           # the Data-tab capture log, over the built app
 ```
 
 ## Good to know
@@ -654,4 +634,14 @@ npm run channels:test      # ships-when proof (Loop 14): a Telegram DM "why tire
 - **Local-first.** Everything works offline except API syncs and the messaging bots.
 - **Cheap by design.** Raw capture is free; you only spend tokens when you press *Structure* or ask a question. Embeddings run locally.
 
-MIT licensed. Full build plan in [agentqs-plan.md](agentqs-plan.md).
+## License
+
+**Free for personal use. Not for sale.**
+
+agentqs is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE): use it, self-host it, change it,
+share it — for any noncommercial purpose. You may **not** sell it, offer it as a
+paid product or service, or use it commercially. For a commercial license, open
+an issue.
+
+Full build plan in [PLAN.md](PLAN.md).

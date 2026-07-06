@@ -16,7 +16,7 @@
  *      (captured by a local stand-in for api.telegram.org). The identical message on
  *      /api/channels/slack produces the identical grounded reply via chat.postMessage
  *      — one brain, two transports.
- *   3. A `>>` memo over Telegram lands raw in the inbox (source `telegram`, no LLM,
+ *   3. A `//` memo over Telegram lands raw in the inbox (source `telegram`, no LLM,
  *      no daily row) and the bot replies with the "saved" ack.
  *
  * Only the platform's OUTBOUND API is substituted (a local capture server, the same
@@ -119,7 +119,7 @@ function seedRecord(recordDir: string) {
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-channels-"));
   const QUESTION = "Why am I so tired lately?";
-  const MEMO = ">> slept badly, woke at 3am wired";
+  const MEMO = "// slept badly, woke at 3am wired";
 
   // ---- 1. The pure adapter contract (verification + parsing) ----------------
   console.log("\nThe channel-agnostic adapter contract (verify + parse, shared with the route)…\n");
@@ -215,7 +215,7 @@ async function main() {
     check("the reply was posted back out via Slack chat.postMessage", slReply.length > 0);
     check("one brain, two transports: Slack and Telegram gave the identical grounded reply", slReply === tgReply);
 
-    // --- A `>>` memo over Telegram lands raw in the inbox, no LLM. ---
+    // --- A `//` memo over Telegram lands raw in the inbox, no LLM. ---
     console.log(`  Telegram memo:  “${MEMO}”\n`);
     const memoInbound = JSON.stringify({ update_id: 2, message: { message_id: 8, from: { id: 100, is_bot: false }, chat: { id: 100 }, text: MEMO } });
     const memoRes = await (await fetch(`${base}/api/channels/telegram`, { method: "POST", headers: { "content-type": "application/json" }, body: memoInbound })).json();
@@ -247,7 +247,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    "\n✓ Channels ship: a Telegram DM 'why tired?' returns the grounded reply and Slack gives the identical reply through the same adapter — plus `>>` memos land raw in the inbox.\n",
+    "\n✓ Channels ship: a Telegram DM 'why tired?' returns the grounded reply and Slack gives the identical reply through the same adapter — plus `//` memos land raw in the inbox.\n",
   );
 }
 

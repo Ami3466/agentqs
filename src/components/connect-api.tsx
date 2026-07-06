@@ -9,32 +9,57 @@ import { cn } from "./ui";
 const PH = "AQS_KEY_HERE";
 const SYNC_CMD = "agentqs sync --source github";
 const skillSnip = (b: string, k: string) =>
-  `---\nname: agentqs\ndescription: Query the user's agentqs life-record + mentor.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}`;
+  `---\nname: agentqs\ndescription: Query the agentqs life-record.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}`;
 const mcpSnip = (b: string, k: string) =>
   `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}'`;
 
-function CopyRow({ label, code, mono, className }: { label: string; code: string; mono?: boolean; className?: string }) {
+/** Small copy state hook: flips a checkmark for 1.2s after writing to the clipboard. */
+function useCopy(): [boolean, (code: string) => void] {
   const [done, setDone] = useState(false);
+  return [
+    done,
+    (code: string) => {
+      navigator.clipboard?.writeText(code);
+      setDone(true);
+      setTimeout(() => setDone(false), 1200);
+    },
+  ];
+}
+
+/** Centered label + copy icon, side-by-side use (Copy mcp · Copy skill). */
+function CopyRow({ label, code, className }: { label: string; code: string; className?: string }) {
+  const [done, copy] = useCopy();
   return (
     <button
       type="button"
-      onClick={() => {
-        navigator.clipboard?.writeText(code);
-        setDone(true);
-        setTimeout(() => setDone(false), 1200);
-      }}
+      onClick={() => copy(code)}
       className={cn(
-        "flex w-full items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-[13px] text-fg transition-colors hover:bg-muted",
+        "flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-[13px] font-medium text-fg transition-colors hover:bg-muted",
         className,
       )}
     >
-      <span className={cn("truncate", mono && "font-mono text-[12px]")}>{label}</span>
-      {done ? (
-        <Check width={14} height={14} className="shrink-0" />
-      ) : (
-        <Copy width={14} height={14} className="shrink-0 text-muted-fg" />
-      )}
+      {done ? <Check width={13} height={13} className="shrink-0 text-accent" /> : <Copy width={13} height={13} className="shrink-0 text-muted-fg" />}
+      <span className="truncate">{label}</span>
     </button>
+  );
+}
+
+/** The CLI one-liner shown verbatim in a terminal-style row with its own copy button. */
+function CliRow({ code }: { code: string }) {
+  const [done, copy] = useCopy();
+  return (
+    <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 py-1 pl-2.5 pr-1">
+      <Terminal width={13} height={13} className="shrink-0 text-muted-fg" />
+      <code className="scrollbar-none flex-1 overflow-x-auto whitespace-nowrap font-mono text-[12px] text-fg">{code}</code>
+      <button
+        type="button"
+        onClick={() => copy(code)}
+        aria-label="Copy command"
+        className="shrink-0 rounded-md p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+      >
+        {done ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
+      </button>
+    </div>
   );
 }
 
@@ -87,7 +112,7 @@ export function ConnectApi() {
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-50 mt-2 w-[340px] max-w-[calc(100vw-2rem)] space-y-2 rounded-xl border border-border bg-card p-3 shadow-xl">
+        <div className="fixed inset-x-3 top-16 z-50 space-y-2 rounded-xl border border-border bg-card p-3 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[340px]">
           <button
             type="button"
             onClick={() => void generate()}
@@ -98,11 +123,14 @@ export function ConnectApi() {
             {fullKey ? "New key generated" : masked ? `Regenerate API key · ${masked}` : "Generate API key"}
           </button>
           {fullKey ? <p className="px-1 font-mono text-[12px] text-muted-fg break-all">{fullKey}</p> : null}
-          <CopyRow label={SYNC_CMD} code={SYNC_CMD} mono />
+          <CliRow code={SYNC_CMD} />
           <div className="flex gap-2">
-            <CopyRow label="Copy skill" code={skillSnip(base, key)} className="flex-1" />
             <CopyRow label="Copy mcp" code={mcpSnip(base, key)} className="flex-1" />
+            <CopyRow label="Copy skill" code={skillSnip(base, key)} className="flex-1" />
           </div>
+          <p className="pt-0.5 text-center text-[12px] text-muted-fg">
+            or work directly in your forked repo — the record is plain files in your own git repo.
+          </p>
         </div>
       ) : null}
     </div>

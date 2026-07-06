@@ -73,7 +73,7 @@ function ndjson(pump: (send: (frame: unknown) => void) => Promise<void>): Respon
  * to a deterministic cross-source answer computed straight from the numbers (still
  * streamed), or a persona note referencing the latest open commitment. Either way the
  * closing `done` frame carries the grounded sources + a sparkline of a cited metric.
- * `>>` memos and `/` commands never reach here.
+ * `//` memos and `/` commands never reach here.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -155,7 +155,7 @@ export async function POST(req: Request) {
       const text =
         opener ??
         `I'm your ${skill.name.toLowerCase()}. Add an AI key in Settings and I'll answer this ` +
-          `grounded in your real data. Until then, log with \`>>\` and I'll keep your record building.`;
+          `grounded in your real data. Until then, log with \`//\` and I'll keep your record building.`;
       for (const chunk of chunkText(text)) send({ t: "delta", v: chunk });
       send({
         t: "done",
