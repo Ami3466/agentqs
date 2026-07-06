@@ -1,16 +1,7 @@
-import { PageHeader } from "@/components/page-header";
 import { Chat } from "@/components/chat";
 
-/** Chat tab — 3-zone mentor with smart input (Loop 6): plain text talks,
- * `>>` logs a memo, `/` runs a command, and a chip switches persona. */
+/** Chat tab — smart input: plain text talks, `//` logs a memo, `/` runs a command,
+ * a skill chip picks the voice, a model chip picks the model. */
 export default function ChatPage() {
-  return (
-    <div>
-      <PageHeader
-        title="Chat"
-        subtitle="Talk to your mentor. Plain text asks · >> logs a memo · / runs a command."
-      />
-      <Chat />
-    </div>
-  );
+  return <Chat />;
 }

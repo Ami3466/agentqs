@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readConfig } from "@/lib/config";
+import { activeLlm, readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import type { LlmMessage } from "@/lib/llm";
 import { dbPath, recordDir } from "@/lib/paths";
@@ -84,6 +84,8 @@ export async function POST(req: Request) {
     message?: string;
     skill?: string;
     history?: LlmMessage[];
+    providerId?: string; // model-chip override: which provider account…
+    model?: string; // …and which live model id
   };
   const message = (body.message ?? "").trim();
   if (!message) {
@@ -92,6 +94,11 @@ export async function POST(req: Request) {
 
   const skill = resolveSkill(body.skill);
   const cfg = readConfig();
+  const override =
+    body.providerId || body.model
+      ? { providerId: body.providerId, model: body.model }
+      : null;
+  const llm = activeLlm(cfg, override);
 
   const history = Array.isArray(body.history)
     ? body.history
@@ -108,7 +115,7 @@ export async function POST(req: Request) {
   // No key yet: honest, persona-flavoured fallback. But a data question over ≥2
   // sources still gets a real, grounded cross-source answer computed from the
   // numbers — no model, no invention. Streamed for a consistent UI.
-  if (!cfg?.llmProvider || !cfg?.llmKey) {
+  if (!llm) {
     return ndjson(async (send) => {
       // Semantic recall ("find days that felt like this") — the local embedding index
       // answers it with no key. Checked first: it's the most specific intent.
@@ -169,7 +176,7 @@ export async function POST(req: Request) {
 
   let model;
   try {
-    model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
+    model = resolveModel(llm);
   } catch (e) {
     return NextResponse.json({ error: `Model config failed: ${(e as Error).message}` }, { status: 502 });
   }
@@ -203,7 +210,7 @@ export async function POST(req: Request) {
       metrics,
       spark: buildSpark(grounding, sources, metrics),
       continuity: Boolean(memory),
-      model: cfg.model || null,
+      model: llm.model || null,
     });
   });
 }

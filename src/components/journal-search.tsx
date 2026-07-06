@@ -79,7 +79,7 @@ export function JournalSearch() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Find days that felt like this…  (e.g. anxious, couldn't sleep)"
+          placeholder="Search by meaning"
           className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-muted-fg/70"
         />
         {q || hits ? (
@@ -112,7 +112,7 @@ export function JournalSearch() {
         hits.length ? (
           <div className="mt-3 space-y-1.5">
             <p className="px-1 text-[11px] font-medium text-muted-fg">
-              Days that felt like <span className="text-fg">&ldquo;{ran}&rdquo;</span> — closest first
+              Closest to <span className="text-fg">&ldquo;{ran}&rdquo;</span>
             </p>
             {hits.map((h) => (
               <div
@@ -132,10 +132,7 @@ export function JournalSearch() {
             ))}
           </div>
         ) : (
-          <p className="mt-2 px-1 text-xs text-muted-fg">
-            No close matches yet. Capture a few memos or sessions and try again — this searches your
-            own words, by meaning.
-          </p>
+          <p className="mt-2 px-1 text-xs text-muted-fg">No matches.</p>
         )
       ) : null}
     </div>

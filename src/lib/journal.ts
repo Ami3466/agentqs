@@ -64,7 +64,7 @@ export interface JournalData {
   metrics: MetricColumn[];
   days: JournalDay[]; // newest first
   totalDays: number;
-  totalCells: number; // non-empty daily cells (matches daily-table row count)
+  totalCells: number; // non-empty daily cells across the visible (up-to-today) days
 }
 
 const EMPTY: JournalData = { metrics: [], days: [], totalDays: 0, totalCells: 0 };
@@ -82,8 +82,13 @@ function jsonArray(raw: unknown): string[] {
 }
 
 /** Pivot the rebuilt cache into per-day records + column metadata for the Journal.
- * Returns an empty view when the cache doesn't exist yet or can't be read. */
-export function readJournal(file: string = dbPath()): JournalData {
+ * Future-dated days (date > `today`) are dropped so the Log and Timeline only ever
+ * show up to the present. Returns an empty view when the cache doesn't exist yet or
+ * can't be read. */
+export function readJournal(
+  file: string = dbPath(),
+  today: string = new Date().toISOString().slice(0, 10),
+): JournalData {
   if (!fs.existsSync(file)) return EMPTY;
   let db: DB;
   try {
@@ -141,7 +146,6 @@ export function readJournal(file: string = dbPath()): JournalData {
     };
 
     const colMeta = new Map<string, MetricColumn>();
-    let totalCells = 0;
     for (const row of daily) {
       const key = `${row.source}.${row.metric}`;
       let col = colMeta.get(key);
@@ -151,7 +155,6 @@ export function readJournal(file: string = dbPath()): JournalData {
       }
       if (row.num == null) col.numeric = false;
       ensure(row.date).values[key] = { text: row.text, num: row.num };
-      totalCells++;
     }
 
     for (const s of sessionsRaw) {
@@ -185,9 +188,15 @@ export function readJournal(file: string = dbPath()): JournalData {
     const metrics = [...colMeta.values()].sort(
       (a, b) => cmp(a.source, b.source) || cmp(a.metric, b.metric),
     );
-    const ordered = [...days.values()].sort((a, b) => cmp(b.date, a.date)); // newest first
+    const ordered = [...days.values()]
+      .filter((d) => d.date <= today) // hide future-dated events
+      .sort((a, b) => cmp(b.date, a.date)); // newest first
 
-    return { metrics, days: ordered, totalDays: ordered.length, totalCells };
+    // Recount cells so the header total matches what's actually shown.
+    let visibleCells = 0;
+    for (const d of ordered) visibleCells += Object.keys(d.values).length;
+
+    return { metrics, days: ordered, totalDays: ordered.length, totalCells: visibleCells };
   } catch {
     return EMPTY; // stale/older schema
   } finally {

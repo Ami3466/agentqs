@@ -1,29 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Clock, Plug, RefreshCw, sourceIcon, Spinner, Trash } from "@/components/icons";
+import { Check, RefreshCw, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
-import { Badge, Button, cn } from "@/components/ui";
-import { ago, type Interval, type SourceView } from "@/lib/sources";
+import { Button, cn } from "@/components/ui";
+import { type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
 
 /**
- * The Data-tab Sources card (Loop 10 + two-tab redesign). One fetcher/persister of
- * /api/sources, split into two tabs under the dropzone:
- *   • Connections     — browse + connect every available integration (the catalog
- *                        of what you *can* wire up). A source lives here until it
- *                        has data.
- *   • Automated imports — the ones you've set up: status, last sync, interval
- *                        (editable) + Remove. A source lands here once connected.
- * No source is ever shown as a fake "connected" row — the split is derived from the
- * real record (`connected`). Also owns lazy-sync-on-open: on mount it POSTs every
- * DUE api source, then bumps the shared `version` so the daily preview refetches.
+ * The Data-tab Sources card. One fetcher/persister of /api/sources, split into two
+ * tabs under the dropzone:
+ *   • Connections     — the catalog of integrations you can wire up. A source lives
+ *                       here until it has data.
+ *   • Automated imports — the ones set up: interval (editable) + Remove, plus the
+ *                       "automate a site without an API" wizard entry.
+ * A source is only shown as connected when its record actually has rows (derived,
+ * never faked). Also owns lazy-sync-on-open: on mount it POSTs every DUE api source,
+ * then bumps the shared `version` so downstream panels refetch.
  */
 export function SourcesPanel({
   version,
@@ -32,8 +31,8 @@ export function SourcesPanel({
 }: {
   version: number;
   onChanged: () => void;
-  /** Incremented by the inbox "Automate imports" button — opens the setup flow by
-   *  focusing the Connections catalog here and scrolling it into view. */
+  /** Incremented by the inbox "Automate imports" button — opens the setup wizard in
+   *  the Automated imports tab. */
   automateSignal?: number;
 }) {
   const [sources, setSources] = useState<SourceView[] | null>(null);
@@ -42,7 +41,6 @@ export function SourcesPanel({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
-  const [flowHint, setFlowHint] = useState(false);
   // The automation wizard, optionally seeded from a specific roster source.
   const [wizardSeed, setWizardSeed] = useState<{ name?: string; url?: string } | null>(null);
   const openWizard = useCallback((seed: { name?: string; url?: string } = {}) => {
@@ -84,7 +82,7 @@ export function SourcesPanel({
       if (cancelled) return;
       setSyncing(false);
       setAutoMsg(`Auto-synced ${due.map((d) => d.name).join(", ")} on open.`);
-      onChanged(); // bump → daily preview + this list refetch (version effect)
+      onChanged(); // bump → downstream refetch (version effect)
       window.setTimeout(() => setAutoMsg(""), 6000);
     })();
     return () => {
@@ -101,16 +99,12 @@ export function SourcesPanel({
     if (sources.some((s) => s.connected)) setTab("automated");
   }, [sources]);
 
-  // Automation setup flow entry: on each signal bump, jump to the Connections
-  // catalog (where you wire up a recurring feed), scroll it into view, and nudge.
+  // Inbox "Automate imports" → jump to the Automated tab and open the wizard.
   useEffect(() => {
     if (!automateSignal) return;
-    setTab("connections");
-    setFlowHint(true);
-    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    const t = window.setTimeout(() => setFlowHint(false), 8000);
-    return () => window.clearTimeout(t);
-  }, [automateSignal]);
+    setTab("automated");
+    openWizard();
+  }, [automateSignal, openWizard]);
 
   async function changeInterval(id: string, interval: Interval) {
     setSavingId(id);
@@ -226,7 +220,7 @@ export function SourcesPanel({
         removing={removing}
         onIntervalChange={onIntervalChange}
         onRemove={onRemove}
-        onSetup={() => openWizard({ name: s.name, url: s.setupUrl })}
+        onConnect={() => openWizard({ name: s.name, url: s.setupUrl })}
       />
     );
   }
@@ -234,16 +228,7 @@ export function SourcesPanel({
   return (
     <div ref={rootRef} className="scroll-mt-4">
       <div className="border-b border-border p-4">
-        <div className="flex items-center gap-2">
-          <Plug width={16} height={16} className="text-muted-fg" />
-          <p className="text-sm font-semibold text-fg">Sources</p>
-        </div>
-        <p className="mt-1 text-xs text-muted-fg">
-          Connect an integration, then schedule how often it pulls. Feeds sync on their
-          own; a dropped file just lands in the inbox above.
-        </p>
-
-        <div className="mt-3 inline-flex rounded-lg border border-border bg-muted p-0.5 text-[13px]">
+        <div className="inline-flex rounded-lg border border-border bg-muted p-0.5 text-[13px]">
           <TabButton active={tab === "connections"} onClick={() => setTab("connections")}>
             Connections
             <TabCount>{available.length}</TabCount>
@@ -255,14 +240,6 @@ export function SourcesPanel({
         </div>
       </div>
 
-      {flowHint && tab === "connections" ? (
-        <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2.5 text-xs text-fg">
-          <Plug width={13} height={13} className="text-muted-fg" />
-          Pick a source below to connect it and schedule how often it imports — no more
-          dropping files by hand.
-        </div>
-      ) : null}
-
       {autoMsg ? (
         <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-xs text-accent">
           {syncing ? <Spinner width={13} height={13} /> : <Check width={13} height={13} />}
@@ -272,51 +249,40 @@ export function SourcesPanel({
 
       {sources === null ? (
         <div className="flex items-center gap-2 p-4 text-xs text-muted-fg">
-          <Spinner width={13} height={13} /> Loading sources…
+          <Spinner width={13} height={13} /> Loading…
         </div>
       ) : (
         <>
-          {list.length === 0 ? (
-            <p className="p-6 text-center text-xs text-muted-fg">
-              {tab === "automated"
-                ? "No automated imports yet. Connect a source, or automate a site below."
-                : "Every available integration is already connected."}
-            </p>
-          ) : (
+          {list.length ? (
             <div className="divide-y divide-border">{list.map(row)}</div>
+          ) : tab === "automated" ? null : (
+            <p className="p-6 text-center text-xs text-muted-fg">All connected.</p>
           )}
 
-          {tab === "connections" ? (
-            wizardSeed ? (
-              <AutomationSetup
-                initialName={wizardSeed.name ?? ""}
-                initialUrl={wizardSeed.url ?? ""}
-                onCancel={() => setWizardSeed(null)}
-                onDone={() => {
-                  setWizardSeed(null);
-                  setTab("automated");
-                  void load();
-                  onChanged();
-                }}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => openWizard()}
-                className="flex w-full items-center gap-3 border-t border-border p-4 text-left transition-colors hover:bg-muted/40"
-              >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-muted text-muted-fg">
-                  <RefreshCw width={17} height={17} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-fg">Automate a site without an API</p>
-                  <p className="truncate text-xs text-muted-fg">
-                    Record a login + the click-path to your data, then schedule it — Playwright replays it for you.
-                  </p>
-                </div>
-                <span className="shrink-0 text-xs font-medium text-muted-fg">Set up →</span>
-              </button>
-            )
+          {wizardSeed !== null ? (
+            <AutomationSetup
+              initialName={wizardSeed.name ?? ""}
+              initialUrl={wizardSeed.url ?? ""}
+              onCancel={() => setWizardSeed(null)}
+              onDone={() => {
+                setWizardSeed(null);
+                setTab("automated");
+                void load();
+                onChanged();
+              }}
+            />
+          ) : tab === "automated" ? (
+            <button
+              type="button"
+              onClick={() => openWizard()}
+              className="flex w-full items-center gap-3 border-t border-border p-4 text-left transition-colors hover:bg-muted/40"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-muted text-muted-fg">
+                <RefreshCw width={17} height={17} />
+              </span>
+              <p className="min-w-0 flex-1 text-sm font-medium text-fg">Automate a site without an API</p>
+              <span className="shrink-0 text-xs font-medium text-muted-fg">Set up →</span>
+            </button>
           ) : null}
         </>
       )}
@@ -355,66 +321,40 @@ function TabCount({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Generic (non-GitHub, non-plugin) source row: Tier-2 file importers + not-yet-live
- *  roster integrations. Connected rows show last-sync + an interval dropdown +
- *  Remove; overdue ones badge stale. Not-connected roster rows carry a REAL wire-up
- *  path (never a fake "connected" state): `setup: "automation"` opens the record +
- *  scrape wizard (seeded with the brand); `setup: "file"` expands the export + CLI
- *  import steps. Live file importers (Chrome, iPhone) keep their local · CLI hint. */
+/** Minimal source row for a not-yet-live roster integration (Connections) and any
+ *  generic connected source (Automated). Connect opens the record-login + scrape
+ *  wizard; connected rows expose interval + Remove. Stale is monochrome. */
 function SourceRow({
   source,
   saving,
   removing,
   onIntervalChange,
   onRemove,
-  onSetup,
+  onConnect,
 }: {
   source: SourceView;
   saving: boolean;
   removing: boolean;
   onIntervalChange: (i: Interval) => void;
   onRemove?: () => void;
-  onSetup?: () => void;
+  onConnect?: () => void;
 }) {
-  const { id, name, kind, detail, connected, lastSync, stale, interval, live, setup } = source;
+  const { id, name, connected, stale, interval } = source;
   const Icon = sourceIcon(id);
-  const [howto, setHowto] = useState(false);
   return (
-    <div className="flex flex-col p-4">
-     <div className="flex items-center gap-3">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-fg">
+    <div className="flex items-center gap-3 p-4">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
         <Icon width={18} height={18} />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
           <p className="truncate text-sm font-medium text-fg">{name}</p>
-          <Badge>{kind}</Badge>
           {stale ? (
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-medium text-warning"
-              title={`No fresh data within its ${interval} interval — refresh this source.`}
-            >
-              <AlertTriangle width={11} height={11} /> stale
-            </span>
-          ) : connected ? (
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
-              <Check width={12} height={12} /> connected
-            </span>
-          ) : !live ? (
             <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              {setup === "file" ? "export" : "no API"}
+              stale
             </span>
           ) : null}
         </div>
-        <p className="truncate text-xs text-muted-fg">
-          {connected ? (
-            <span className="inline-flex items-center gap-1">
-              <Clock width={11} height={11} /> updated {ago(lastSync)}
-            </span>
-          ) : (
-            detail
-          )}
-        </p>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         {connected ? (
@@ -422,54 +362,21 @@ function SourceRow({
             {saving ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
             <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />
             {onRemove ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onRemove}
-                disabled={removing}
-                title="Remove this automated import"
-              >
+              <Button size="sm" variant="ghost" onClick={onRemove} disabled={removing} title="Remove">
                 {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
                 Remove
               </Button>
             ) : null}
           </>
-        ) : live ? (
-          <span
-            className="text-xs text-muted-fg"
-            title={`Local source — import with: agentqs source file ${id}`}
-          >
-            local · CLI
-          </span>
-        ) : setup === "automation" ? (
-          <Button size="sm" variant="secondary" onClick={onSetup}>
-            <RefreshCw width={13} height={13} /> Set up
-          </Button>
         ) : (
-          <Button size="sm" variant="secondary" onClick={() => setHowto((v) => !v)}>
-            {howto ? "Hide" : "Set up"}
-          </Button>
+          <>
+            <Button size="sm" variant="secondary" onClick={onConnect}>
+              Connect
+            </Button>
+            <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />
+          </>
         )}
-       </div>
       </div>
-
-      {!connected && !live && setup === "file" && howto ? (
-        <div className="mt-3 space-y-2 pl-12 text-xs text-muted-fg">
-          <p>
-            {name} has no live API — export it, then import the file. A cloud replica
-            picks the rows up over git.
-          </p>
-          <ol className="list-decimal space-y-1 pl-4">
-            <li>Export your {name} data ({detail}) to a file.</li>
-            <li>
-              Drop it in the box at the top of this page, or run it through the CLI:
-            </li>
-          </ol>
-          <code className="block overflow-x-auto rounded-md border border-border bg-muted px-2 py-1.5 font-mono text-[11px] text-fg">
-            agentqs import:file --source {id} &lt;path-to-export&gt;
-          </code>
-        </div>
-      ) : null}
     </div>
   );
 }

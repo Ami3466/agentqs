@@ -2,8 +2,7 @@
 
 /**
  * Minimal monochrome mark: a rounded speech node sitting on a three-tick record
- * baseline — the whole product in one glyph (a mentor that talks over your daily
- * record). No sparkle, no colour: it inherits the accent tile's foreground.
+ * baseline. No colour: it inherits the accent tile's foreground.
  */
 function Mark({ size }: { size: number }) {
   return (
@@ -40,11 +39,12 @@ export function Brand({ size = "md" }: { size?: "md" | "lg" }) {
       <span
         className={
           lg
-            ? "text-xl font-semibold tracking-tight text-fg"
-            : "text-[15px] font-semibold tracking-tight text-fg"
+            ? "text-xl font-semibold tracking-tight"
+            : "text-[15px] font-semibold tracking-tight"
         }
       >
-        agentqs
+        <span className="text-fg">agent</span>
+        <span className="text-muted-fg">qs</span>
       </span>
     </div>
   );

@@ -120,7 +120,7 @@ export function VoiceSession() {
                 </div>
                 <p className="text-[12px] text-muted-fg">
                   The ElevenLabs Conversational AI widget streams audio here — Claude is the brain,
-                  and key points write back to your record on close.
+                  and key points write back to the record on close.
                 </p>
                 <button
                   type="button"
@@ -133,7 +133,7 @@ export function VoiceSession() {
             ) : cap && !cap.enabled ? (
               <div>
                 <p className="text-[12px] text-muted-fg">
-                  Talk it out in real time — premium voice + turn-taking, grounded in your record.
+                  Talk it out in real time — premium voice + turn-taking, grounded in the record.
                   Claude stays the brain; ElevenLabs handles the voice.
                 </p>
                 <p className="mt-2 rounded-lg border border-border bg-muted px-2.5 py-2 text-[12px] text-muted-fg">
@@ -147,7 +147,7 @@ export function VoiceSession() {
             ) : (
               <div>
                 <p className="text-[12px] text-muted-fg">
-                  Start a real-time voice conversation. Claude reasons over your record; ElevenLabs
+                  Start a real-time voice conversation. Claude reasons over the record; ElevenLabs
                   speaks and listens with natural turn-taking.
                 </p>
                 {error ? (

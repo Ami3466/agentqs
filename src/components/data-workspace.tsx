@@ -5,15 +5,13 @@ import { Card } from "@/components/ui";
 import { Dropzone } from "@/components/dropzone";
 import { SourcesPanel } from "@/components/sources-panel";
 import { InboxPanel } from "@/components/inbox-panel";
-import { PhotosPanel } from "@/components/photos-panel";
-import { DailyPreview } from "@/components/daily-preview";
 
 /**
- * Client shell for the Data tab (Loop 2 redesign). Top-down flow that reads in the
- * order it works: drop a file → it lands in the inbox → Structure it → watch it
- * fill the daily table. Sources are the separate, live-feed lane below. One shared
- * `version` counter fans a single refetch across every panel after any mutation
- * (a drop, a structure/discard, an auto-sync).
+ * Client shell for the Data tab. Top-down flow that reads in the order it works:
+ * drop a file (photos included) → it lands in the inbox → Structure it. Sources are
+ * the separate, live-feed lane below. One shared `version` counter fans a single
+ * refetch across every panel after any mutation (a drop, a structure/discard, an
+ * auto-sync). The daily/Log table lives on the Journal tab, not here.
  */
 export function DataWorkspace() {
   const [version, setVersion] = useState(0);
@@ -35,14 +33,6 @@ export function DataWorkspace() {
 
       <Card>
         <SourcesPanel version={version} onChanged={bump} automateSignal={automateSignal} />
-      </Card>
-
-      <Card>
-        <PhotosPanel version={version} />
-      </Card>
-
-      <Card>
-        <DailyPreview version={version} />
       </Card>
     </div>
   );

@@ -10,6 +10,7 @@ import type { JournalData, JournalView } from "@/lib/journal";
 
 type Mode = "timeline" | "table";
 const MODE_KEY = "agentqs_journal_mode";
+const MODE_LABEL: Record<Mode, string> = { timeline: "Timeline", table: "Log" };
 
 /**
  * Client shell for the Journal tab. Fetches the pivoted per-day record once and
@@ -84,27 +85,21 @@ export function JournalWorkspace() {
               type="button"
               onClick={() => setModePersist(m)}
               className={cn(
-                "rounded-md px-3 py-1.5 font-medium capitalize transition-colors",
+                "rounded-md px-3 py-1.5 font-medium transition-colors",
                 mode === m ? "bg-muted text-fg" : "text-muted-fg hover:text-fg",
               )}
             >
-              {m}
+              {MODE_LABEL[m]}
             </button>
           ))}
         </div>
       </div>
 
-      {mode === "table" ? (
-        <p className="mb-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-fg">
-          One row per day. Every source&apos;s metrics merged into a single daily record — show, hide, reorder and resize columns, then save the layout as a view.
-        </p>
-      ) : null}
-
       <JournalSearch />
 
       {loading || !data ? (
         <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-20 text-sm text-muted-fg">
-          <Spinner width={16} height={16} /> Loading your record…
+          <Spinner width={16} height={16} /> Loading…
         </div>
       ) : mode === "timeline" ? (
         <JournalTimeline data={data} />

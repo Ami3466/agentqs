@@ -13,7 +13,7 @@ export default function LoginPage() {
   if (getCurrentUser()) redirect("/");
 
   return (
-    <AuthShell title="Welcome back" subtitle="Sign in to your agentqs.">
+    <AuthShell title="Sign in">
       <LoginForm />
     </AuthShell>
   );

@@ -96,38 +96,33 @@ function DayCard({
         ) : null}
 
         {day.sessions.map((s) => (
-          <div key={s.id} className="rounded-lg border border-border bg-muted/40 p-3">
-            <div className="flex items-center gap-2">
-              <Sparkles width={14} height={14} className={SKILL_TINT[s.skill] ?? "text-accent"} />
-              <span className="text-sm font-medium text-fg">
-                {s.title ?? "Session"}
+          <div
+            key={s.id}
+            className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5"
+          >
+            <Sparkles
+              width={13}
+              height={13}
+              className={cn("shrink-0", SKILL_TINT[s.skill] ?? "text-accent")}
+            />
+            <span className="shrink-0 text-[13px] font-medium text-fg">{s.title ?? "Session"}</span>
+            <span className="shrink-0 rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
+              {s.skill}
+            </span>
+            {s.summary ? (
+              <span
+                className="min-w-0 flex-1 truncate text-[13px] text-muted-fg"
+                title={s.summary}
+              >
+                {s.summary}
               </span>
-              <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-                {s.skill}
-              </span>
-            </div>
-            {s.summary ? <p className="mt-1.5 text-sm text-muted-fg">{s.summary}</p> : null}
-            {s.insights.length ? (
-              <ul className="mt-2 space-y-1">
-                {s.insights.map((it, i) => (
-                  <li key={i} className="flex gap-1.5 text-[13px] text-fg">
-                    <span className="text-accent">→</span>
-                    <span>{it}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+            ) : (
+              <span className="flex-1" />
+            )}
             {s.commitments.length ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {s.commitments.map((c, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] text-accent"
-                  >
-                    ✓ {c}
-                  </span>
-                ))}
-              </div>
+              <span className="shrink-0 text-[11px] text-muted-fg/70">
+                {s.commitments.length}✓
+              </span>
             ) : null}
           </div>
         ))}
@@ -155,10 +150,9 @@ export function JournalTimeline({ data }: { data: JournalData }) {
   if (!data.days.length) {
     return (
       <div className="rounded-xl border border-dashed border-border px-4 py-16 text-center">
-        <p className="text-sm font-medium text-fg">Your timeline is empty.</p>
+        <p className="text-sm font-medium text-fg">No entries yet.</p>
         <p className="mt-1 text-sm text-muted-fg">
-          Connect a source in the Data tab, or log a memo with{" "}
-          <span className="font-mono">&gt;&gt;</span> in Chat — days appear here as they land.
+          Connect a source in Data, or log a memo in Chat.
         </p>
       </div>
     );

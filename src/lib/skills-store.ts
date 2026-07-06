@@ -83,7 +83,7 @@ export function upsertSkill(input: UpsertSkillInput): UpsertSkillResult {
     blurb: input.blurb,
     system: input.system,
   });
-  if (!skill) throw new Error("A mentor needs a name and a system prompt.");
+  if (!skill) throw new Error("A skill needs a name and a system prompt.");
   if (BUILTIN_IDS.has(skill.id)) {
     throw new Error(`"${skill.id}" is a built-in persona — pick another id.`);
   }

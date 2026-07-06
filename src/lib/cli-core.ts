@@ -12,7 +12,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { readConfig, writeConfig, type AppConfig } from "./config";
+import { activeLlm, effectiveProviders, readConfig, writeConfig, type AppConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
 import { openReadonly } from "./db";
 import {
@@ -462,10 +462,12 @@ type ConfigKey = (typeof CONFIG_KEYS)[number];
 /** Safe, redacted view of the settable config. */
 export function configList() {
   const cfg = readConfig();
+  const llm = activeLlm(cfg);
   return {
-    provider: cfg?.llmProvider ?? "",
-    model: cfg?.model ?? "",
-    key: cfg?.llmKey ? `••••${cfg.llmKey.slice(-4)}` : "",
+    provider: llm?.type ?? cfg?.llmProvider ?? "",
+    model: llm?.model ?? cfg?.model ?? "",
+    key: llm?.apiKey ? `••••${llm.apiKey.slice(-4)}` : "",
+    providers: effectiveProviders(cfg).length,
     theme: cfg?.theme ?? "system",
     username: cfg?.username ?? "",
     dataDir: recordDir().replace(/\/record$/, ""),

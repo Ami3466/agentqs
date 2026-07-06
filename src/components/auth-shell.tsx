@@ -32,10 +32,6 @@ export function AuthShell({
           </div>
           {children}
         </div>
-
-        <p className="mt-6 text-center text-xs text-muted-fg">
-          Your data lives in your own git repo, on your own server.
-        </p>
       </div>
     </div>
   );

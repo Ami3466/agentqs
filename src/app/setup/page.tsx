@@ -10,10 +10,7 @@ export default function SetupPage() {
   if (configExists()) redirect("/login");
 
   return (
-    <AuthShell
-      title="Create your agentqs"
-      subtitle="One private instance, yours alone. Set a login and you're in."
-    >
+    <AuthShell title="Create account">
       <SetupForm />
     </AuthShell>
   );

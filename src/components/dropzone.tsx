@@ -18,12 +18,22 @@ function isBinary(text: string): boolean {
   return false;
 }
 
+/** Read a file as a data URL (used to embed photos verbatim into the inbox). */
+function readDataUrl(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error ?? new Error("read failed"));
+    r.readAsDataURL(f);
+  });
+}
+
 /**
- * The one manual ingest path (Loop 2 redesign). Drag & drop — or click to browse —
- * ANY unstructured file. It lands verbatim in the pending inbox (no LLM, free);
- * the inbox's Structure step turns it into daily rows. This is deliberately the
- * ONLY drop target on the page: sources are live feeds, a dropped file is not a
- * connection. Bumps the shared `version` so the inbox + daily table refetch.
+ * The one manual ingest path. Drag & drop — or click to browse — ANY file,
+ * including images. Text files land verbatim in the pending inbox; images are read
+ * as a data URL and land there too (embedded on Structure). This is the ONLY drop
+ * target on the page: sources are live feeds, a dropped file is not a connection.
+ * Bumps the shared `version` so the inbox refetches.
  */
 export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
   const [drag, setDrag] = useState(false);
@@ -44,8 +54,33 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
       setBusy(true);
       let ok = 0;
       const skipped: string[] = [];
+      async function post(body: Record<string, unknown>): Promise<boolean> {
+        const res = await fetch("/api/inbox", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source: "drop", ...body }),
+        });
+        return res.ok;
+      }
       try {
         for (const f of list) {
+          if (f.type.startsWith("image/")) {
+            let dataUrl = "";
+            try {
+              dataUrl = await readDataUrl(f);
+            } catch {
+              skipped.push(f.name);
+              continue;
+            }
+            const done = await post({
+              text: dataUrl,
+              kind: "image",
+              meta: { filename: f.name, bytes: f.size, mime: f.type },
+            });
+            if (done) ok++;
+            else skipped.push(f.name);
+            continue;
+          }
           let text = "";
           try {
             text = await f.text();
@@ -57,28 +92,20 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
             skipped.push(f.name);
             continue;
           }
-          const res = await fetch("/api/inbox", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              text,
-              source: "drop",
-              kind: kindOf(f.name),
-              meta: { filename: f.name, bytes: f.size },
-            }),
+          const done = await post({
+            text,
+            kind: kindOf(f.name),
+            meta: { filename: f.name, bytes: f.size },
           });
-          if (res.ok) ok++;
+          if (done) ok++;
           else skipped.push(f.name);
         }
         if (ok) {
-          say("ok", `${ok} file${ok === 1 ? "" : "s"} in your inbox — hit Structure below.`);
+          say("ok", `${ok} file${ok === 1 ? "" : "s"} added — Structure below.`);
           onUploaded();
         }
         if (skipped.length) {
-          say(
-            ok ? "ok" : "error",
-            `Couldn't read ${skipped.join(", ")} — text-based files only (CSV, JSON, notes, exports).`,
-          );
+          say(ok ? "ok" : "error", `Couldn't read ${skipped.join(", ")}.`);
         }
       } finally {
         setBusy(false);
@@ -134,12 +161,10 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           {busy ? <Spinner width={20} height={20} /> : <Upload width={20} height={20} />}
         </span>
         <p className="text-base font-semibold text-fg">
-          {busy ? "Adding to inbox…" : "Drop data here"}
+          {busy ? "Adding…" : "Drop data here"}
         </p>
         <p className="max-w-md text-sm text-muted-fg">
-          Any file — a CSV export, notes, a chat log, JSON. It lands in your inbox; then{" "}
-          <b className="font-medium text-fg">Structure</b> turns it into daily data. Or click to
-          browse.
+          Any file. Photos will be embedded.
         </p>
       </div>
       <input

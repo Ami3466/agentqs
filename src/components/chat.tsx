@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, Inbox, Plus, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
+import { Check, ChevronDown, Inbox, Plus, Send, Sparkles, Spinner, Terminal, Trash } from "@/components/icons";
 import { Sparkline } from "@/components/sparkline";
 import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
@@ -23,7 +23,7 @@ interface Msg {
   id: string;
   role: Role;
   text: string;
-  skill?: string; // persona that produced an assistant reply
+  skill?: string; // skill that produced an assistant reply
   pending?: number; // memo: inbox count after saving
   tone?: "ok" | "error";
   session?: SavedSession; // recap: the synthesized session being viewed
@@ -45,16 +45,23 @@ interface SavedSession {
   commitments: string[];
 }
 
+/** A provider account as the model chip sees it. */
+interface ProviderLite {
+  id: string;
+  type: string;
+  label: string;
+  hasKey: string;
+}
+
 let seq = 0;
 const nid = () => `m${Date.now().toString(36)}_${(seq++).toString(36)}`;
 
 const SKILL_KEY = "agentqs.skill";
+const MODEL_KEY = "agentqs.model";
 
 export function Chat() {
   const router = useRouter();
-  const [skill, setSkill] = useState(""); // no mentor chosen by default
-  // Built-ins + custom mentors (added from the CLI / MCP / API). Falls back to the
-  // built-in list until /api/skills responds, so the chip renders instantly.
+  const [skill, setSkill] = useState(""); // no skill chosen by default
   const [skills, setSkills] = useState<Skill[]>(SKILLS);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -62,11 +69,21 @@ export function Chat() {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [skillOpen, setSkillOpen] = useState(false);
   const [hi, setHi] = useState(0); // highlighted command in the palette
 
+  // Model chip: providers + the chosen (provider, model), switchable mid-chat.
+  const [providers, setProviders] = useState<ProviderLite[]>([]);
+  const [modelSel, setModelSel] = useState<{ providerId: string; model: string } | null>(null);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [provModels, setProvModels] = useState<Record<string, string[]>>({});
+  const [loadingProv, setLoadingProv] = useState<string | null>(null);
+  const [openProv, setOpenProv] = useState<string | null>(null);
+
   const skillRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -77,19 +94,46 @@ export function Chat() {
 
   const filtered = useMemo(() => filterCommands(input), [input]);
 
-  // Restore the last-used persona.
+  // Restore the last-used skill + model choice.
   useEffect(() => {
-    const savedSkill = typeof window !== "undefined" ? window.localStorage.getItem(SKILL_KEY) : null;
-    if (savedSkill) setSkill(savedSkill); // resolve() falls back if it's since been removed
+    if (typeof window === "undefined") return;
+    const savedSkill = window.localStorage.getItem(SKILL_KEY);
+    if (savedSkill) setSkill(savedSkill);
+    try {
+      const m = window.localStorage.getItem(MODEL_KEY);
+      if (m) setModelSel(JSON.parse(m));
+    } catch {
+      /* ignore */
+    }
   }, []);
 
-  // Load custom mentors so the chip + /skill offer everything the record knows.
+  // Load custom skills so the chip + /skill offer everything the record knows.
   useEffect(() => {
     let alive = true;
     fetch("/api/skills")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (alive && d && Array.isArray(d.skills) && d.skills.length) setSkills(d.skills as Skill[]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Load the providers list + default model for the model chip.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive || !d) return;
+        const provs = Array.isArray(d.providers) ? (d.providers as ProviderLite[]).filter((p) => p.hasKey) : [];
+        setProviders(provs);
+        setModelSel((cur) => {
+          if (cur && provs.some((p) => p.id === cur.providerId)) return cur;
+          return d.selectedModel ?? null;
+        });
       })
       .catch(() => {});
     return () => {
@@ -111,27 +155,31 @@ export function Chat() {
     };
   }, []);
 
-  // Close the skill dropdown on outside click / Escape.
+  // Close the skill / model dropdowns on outside click / Escape.
   useEffect(() => {
-    if (!skillOpen) return;
+    if (!skillOpen && !modelOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (skillRef.current && !skillRef.current.contains(e.target as Node)) setSkillOpen(false);
+      if (skillOpen && skillRef.current && !skillRef.current.contains(e.target as Node)) setSkillOpen(false);
+      if (modelOpen && modelRef.current && !modelRef.current.contains(e.target as Node)) setModelOpen(false);
     };
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setSkillOpen(false);
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSkillOpen(false);
+        setModelOpen(false);
+      }
+    };
     document.addEventListener("mousedown", onClick);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [skillOpen]);
+  }, [skillOpen, modelOpen]);
 
-  // Keep the palette highlight in range as the filter narrows.
   useEffect(() => {
     setHi((h) => (filtered.length ? Math.min(h, filtered.length - 1) : 0));
   }, [filtered.length]);
 
-  // Auto-scroll to the newest message.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, busy]);
@@ -147,8 +195,35 @@ export function Chat() {
     inputRef.current?.focus();
   }
 
-  /** Distill + persist the current conversation to the session store, then land
-   * it in the sidebar. No-op (returns false) when there's nothing to save. */
+  async function loadProviderModels(id: string) {
+    if (provModels[id]) {
+      setOpenProv((p) => (p === id ? null : id));
+      return;
+    }
+    setLoadingProv(id);
+    setOpenProv(id);
+    try {
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ providerId: id }),
+      });
+      const d = await res.json().catch(() => ({}));
+      setProvModels((m) => ({ ...m, [id]: Array.isArray(d.models) ? d.models : [] }));
+    } finally {
+      setLoadingProv(null);
+    }
+  }
+
+  function chooseModel(providerId: string, model: string) {
+    const sel = { providerId, model };
+    setModelSel(sel);
+    setModelOpen(false);
+    if (typeof window !== "undefined") window.localStorage.setItem(MODEL_KEY, JSON.stringify(sel));
+    inputRef.current?.focus();
+  }
+
+  /** Distill + persist the current conversation, then land it in the sidebar. */
   async function persistCurrent(): Promise<boolean> {
     const convo = messages
       .filter((m) => m.role === "user" || m.role === "assistant")
@@ -183,8 +258,22 @@ export function Chat() {
     inputRef.current?.focus();
   }
 
-  /** Show a persisted session's synthesis (what the agent remembers) — a recap,
-   * not the raw transcript. Continuing from here starts a fresh conversation. */
+  async function deleteSession(id: string) {
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/sessions?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (res.ok) {
+        setSaved((ss) => ss.filter((s) => s.id !== id));
+        if (viewingId === id) {
+          setViewingId(null);
+          setMessages([]);
+        }
+      }
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   function openSaved(s: SavedSession) {
     setViewingId(s.id);
     setSkill(skills.some((k) => k.id === s.skill) ? s.skill : skill);
@@ -196,7 +285,7 @@ export function Chat() {
   async function sendMemo(raw: string) {
     const text = memoText(raw);
     if (!text) {
-      push({ role: "note", tone: "error", text: "A memo needs some text after >>." });
+      push({ role: "note", tone: "error", text: "A memo needs some text after //." });
       return;
     }
     setInput("");
@@ -234,12 +323,12 @@ export function Chat() {
         chooseSkill(target);
         push({ role: "note", tone: "ok", text: `Switched to ${resolve(target).name}.` });
       } else {
-        push({ role: "note", text: `Pick a persona: ${skills.map((s) => s.id).join(" · ")}` });
+        push({ role: "note", text: `Pick a skill: ${skills.map((s) => s.id).join(" · ")}` });
       }
       return;
     }
     if (cmd === "structure") {
-      push({ role: "note", text: "Structuring runs from the Data tab inbox — opening it." });
+      push({ role: "note", text: "Structuring runs from the Data inbox — opening it." });
       router.push("/data");
       return;
     }
@@ -272,7 +361,6 @@ export function Chat() {
     push({ role: "note", tone: "error", text: `Unknown command "/${cmd}". Try ${COMMANDS.map((c) => c.cmd).join(" · ")}.` });
   }
 
-  /** Mutate one message in place by id (used to stream tokens into its bubble). */
   function patch(id: string, up: (m: Msg) => Msg) {
     setMessages((prev) => prev.map((m) => (m.id === id ? up(m) : m)));
   }
@@ -282,7 +370,6 @@ export function Chat() {
 
   async function sendChat(raw: string) {
     const text = raw.trim();
-    // No mentor picked yet → fall to the first and remember it, so the reply has a voice.
     const useSkill = chosen ? skill : skills[0]?.id ?? DEFAULT_SKILL;
     if (!chosen) chooseSkill(useSkill);
     const history = messages
@@ -293,7 +380,6 @@ export function Chat() {
     setInput("");
     setBusy(true);
 
-    // Drop in an empty assistant bubble the stream fills token-by-token.
     const aid = nid();
     setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", skill: useSkill, streaming: true }]);
     setStreamingId(aid);
@@ -302,7 +388,12 @@ export function Chat() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, skill: useSkill, history }),
+        body: JSON.stringify({
+          message: text,
+          skill: useSkill,
+          history,
+          ...(modelSel ? { providerId: modelSel.providerId, model: modelSel.model } : {}),
+        }),
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
@@ -311,7 +402,6 @@ export function Chat() {
         return;
       }
 
-      // Read the NDJSON stream: {t:"delta"} tokens, then one {t:"done"} (or {t:"error"}).
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -358,11 +448,10 @@ export function Chat() {
           }
         }
       }
-      // Stream ended without a terminal frame — stop the caret rather than spin forever.
       if (!failed) patch(aid, (m) => (m.streaming ? { ...m, streaming: false } : m));
     } catch {
       drop(aid);
-      push({ role: "note", tone: "error", text: "Could not reach the mentor." });
+      push({ role: "note", tone: "error", text: "Could not reach the model." });
     } finally {
       setBusy(false);
       setStreamingId(null);
@@ -379,7 +468,6 @@ export function Chat() {
   }
 
   function onKeyDown(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    // Command palette navigation.
     if (mode === "command" && filtered.length) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -399,7 +487,6 @@ export function Chat() {
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      // In command mode, if the typed token isn't a full command yet, run the highlighted one.
       if (mode === "command") {
         const token = input.split(/\s+/)[0].toLowerCase();
         const exact = COMMANDS.some((c) => c.cmd === token);
@@ -414,20 +501,20 @@ export function Chat() {
 
   const placeholder =
     mode === "memo"
-      ? "Memo — saved to your inbox, no reply"
+      ? "Memo — saved to the inbox, no reply"
       : mode === "command"
         ? "Command — /sync · /structure · /new · /skill"
-        : `Message your ${chosen ? activeSkill.name.toLowerCase() : "mentor"}…  ( >> memo · / commands )`;
+        : `Message${chosen ? ` the ${activeSkill.name.toLowerCase()}` : ""}…  ( // memo · / commands )`;
+
+  const modelLabel = modelSel?.model || "Model";
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
+    <div className="grid h-[calc(100dvh-11rem)] min-h-[460px] gap-4 lg:grid-cols-[220px_1fr]">
       {/* sessions sidebar */}
-      <Card className="hidden p-3 lg:block">
+      <Card className="hidden flex-col overflow-hidden p-3 lg:flex">
         <div className="flex items-center justify-between px-1 pb-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">Sessions</p>
-          {saved.length ? (
-            <span className="text-[11px] text-muted-fg">{saved.length}</span>
-          ) : null}
+          {saved.length ? <span className="text-[11px] text-muted-fg">{saved.length}</span> : null}
         </div>
         <button
           type="button"
@@ -436,63 +523,62 @@ export function Chat() {
           className="flex w-full items-center gap-2 rounded-lg bg-muted px-3 py-2 text-left text-sm font-medium text-fg transition-colors hover:bg-border/60 disabled:opacity-50"
         >
           {saving ? <Spinner width={14} height={14} /> : null}
-          {saving ? "Saving session…" : "+ New session"}
+          {saving ? "Saving…" : "+ New session"}
         </button>
-        <div className="mt-2 space-y-1">
+        <div className="scrollbar-thin mt-2 flex-1 space-y-1 overflow-y-auto">
           {saved.length === 0 ? (
             <p className="px-1 pt-2 text-xs text-muted-fg">
-              Each conversation is distilled to a summary + commitments here, and the mentor reads
-              it next time. <code className="font-mono">/new</code> ends one.
+              Each conversation is distilled to a summary + commitments here, read back next time.
             </p>
           ) : (
             saved.map((s) => (
-              <button
+              <div
                 key={s.id}
-                type="button"
-                onClick={() => openSaved(s)}
                 className={cn(
-                  "block w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted",
+                  "group flex items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-muted",
                   viewingId === s.id ? "bg-muted" : "",
                 )}
               >
-                <span className="flex items-center gap-1.5">
-                  <span className="truncate text-[13px] font-medium text-fg">{s.title || "Session"}</span>
-                </span>
-                <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-fg">
-                  <span>{s.date}</span>
-                  <span>· {resolve(s.skill).name}</span>
-                  {s.commitments.length ? (
-                    <span className="inline-flex items-center gap-0.5 text-accent">
-                      · <Check width={10} height={10} /> {s.commitments.length}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
+                <button type="button" onClick={() => openSaved(s)} className="min-w-0 flex-1 px-3 py-2 text-left">
+                  <span className="block truncate text-[13px] font-medium text-fg">{s.title || "Session"}</span>
+                  <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-fg">
+                    <span>{s.date}</span>
+                    <span>· {resolve(s.skill).name}</span>
+                    {s.commitments.length ? (
+                      <span className="inline-flex items-center gap-0.5 text-accent">
+                        · <Check width={10} height={10} /> {s.commitments.length}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteSession(s.id)}
+                  disabled={deletingId === s.id}
+                  aria-label="Delete session"
+                  className="shrink-0 rounded p-1 text-muted-fg opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                >
+                  {deletingId === s.id ? <Spinner width={13} height={13} /> : <Trash width={13} height={13} />}
+                </button>
+              </div>
             ))
           )}
         </div>
       </Card>
 
       {/* conversation + input */}
-      <Card className="flex min-h-[440px] flex-col">
+      <Card className="flex min-h-0 flex-col">
         <div ref={scrollRef} className="scrollbar-thin flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 py-10 text-center">
               <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-muted text-accent">
                 <Sparkles width={20} height={20} />
               </span>
-              <p className="text-lg font-medium text-fg">Ask your life anything.</p>
+              <p className="text-lg font-medium text-fg">Ask the record anything.</p>
               <p className="max-w-md text-sm text-muted-fg">
-                &ldquo;Why have I felt off this week?&rdquo; — grounded in your real sleep, heart
-                rate, calendar and messages. Plain text talks · <code className="font-mono">&gt;&gt;</code>{" "}
-                logs a memo · <code className="font-mono">/</code> runs a command.
+                Grounded in sleep, heart rate, calendar and messages. Plain text talks ·{" "}
+                <code className="font-mono">//</code> logs a memo · <code className="font-mono">/</code> runs a command.
               </p>
-              {saved.length ? (
-                <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-[12px] text-muted-fg">
-                  <Sparkles width={12} height={12} className="text-accent" />
-                  Remembers {saved.length} past session{saved.length === 1 ? "" : "s"} — it may pick up an open commitment.
-                </p>
-              ) : null}
             </div>
           ) : (
             messages.map((m) => <Bubble key={m.id} m={m} skills={skills} />)
@@ -544,22 +630,22 @@ export function Chat() {
                   : "border-input focus-within:border-ring/60",
             )}
           >
-            {/* mentor chip */}
+            {/* skill chip */}
             <div className="relative" ref={skillRef} id="tour-mentor">
               <button
                 type="button"
                 onClick={() => setSkillOpen((v) => !v)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-muted"
-                title="Choose your mentor"
+                title="Choose a skill"
               >
                 <span className={cn("h-1.5 w-1.5 rounded-full", chosen ? "bg-fg" : "bg-muted-fg/40")} />
-                {chosen ? activeSkill.name : "Choose mentor"}
+                {chosen ? activeSkill.name : "Skill"}
                 <ChevronDown width={13} height={13} className={cn("transition-transform", skillOpen && "rotate-180")} />
               </button>
               {skillOpen ? (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-card shadow-xl">
                   <p className="border-b border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-                    Mentor
+                    Skill
                   </p>
                   {skills.map((s) => (
                     <button
@@ -585,8 +671,81 @@ export function Chat() {
                     }}
                     className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-sm text-muted-fg transition-colors hover:bg-muted hover:text-fg"
                   >
-                    <Plus width={14} height={14} /> Add a mentor · manage in Settings
+                    <Plus width={14} height={14} /> Add a skill · Settings
                   </button>
+                </div>
+              ) : null}
+            </div>
+
+            {/* model chip */}
+            <div className="relative" ref={modelRef}>
+              <button
+                type="button"
+                onClick={() => setModelOpen((v) => !v)}
+                className="inline-flex h-8 max-w-[9rem] items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-muted"
+                title="Choose a model"
+              >
+                <span className="truncate">{modelLabel}</span>
+                <ChevronDown width={13} height={13} className={cn("shrink-0 transition-transform", modelOpen && "rotate-180")} />
+              </button>
+              {modelOpen ? (
+                <div className="absolute bottom-full left-0 z-50 mb-2 max-h-80 w-72 overflow-y-auto rounded-xl border border-border bg-card shadow-xl">
+                  <p className="border-b border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+                    Model
+                  </p>
+                  {providers.length === 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModelOpen(false);
+                        router.push("/settings");
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-muted-fg hover:bg-muted hover:text-fg"
+                    >
+                      <Plus width={14} height={14} /> Add a provider · Settings
+                    </button>
+                  ) : (
+                    providers.map((p) => (
+                      <div key={p.id}>
+                        <button
+                          type="button"
+                          onClick={() => void loadProviderModels(p.id)}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] font-medium text-fg hover:bg-muted"
+                        >
+                          <span className="truncate">{p.label || p.type}</span>
+                          {loadingProv === p.id ? (
+                            <Spinner width={13} height={13} />
+                          ) : (
+                            <ChevronDown
+                              width={13}
+                              height={13}
+                              className={cn("shrink-0 text-muted-fg transition-transform", openProv === p.id && "rotate-180")}
+                            />
+                          )}
+                        </button>
+                        {openProv === p.id
+                          ? (provModels[p.id] ?? []).map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => chooseModel(p.id, m)}
+                                className="flex w-full items-center gap-2 py-1.5 pl-6 pr-3 text-left text-[13px] text-muted-fg hover:bg-muted hover:text-fg"
+                              >
+                                <span className="w-4 shrink-0 text-fg">
+                                  {modelSel?.providerId === p.id && modelSel.model === m ? (
+                                    <Check width={13} height={13} />
+                                  ) : null}
+                                </span>
+                                <span className="truncate font-mono text-[12px]">{m}</span>
+                              </button>
+                            ))
+                          : null}
+                        {openProv === p.id && (provModels[p.id]?.length ?? 0) === 0 && loadingProv !== p.id ? (
+                          <p className="py-1.5 pl-6 pr-3 text-[11px] text-muted-fg">No models returned.</p>
+                        ) : null}
+                      </div>
+                    ))
+                  )}
                 </div>
               ) : null}
             </div>
@@ -610,11 +769,8 @@ export function Chat() {
               disabled={!input.trim() || busy}
               aria-label={mode === "memo" ? "Save memo" : mode === "command" ? "Run command" : "Send"}
               className={cn(
-                "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors",
-                "disabled:opacity-40",
-                mode === "memo"
-                  ? "bg-muted text-accent hover:bg-border/60"
-                  : "bg-accent text-accent-fg hover:opacity-90",
+                "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-40",
+                mode === "memo" ? "bg-muted text-accent hover:bg-border/60" : "bg-accent text-accent-fg hover:opacity-90",
               )}
             >
               {mode === "memo" ? <Inbox width={15} height={15} /> : <Send width={15} height={15} />}
@@ -623,14 +779,13 @@ export function Chat() {
 
           <p className="mt-1.5 px-1 text-[11px] text-muted-fg">
             {mode === "memo" ? (
-              <span className="text-accent">Memo — lands in your inbox, no reply, no tokens spent.</span>
+              <span className="text-accent">Memo — lands in the inbox, no reply, no tokens spent.</span>
             ) : mode === "command" ? (
               <span>Command mode — ↑↓ to pick, Enter to run, Tab to complete.</span>
             ) : (
               <>
-                <b className="font-medium text-fg">Enter</b> to send · <code className="font-mono">&gt;&gt;</code>{" "}
-                memo · <code className="font-mono">/</code> commands · mentor:{" "}
-                <b className="font-medium text-fg">{chosen ? activeSkill.name : "none"}</b>
+                <b className="font-medium text-fg">Enter</b> to send · <code className="font-mono">//</code> memo ·{" "}
+                <code className="font-mono">/</code> commands
               </>
             )}
           </p>
@@ -650,7 +805,7 @@ function Bubble({ m, skills }: { m: Msg; skills: Skill[] }) {
       <div className="space-y-2">
         <p className="flex items-center justify-center gap-1.5 text-center text-[11px] text-muted-fg">
           <Sparkles width={11} height={11} className="text-accent" />
-          What the mentor remembers from this session — the synthesis, not the transcript.
+          The synthesis kept from this session — not the transcript.
         </p>
         <div className="rounded-xl border border-border bg-muted/40 p-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -749,10 +904,8 @@ function Bubble({ m, skills }: { m: Msg; skills: Skill[] }) {
         </div>
         {m.grounded ? (
           <p className="mt-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-accent">
-            <Check width={11} height={11} /> grounded in your record
-            {m.sources?.length ? (
-              <span className="font-normal text-muted-fg">· {m.sources.join(", ")}</span>
-            ) : null}
+            <Check width={11} height={11} /> grounded in the record
+            {m.sources?.length ? <span className="font-normal text-muted-fg">· {m.sources.join(", ")}</span> : null}
           </p>
         ) : null}
         {m.grounded && m.spark ? <ReplySpark spark={m.spark} /> : null}
@@ -776,8 +929,7 @@ function TypingDots() {
   );
 }
 
-/** The inline sparkline under a grounded reply: a cited metric's shape over time
- *  plus the actual latest / avg / range numbers it's grounded in. */
+/** The inline sparkline under a grounded reply. */
 function ReplySpark({ spark }: { spark: SparkPayload }) {
   return (
     <div className="mt-2 max-w-xs rounded-xl border border-border bg-card/60 px-3 py-2">

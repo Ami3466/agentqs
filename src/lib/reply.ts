@@ -1,4 +1,4 @@
-import { readConfig } from "./config";
+import { activeLlm, readConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
 import { appendInboxItem, rebuild, readSessionsFromRecord } from "./record";
 import { groundedCrossSourceAnswer, looksLikeDataQuestion, looksLikeRecallQuestion, readGrounding } from "./grounding";
@@ -75,6 +75,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const message = mode === "command" ? raw.replace(/^\//, "").trim() : raw;
 
   const cfg = readConfig();
+  const llm = activeLlm(cfg);
   const history = Array.isArray(input.history)
     ? input.history
         .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
@@ -87,7 +88,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
 
   // ---- No key: honest fallback, but a data question over ≥2 sources still gets a
   // real, grounded cross-source answer computed straight from the numbers. --------
-  if (!cfg?.llmProvider || !cfg?.llmKey) {
+  if (!llm) {
     // Semantic recall ("find days that felt like this") — the local index answers it
     // with no key. Most specific intent, so checked first.
     if (looksLikeRecallQuestion(message)) {
@@ -137,7 +138,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
   const catalog = dailyCatalog(dbFile);
   const memory = continuityBlock(prior);
   const system = [skill.system, catalog.hint, memory].filter(Boolean).join("\n\n");
-  const model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
+  const model = resolveModel(llm);
 
   const run = await runMentor({
     model,

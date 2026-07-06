@@ -1,4 +1,5 @@
 import { llmComplete, type LlmMessage } from "./llm";
+import { activeLlm, type AppConfig } from "./config";
 import type { SessionItem } from "./record";
 import { skillById } from "./skills";
 
@@ -23,11 +24,6 @@ export interface SessionSynthesis {
   commitments: string[];
 }
 
-export interface LlmConfigLike {
-  llmProvider?: string;
-  llmKey?: string;
-  model?: string;
-}
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -144,7 +140,7 @@ export interface SynthesizeInput {
   messages: LlmMessage[];
   skill: string;
   date: string;
-  cfg?: LlmConfigLike | null;
+  cfg?: AppConfig | null;
 }
 
 export interface SynthesizeResult {
@@ -159,14 +155,12 @@ export interface SynthesizeResult {
 export async function synthesizeSession(input: SynthesizeInput): Promise<SynthesizeResult> {
   const transcript = formatTranscript(input.messages, input.skill);
   const heur = heuristicSynthesis(input.messages, input.skill);
-  const hasKey = Boolean(input.cfg?.llmProvider && input.cfg?.llmKey);
-  if (!hasKey) return { synthesis: heur, via: "heuristic", transcript };
+  const llm = activeLlm(input.cfg ?? null);
+  if (!llm) return { synthesis: heur, via: "heuristic", transcript };
 
   try {
     const out = await llmComplete({
-      provider: input.cfg!.llmProvider!,
-      apiKey: input.cfg!.llmKey!,
-      model: input.cfg!.model,
+      llm,
       system: synthesisSystem(),
       messages: [{ role: "user", content: synthesisUser(transcript, input.skill, input.date) }],
       maxTokens: 600,

@@ -4,17 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Spinner, Terminal } from "./icons";
 import { cn } from "./ui";
 
-/** Connect / API: mint the instance key, copy the CLI / skill / MCP snippets with it filled in. Kept deliberately tiny. */
+/** Connect / API: mint the instance key, copy the sync command / skill / MCP snippets with it filled in. Kept deliberately tiny. */
 
 const PH = "AQS_KEY_HERE";
-const cliSnip = (b: string, k: string) =>
-  `export AGENTQS_URL=${b} AGENTQS_KEY=${k}\nagentqs chat "why have I felt off this week?"`;
+const SYNC_CMD = "agentqs sync --source github";
 const skillSnip = (b: string, k: string) =>
   `---\nname: agentqs\ndescription: Query the user's agentqs life-record + mentor.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}`;
 const mcpSnip = (b: string, k: string) =>
   `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}'`;
 
-function CopyRow({ label, code }: { label: string; code: string }) {
+function CopyRow({ label, code, mono, className }: { label: string; code: string; mono?: boolean; className?: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
@@ -24,10 +23,17 @@ function CopyRow({ label, code }: { label: string; code: string }) {
         setDone(true);
         setTimeout(() => setDone(false), 1200);
       }}
-      className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-[13px] text-fg transition-colors hover:bg-muted"
+      className={cn(
+        "flex w-full items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-[13px] text-fg transition-colors hover:bg-muted",
+        className,
+      )}
     >
-      {label}
-      {done ? <Check width={14} height={14} /> : <Copy width={14} height={14} className="text-muted-fg" />}
+      <span className={cn("truncate", mono && "font-mono text-[12px]")}>{label}</span>
+      {done ? (
+        <Check width={14} height={14} className="shrink-0" />
+      ) : (
+        <Copy width={14} height={14} className="shrink-0 text-muted-fg" />
+      )}
     </button>
   );
 }
@@ -92,9 +98,11 @@ export function ConnectApi() {
             {fullKey ? "New key generated" : masked ? `Regenerate API key · ${masked}` : "Generate API key"}
           </button>
           {fullKey ? <p className="px-1 font-mono text-[12px] text-muted-fg break-all">{fullKey}</p> : null}
-          <CopyRow label="Copy CLI" code={cliSnip(base, key)} />
-          <CopyRow label="Copy skill" code={skillSnip(base, key)} />
-          <CopyRow label="Copy MCP" code={mcpSnip(base, key)} />
+          <CopyRow label={SYNC_CMD} code={SYNC_CMD} mono />
+          <div className="flex gap-2">
+            <CopyRow label="Copy skill" code={skillSnip(base, key)} className="flex-1" />
+            <CopyRow label="Copy mcp" code={mcpSnip(base, key)} className="flex-1" />
+          </div>
         </div>
       ) : null}
     </div>

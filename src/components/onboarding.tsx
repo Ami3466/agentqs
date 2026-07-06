@@ -29,7 +29,7 @@ function runTour() {
         element: "#tour-connect",
         popover: {
           title: "Connect / API",
-          description: "Mint your API key and copy the CLI, curl, MCP and Claude-Code-skill snippets — everything is reachable headless.",
+          description: "Mint an API key and copy the CLI, curl, MCP and skill snippets.",
         },
       },
       {
@@ -43,14 +43,14 @@ function runTour() {
         element: "#tour-tab-journal",
         popover: {
           title: "Journal",
-          description: "Your whole life on one timeline — flip to the table to build saved views.",
+          description: "One timeline. Flip to the table for saved views.",
         },
       },
       {
         element: "#tour-mentor",
         popover: {
-          title: "Your mentor",
-          description: "Pick a mentor here and talk. Add or manage mentors in Settings.",
+          title: "Skills",
+          description: "Pick a skill and start a session. Manage skills in Settings.",
         },
       },
     ],
@@ -96,7 +96,7 @@ export function Onboarding() {
       <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
         <h2 className="text-lg font-semibold text-fg">Welcome to agentqs</h2>
         <p className="mt-1 text-sm text-muted-fg">
-          One private daily record, plus a mentor that reasons over it. Run it anywhere from the terminal:
+          Run from the terminal:
         </p>
 
         <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-muted px-3 py-2.5">
@@ -127,7 +127,7 @@ export function Onboarding() {
             Start with demo data
           </Button>
           <p className="text-center text-[11px] text-muted-fg">
-            Generic sample data — not yours. It&apos;s wiped automatically the moment you import a real source.
+            Generic sample data. Wiped on the first real import.
           </p>
           <Button type="button" className="w-full" onClick={() => finish(true)} disabled={seeding}>
             Start empty &amp; take the tour

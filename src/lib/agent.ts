@@ -8,7 +8,10 @@ import { z } from "zod";
 import { openReadonly } from "./db";
 import { semanticSearch } from "./embeddings";
 import { findSimilarImages, photoContext } from "./photos";
-import { fallbackModel } from "./models";
+import { fallbackModel, type ResolvedLlm } from "./models";
+import { appendInboxItem, rebuild } from "./record";
+import { recordDir } from "./paths";
+import { structurePending } from "./structure-run";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -30,18 +33,21 @@ import type { LlmMessage } from "./llm";
 
 // ---- Provider selection ---------------------------------------------------
 
-/** Resolve a BYO-key provider + model into a Vercel AI SDK LanguageModel. */
-export function resolveModel(provider: string, apiKey: string, model?: string | null): LanguageModel {
-  const id = fallbackModel(provider, model);
-  switch (provider) {
+/** Resolve a provider account (protocol + key + base + model) into a Vercel AI SDK
+ *  LanguageModel. Base URL is honoured so OpenRouter / Groq / any custom
+ *  OpenAI-compatible endpoint work exactly like OpenAI itself. */
+export function resolveModel(r: ResolvedLlm): LanguageModel {
+  const id = fallbackModel(r.type, r.model);
+  const baseURL = r.baseUrl?.trim() || undefined;
+  switch (r.protocol) {
     case "anthropic":
-      return createAnthropic({ apiKey })(id);
-    case "openai":
-      return createOpenAI({ apiKey })(id);
+      return createAnthropic({ apiKey: r.apiKey, baseURL })(id);
     case "google":
-      return createGoogleGenerativeAI({ apiKey })(id);
+      return createGoogleGenerativeAI({ apiKey: r.apiKey, baseURL })(id);
+    case "openai":
+      return createOpenAI({ apiKey: r.apiKey, baseURL })(id);
     default:
-      throw new Error(`Unknown provider "${provider}".`);
+      throw new Error(`Unknown provider protocol "${r.protocol}".`);
   }
 }
 
@@ -210,7 +216,76 @@ export function mentorTools(dbFile: string, used: Used) {
     },
   });
 
-  return { query_daily, search_notes, find_similar, find_similar_images, photo_context };
+  // ---- Write tools: the conversation feeds the record ("the database builds
+  //      itself"). Each append lands in the record + is indexed for search. ------
+
+  const log_memo = tool({
+    description:
+      "Save a short memo to the record — a fact, an observation, something the user said to remember. Lands in the inbox exactly like a `//` memo and is searchable next time. Use it when the user says 'note that…', 'remember…', or drops a fact worth keeping.",
+    inputSchema: z.object({ text: z.string().describe("The memo text to save verbatim.") }),
+    execute: async ({ text }) => {
+      const t = text.trim();
+      if (!t) return { error: "Empty memo." };
+      const rDir = recordDir();
+      appendInboxItem({ text: t, source: "chat" }, { recordDir: rDir });
+      rebuild({ recordDir: rDir });
+      return { saved: true };
+    },
+  });
+
+  const save_insight = tool({
+    description:
+      "Save an insight surfaced in this conversation — a pattern or realisation about the user, in their framing. Kept in the record and searchable. Use it when the exchange produces something worth carrying forward.",
+    inputSchema: z.object({ text: z.string().describe("The insight, one sentence.") }),
+    execute: async ({ text }) => {
+      const t = text.trim();
+      if (!t) return { error: "Empty insight." };
+      const rDir = recordDir();
+      appendInboxItem({ text: t, source: "insight" }, { recordDir: rDir });
+      rebuild({ recordDir: rDir });
+      return { saved: true };
+    },
+  });
+
+  const save_commitment = tool({
+    description:
+      "Save a commitment the user just made — a concrete next action they agreed to. Kept in the record so a later session can hold them to it. Use it only when the user actually commits.",
+    inputSchema: z.object({ text: z.string().describe("The commitment, one sentence.") }),
+    execute: async ({ text }) => {
+      const t = text.trim();
+      if (!t) return { error: "Empty commitment." };
+      const rDir = recordDir();
+      appendInboxItem({ text: t, source: "commitment" }, { recordDir: rDir });
+      rebuild({ recordDir: rDir });
+      return { saved: true };
+    },
+  });
+
+  const structure = tool({
+    description:
+      "Turn pending inbox captures (dropped files, memos with dated metrics) into rows in the daily table. Use it when the user asks to 'structure', 'process the inbox', or 'pull my notes into data'.",
+    inputSchema: z.object({}),
+    execute: async () => {
+      try {
+        const r = await structurePending({ all: true });
+        return { ok: r.ok, structured: r.structured, dailyRows: r.dailyRows };
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    },
+  });
+
+  return {
+    query_daily,
+    search_notes,
+    find_similar,
+    find_similar_images,
+    photo_context,
+    log_memo,
+    save_insight,
+    save_commitment,
+    structure,
+  };
 }
 
 // ---- Schema catalog (what the model may query) ----------------------------
@@ -243,7 +318,8 @@ export function dailyCatalog(dbFile: string): { sources: string[]; hint: string 
       "Table `daily` (long/tidy): date TEXT (ISO day), source TEXT, metric TEXT, value_num REAL, value_text TEXT — one row per (date, source, metric).",
       `Dates ${range.lo}..${range.hi}. Sources: ${sources.join(", ")}.`,
       `Queryable numeric series (source.metric): ${cols}.`,
-      "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so your citations are attributed. Call search_notes for keywords in memos / past sessions, or find_similar for semantic recall ('days that felt like this'). For anything about the user's photos, call find_similar_images (text→image recall) or photo_context (what a date's photos show). When explaining how the user feels, line up 2+ sources.",
+      "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so citations are attributed. Call search_notes for keywords in memos / past sessions, or find_similar for semantic recall ('days that felt like this'). For anything about photos, call find_similar_images (text→image recall) or photo_context (what a date's photos show). When explaining how the user feels, line up 2+ sources.",
+      "You can also WRITE to the record so the conversation feeds it: log_memo (save a fact/observation), save_insight (a realisation), save_commitment (a concrete next action the user commits to), structure (turn pending inbox items into daily rows). Use them when the user asks to note/remember/log something or commits to an action — the database builds itself.",
     ].join("\n");
     return { sources, hint };
   } finally {

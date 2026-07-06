@@ -1,42 +1,61 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { readConfig } from "@/lib/config";
-import { providerById } from "@/lib/models";
+import { effectiveProviders, readConfig } from "@/lib/config";
+import { accountBase, defaultBaseFor, protocolOf, providerTypeOf, type Protocol } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Live model list, pulled from the provider's own /models endpoint — the console
- * face of "paste a key, load its models". Nothing is hardcoded: the ids returned
- * are whatever the provider currently serves for that key. Pass a `key` to test a
- * new one, or omit it to reuse the saved key. The CLI (`agentqs models`) and MCP
- * hit the same normalizer.
+ * Live model list, pulled from a provider account's own /models endpoint — the
+ * console face of "add a provider, load its models". Nothing is hardcoded: the ids
+ * returned are whatever that key currently serves. Two shapes:
+ *   { providerId }        — an already-saved account (reuse its key/base).
+ *   { type, key, base? }  — an account being added in Settings (test the key live).
+ * The CLI (`agentqs models`) and MCP hit the same normalizer.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const body = (await req.json().catch(() => ({}))) as { provider?: string; key?: string };
-  const provider = providerById(String(body.provider ?? ""));
-  if (!provider) {
-    return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
+  const body = (await req.json().catch(() => ({}))) as {
+    providerId?: string;
+    type?: string;
+    key?: string;
+    base?: string;
+  };
+
+  let type = "";
+  let base = "";
+  let key = "";
+
+  if (body.providerId) {
+    const acct = effectiveProviders(readConfig()).find((p) => p.id === body.providerId);
+    if (!acct) return NextResponse.json({ error: "Unknown provider." }, { status: 404 });
+    type = acct.type;
+    base = accountBase(acct);
+    key = (body.key && body.key.trim()) || acct.apiKey;
+  } else {
+    type = String(body.type ?? "");
+    if (!providerTypeOf(type)) return NextResponse.json({ error: "Unknown provider type." }, { status: 400 });
+    base = (body.base && body.base.trim()) || defaultBaseFor(type);
+    key = (body.key ?? "").trim();
   }
-  const key = (body.key && body.key.trim()) || readConfig()?.llmKey || "";
-  if (!key) {
-    return NextResponse.json({ error: "Add an API key first." }, { status: 400 });
-  }
+
+  if (!key) return NextResponse.json({ error: "Add an API key first." }, { status: 400 });
+  if (!base) return NextResponse.json({ error: "Add a base URL for this endpoint." }, { status: 400 });
+
   try {
-    const models = await fetchModels(provider.id, provider.base, key);
-    return NextResponse.json({ ok: true, provider: provider.id, models });
+    const models = await fetchModels(protocolOf(type), base, key);
+    return NextResponse.json({ ok: true, type, models });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
 }
 
-async function fetchModels(id: string, base: string, key: string): Promise<string[]> {
+async function fetchModels(protocol: Protocol, base: string, key: string): Promise<string[]> {
   const b = base.replace(/\/$/, "");
-  if (id === "google") {
+  if (protocol === "google") {
     const res = await fetch(`${b}/models?key=${encodeURIComponent(key)}&pageSize=1000`);
     const json = await readJson(res);
     const models = (json.models ?? []) as Array<{ name?: string; supportedGenerationMethods?: string[] }>;
@@ -48,7 +67,7 @@ async function fetchModels(id: string, base: string, key: string): Promise<strin
     );
   }
   const headers: Record<string, string> =
-    id === "anthropic"
+    protocol === "anthropic"
       ? { "x-api-key": key, "anthropic-version": "2023-06-01" }
       : { authorization: `Bearer ${key}` };
   const res = await fetch(`${b}/models`, { headers });

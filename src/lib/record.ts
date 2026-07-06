@@ -414,6 +414,36 @@ export function updateInboxItems(
   return updated;
 }
 
+/** Delete a session from the record by id. Rewrites sessions.jsonl without the
+ *  matching line (preserving every other line, parseable or not). Returns true when
+ *  a session was removed. The caller rebuilds so it leaves the cache + timeline. */
+export function removeSessionFromRecord(
+  id: string,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): boolean {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const file = path.join(rDir, "sessions.jsonl");
+  if (!fs.existsSync(file)) return false;
+  const out: string[] = [];
+  let removed = false;
+  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === "") continue;
+    try {
+      const obj = JSON.parse(t) as Record<string, unknown>;
+      if (String(obj.id) === id) {
+        removed = true;
+        continue;
+      }
+    } catch {
+      /* keep unparseable lines */
+    }
+    out.push(t);
+  }
+  if (removed) fs.writeFileSync(file, out.length ? out.join("\n") + "\n" : "", "utf8");
+  return removed;
+}
+
 /** One CSV cell, quoted only when it must be (delimiter, quote, or newline). */
 function csvCell(s: string): string {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
