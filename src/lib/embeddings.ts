@@ -4,32 +4,26 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { recordDir as recordDirFor, vecPath } from "./paths";
 import { readInboxFromRecord, readSessionsFromRecord, recordHash } from "./record";
-import {
-  EMBED_DIM,
-  EMBED_MODEL_ID,
-  blobToVector,
-  cosine,
-  embed,
-  vectorToBlob,
-} from "./embed";
+import { blobToVector, cosine, vectorToBlob } from "./embed";
+import { getTextEmbedder } from "./embedder";
 
 /**
- * The semantic index (Loop 15). sqlite-vec + the local embedding model, wired into
- * "find days that felt like this" — default-on, zero setup, no key, private.
+ * The semantic index (Batch C). sqlite-vec + a real LOCAL text-embedding model wired
+ * into "find days that felt like this" — default-on, zero setup, no key, private.
  *
- * The record's free text (every inbox memo + every session synthesis) is embedded
- * by the local model (embed.ts) and stored as vectors so a query can be matched by
- * *meaning*, not keywords. Two backends behind one API:
+ * The record's free text (every inbox memo + every session synthesis) is embedded by
+ * the local neural model (embedder.ts → all-MiniLM-L6-v2, hash fallback offline) and
+ * stored as vectors so a query is matched by *meaning*, not keywords. Two backends
+ * behind one API:
  *
- *   - sqlite-vec (default): the vectors live in a vec0 virtual table and KNN runs
- *     in SQLite. This is the "sqlite-vec embeddings" path from the plan.
+ *   - sqlite-vec (default): the vectors live in a vec0 virtual table and KNN runs in
+ *     SQLite. This is the "sqlite-vec embeddings" path from the plan.
  *   - a pure-JS cosine fallback: if the sqlite-vec loadable extension can't load on
- *     the host, the same vectors (also stored as BLOBs) are ranked in JS. So the
- *     feature never hard-fails on an exotic platform — it just runs a hair slower.
+ *     the host, the same vectors (also stored as BLOBs) are ranked in JS.
  *
  * The index is a SEPARATE derived file (paths.vecPath) from the byte-deterministic
  * main cache, and self-heals: it stamps the model id + record hash and rebuilds
- * whenever either changes (a new memo, a finished session, a model bump). FTS5 still
+ * whenever either changes (a new memo, a finished session, a model swap). FTS5 still
  * covers exact keyword recall; this covers "vibe". Server-only (fs + sqlite).
  */
 
@@ -63,7 +57,7 @@ CREATE TABLE IF NOT EXISTS items (
   kind   TEXT NOT NULL,        -- memo | session
   date   TEXT NOT NULL,        -- ISO day the item belongs to
   text   TEXT NOT NULL,        -- the source text (for the snippet)
-  vector BLOB NOT NULL         -- float32[EMBED_DIM], also kept for the JS fallback
+  vector BLOB NOT NULL         -- float32[dim], also kept for the JS fallback
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
@@ -124,7 +118,9 @@ export interface BuildResult {
  * over the target so a crash mid-build can't leave a half-written index. Stamps the
  * model id + record hash so `ensureIndex` can tell when it's stale.
  */
-export function buildIndex(opts: { recordDir?: string; vecFile?: string } = {}): BuildResult {
+export async function buildIndex(
+  opts: { recordDir?: string; vecFile?: string } = {},
+): Promise<BuildResult> {
   const rDir = opts.recordDir ?? recordDirFor();
   const target = opts.vecFile ?? vecPath();
   // Unique temp name so two concurrent first-run builds can't clobber each other.
@@ -133,12 +129,14 @@ export function buildIndex(opts: { recordDir?: string; vecFile?: string } = {}):
 
   const items = collectItems(rDir);
   const hash = recordHash(rDir);
+  const embedder = await getTextEmbedder();
+  const vectors = await embedder.embed(items.map((it) => it.text));
 
   const { db, vec } = openVec(tmp);
   try {
     db.exec(ITEMS_DDL);
     if (vec) {
-      db.exec(`CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[${EMBED_DIM}])`);
+      db.exec(`CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[${embedder.dim}])`);
     }
     const insItem = db.prepare(
       "INSERT INTO items (rowid, ref, kind, date, text, vector) VALUES (?,?,?,?,?,?)",
@@ -147,13 +145,13 @@ export function buildIndex(opts: { recordDir?: string; vecFile?: string } = {}):
 
     const insertAll = db.transaction((rows: IndexItem[]) => {
       rows.forEach((it, i) => {
-        const blob = vectorToBlob(embed(it.text));
+        const blob = vectorToBlob(vectors[i]);
         insItem.run(i, it.ref, it.kind, it.date, it.text, blob);
         insVec?.run(BigInt(i), blob);
       });
       const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
-      setMeta.run("model", EMBED_MODEL_ID);
-      setMeta.run("dim", String(EMBED_DIM));
+      setMeta.run("model", embedder.id);
+      setMeta.run("dim", String(embedder.dim));
       setMeta.run("record_hash", hash);
       setMeta.run("count", String(rows.length));
       setMeta.run("backend", vec ? "sqlite-vec" : "js-cosine");
@@ -171,7 +169,7 @@ export function buildIndex(opts: { recordDir?: string; vecFile?: string } = {}):
     vecFile: target,
     count: items.length,
     backend: vec ? "sqlite-vec" : "js-cosine",
-    model: EMBED_MODEL_ID,
+    model: embedder.id,
     recordHash: hash,
   };
 }
@@ -181,7 +179,7 @@ export function buildIndex(opts: { recordDir?: string; vecFile?: string } = {}):
 export interface IndexStatus {
   built: boolean;
   count: number;
-  stale: boolean; // record changed or model bumped since the last build
+  stale: boolean; // record changed or model swapped since the last build
   model: string;
   backend: "sqlite-vec" | "js-cosine" | null;
 }
@@ -201,25 +199,30 @@ function readMeta(file: string): Record<string, string> | null {
 }
 
 /** Is the index present, and does it match the current record + model? */
-export function indexStatus(opts: { recordDir?: string; vecFile?: string } = {}): IndexStatus {
+export async function indexStatus(
+  opts: { recordDir?: string; vecFile?: string } = {},
+): Promise<IndexStatus> {
   const rDir = opts.recordDir ?? recordDirFor();
   const file = opts.vecFile ?? vecPath();
+  const modelId = (await getTextEmbedder()).id;
   const meta = readMeta(file);
-  if (!meta) return { built: false, count: 0, stale: true, model: EMBED_MODEL_ID, backend: null };
-  const stale = meta.model !== EMBED_MODEL_ID || meta.record_hash !== recordHash(rDir);
+  if (!meta) return { built: false, count: 0, stale: true, model: modelId, backend: null };
+  const stale = meta.model !== modelId || meta.record_hash !== recordHash(rDir);
   return {
     built: true,
     count: Number(meta.count ?? 0),
     stale,
-    model: meta.model ?? EMBED_MODEL_ID,
+    model: meta.model ?? modelId,
     backend: (meta.backend as IndexStatus["backend"]) ?? null,
   };
 }
 
 /** Build the index on first use and whenever the record/model changes. This is the
  *  "default-on, background-index on first run" behaviour — callers just call it. */
-export function ensureIndex(opts: { recordDir?: string; vecFile?: string } = {}): BuildResult | null {
-  const status = indexStatus(opts);
+export async function ensureIndex(
+  opts: { recordDir?: string; vecFile?: string } = {},
+): Promise<BuildResult | null> {
+  const status = await indexStatus(opts);
   if (status.built && !status.stale) return null;
   return buildIndex(opts);
 }
@@ -253,19 +256,19 @@ export interface SearchOptions {
  * key — the local model + sqlite-vec do all the work. Returns [] when the record has
  * no embeddable text yet.
  */
-export function semanticSearch(query: string, opts: SearchOptions = {}): SemanticHit[] {
+export async function semanticSearch(query: string, opts: SearchOptions = {}): Promise<SemanticHit[]> {
   const q = query.trim();
   if (!q) return [];
   const file = opts.vecFile ?? vecPath();
   const limit = Math.max(1, Math.min(opts.limit ?? 5, 25));
   const minScore = opts.minScore ?? 0.05;
 
-  if (opts.ensure !== false) ensureIndex({ recordDir: opts.recordDir, vecFile: file });
+  if (opts.ensure !== false) await ensureIndex({ recordDir: opts.recordDir, vecFile: file });
   if (!fs.existsSync(file)) return [];
 
-  const qvec = embed(q);
-  const isZero = qvec.every((x) => x === 0);
-  if (isZero) return [];
+  const embedder = await getTextEmbedder();
+  const qvec = (await embedder.embed([q]))[0];
+  if (!qvec || qvec.every((x) => x === 0)) return [];
 
   const candidates = limit * 8;
   const { db, vec } = openVec(file);
@@ -388,13 +391,13 @@ function niceDate(iso: string): string {
  * local index — no AI key. Returns null when there's nothing embeddable yet or no
  * match cleared the bar, so the caller can fall through to its other paths.
  */
-export function answerRecall(
+export async function answerRecall(
   message: string,
   history?: { role: string; content: string }[],
   opts: SearchOptions = {},
-): RecallAnswer | null {
+): Promise<RecallAnswer | null> {
   const query = recallQueryText(message, history);
-  const hits = semanticSearch(query, { ...opts, limit: opts.limit ?? 5 });
+  const hits = await semanticSearch(query, { ...opts, limit: opts.limit ?? 5 });
   if (!hits.length) return null;
 
   const kinds = new Set(hits.map((h) => (h.kind === "session" ? "sessions" : "memos")));

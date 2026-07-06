@@ -404,6 +404,63 @@ skill
     }
   });
 
+// ---- photos ---------------------------------------------------------------
+const photos = program.command("photos").description("bring photos into the record (local: EXIF, thumbnails, CLIP recall)");
+
+photos
+  .command("import [folder]", { isDefault: true })
+  .description("import a folder (or --library) of photos; originals never leave your machine")
+  .option("--library", "scan the macOS Photos library originals")
+  .option("--since <date>", "only photos modified on/after this ISO date")
+  .option("--caption", "run the local caption model → scene tags (slower)")
+  .option("--push", "git commit + push the record after import")
+  .action(async (folder: string | undefined, opts: { library?: boolean; since?: string; caption?: boolean; push?: boolean }) => {
+    try {
+      const r = await core.photosImport({ folder, library: opts.library, since: opts.since, caption: opts.caption, push: opts.push });
+      out(r, (d) =>
+        `Imported ${d.imported} photo(s) (${d.skipped} already known): ${d.thumbnails} thumbnails, ${d.embedded} embedded${
+          d.captioned ? `, ${d.captioned} captioned` : ""
+        }, ${d.withGps} geotagged. Record now holds ${d.total}.${d.pushed ? " Pushed." : ""}`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+photos
+  .command("status")
+  .description("how many photos are in the record, indexed, geotagged")
+  .action(() => {
+    try {
+      out(core.photosStatus(), (d) =>
+        d.count === 0
+          ? "No photos yet. Import some: agentqs photos <folder>"
+          : `${d.count} photos (${d.firstDate}…${d.lastDate}) · ${d.indexed} indexed for recall · ${d.withGps} geotagged · ${d.captioned} captioned${
+              d.cameras.length ? ` · cameras: ${d.cameras.join(", ")}` : ""
+            }`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+photos
+  .command("search <query...>")
+  .description("text → image recall: find photos matching a description (local CLIP)")
+  .option("-l, --limit <n>", "results", (v) => parseInt(v, 10), 8)
+  .action(async (words: string[], opts: { limit: number }) => {
+    try {
+      const hits = await core.photosSearch(words.join(" "), opts.limit);
+      out(hits, (rows: any[]) =>
+        rows.length
+          ? rows.map((h) => `${h.date}  ${String(h.score).padEnd(5)}  ${h.caption ?? h.thumb ?? h.id}`).join("\n")
+          : "(no matches — import photos first, or the CLIP index is empty)",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
 // ---- rebuild --------------------------------------------------------------
 program
   .command("rebuild")

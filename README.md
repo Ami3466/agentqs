@@ -60,7 +60,7 @@ Every day in one place: metrics, memos, and the mentor session you had that day,
 
 ## Data — one pipe, all your sources
 
-Connect apps, set a sync interval per source, and drop files into the inbox. Hit **Structure** to turn raw notes and exports into clean daily data — you only pay the AI when you press the button.
+Connect apps, set a sync interval per source, and drop files into the inbox. Hit **Structure** to turn raw notes and exports into clean daily data — you only pay the AI when you press the button. A **Photos** panel folds your pictures in too (EXIF + thumbnails + local CLIP recall — see [Photos](#photos--your-pictures-in-the-record-searchable-by-meaning)).
 
 ![Data](docs/images/data.png)
 
@@ -184,7 +184,7 @@ npm install
 npm run dev                # → http://localhost:3000
 ```
 
-Embeddings run on a local model out of the box — no key, no cost, nothing to set up. Semantic search ("find days that felt like this") works on first run.
+Embeddings run on a real local model (all-MiniLM-L6-v2 via transformers.js) out of the box — no key, no cost. Semantic search ("find days that felt like this") and photo text→image recall (CLIP) both run on-device; the quantized weights cache under `data/models` on first use.
 
 ## Self-host with Docker
 
@@ -384,6 +384,9 @@ can answer:
 - **`find_similar`** — semantic search over the same text via the local embedding
   index (see below): finds days that *felt* like a described feeling even when they
   share no keywords. SQL for numbers, FTS for exact words, embeddings for vibe.
+- **`find_similar_images`** / **`photo_context`** — text→image recall over your photos
+  (local CLIP) and what a date's pictures show (count, geotag, scene tags). See
+  **Photos**, below.
 
 The persona (mentor / therapist / coach) is the system prompt; a compact schema
 catalog tells it what's queryable. So *"why have I felt off?"* makes it `SELECT` your
@@ -495,15 +498,17 @@ a feeling** — matched by meaning, not keywords. Type it in the box on the **Jo
 ask it in **Chat**, or hit the API — *"wired, couldn't switch off"* still surfaces the
 day you wrote *"anxious and stressed."*
 
-It runs on a **local embedding model + sqlite-vec**, on by default with **nothing to
-set up** — no key, no cost, nothing to download, works offline on first run:
+It runs on a **real local embedding model + sqlite-vec**, on by default with **nothing
+to set up** — no key, no cost, private, runs on-device:
 
-- **The local model** (`src/lib/embed.ts`) turns text into a vector with a compact,
-  deterministic featurizer — word + char-trigram features (so *slept* ≈ *sleeping*)
-  plus a small concept lexicon that pulls *anxious* and *stressed* (or *tired* and
-  *exhausted*) onto shared axes. Private, byte-deterministic, zero dependencies. It's
-  pluggable behind one `embed()` seam — swap in a neural / API embedder later and bump
-  the model id to reindex.
+- **The local model** (`src/lib/embedder.ts`) is a genuine sentence-transformer
+  (**all-MiniLM-L6-v2**, 384-dim) run locally via transformers.js + onnxruntime
+  (CoreML on Mac). The quantized weights are cached under `data/models` (fetched once,
+  then offline), so *"couldn't switch off, on edge"* lands next to *"anxious and
+  stressed"* by real meaning. If the model can't load on some host, a zero-dependency
+  hash featurizer (`src/lib/embed.ts`) stands in so recall never hard-fails. Both sit
+  behind one `embed()` seam; the model id versions the vector space and forces a clean
+  reindex when it changes.
 - **sqlite-vec** (`src/lib/embeddings.ts`) stores the vectors and runs the nearest-
   neighbour search inside SQLite. It self-heals: the index is a separate derived file
   (never committed, kept out of the byte-deterministic main cache) that rebuilds
@@ -525,6 +530,41 @@ npm run semantic:test      # ships-when proof (Loop 15): the local model + sqlit
                            # returns the right day and Chat answers "find days that
                            # felt like this" grounded — all keyless.
 ```
+
+## Photos — your pictures in the record, searchable by meaning
+
+Point agentqs at a folder (Google Takeout, screenshots, an export) or your **Mac Photos
+library** and it folds your pictures into the same record — **all on-device, no key,
+and the originals never leave your machine**. Per photo:
+
+- **EXIF** (`exifr`) → capture date, GPS, camera → a git-record line
+  `record/photos.jsonl` `{id,date,ref,exif}` (a *pointer* to the original, never its
+  bytes).
+- **Thumbnail** (`sharp`) → a small webp under `/data` (gitignored — off git and the
+  cloud, like the originals).
+- **CLIP** (transformers.js, CoreML on Mac) → a 512-dim vector in **sqlite-vec** (never
+  committed) so you can recall photos by describing them: *"beach at sunset"*, *"my
+  dog"*, *"whiteboard sketches"* — no labels, no key.
+- **Caption** (optional `--caption`, a local vit-gpt2/BLIP-family model) → a sentence →
+  **scene tags** (people, nature, food, …).
+
+EXIF and tags also roll up into **daily features** — `photo_count`, `photo_geotagged`,
+`scene_*` — so the mentor can line photos up against mood and sleep. It exposes two
+mentor tools, **`find_similar_images`** (text→image recall) and **`photo_context`**
+(what a date's photos show), and a Photos panel under the **Data** tab.
+
+```bash
+agentqs photos ~/Pictures/export      # import a folder (EXIF + thumbnails + CLIP)
+agentqs photos --library --caption    # the Mac Photos library, with scene captions
+agentqs photos status                 # counts: imported · indexed · geotagged
+agentqs photos search "beach sunset"  # text → image recall (local CLIP, no key)
+npm run photos:test                   # ships-when proof: EXIF+thumbnails, CLIP recall,
+                                      # captions/correlation — all local, keyless.
+```
+
+Flags: `--since <date>` (only newer files), `--caption` (scene tags), `--push` (git
+commit + push the record). The same reach through the API (`/api/photos`) and MCP
+(`photos_import`, `photos_search`, `photo_context`).
 
 ## Voice — a memo you speak, and a session you talk
 

@@ -37,3 +37,22 @@ export function dbPath(dir: string = dataDir()): string {
 export function vecPath(dir: string = dataDir()): string {
   return path.join(dir, "agentqs-vec.db");
 }
+
+/**
+ * Photo thumbnails — small derived previews (sharp → webp), keyed by photo id. Live
+ * under the data dir (gitignored): the ORIGINALS never leave the machine, and even
+ * these thumbnails stay out of git/cloud. The committed part is only the metadata in
+ * record/photos.jsonl.
+ */
+export function photoThumbDir(dir: string = dataDir()): string {
+  return path.join(dir, "photos", "thumbs");
+}
+
+/**
+ * The photo semantic index — CLIP image embeddings in sqlite-vec for text→image
+ * recall. A SEPARATE derived file from the text index and the main cache; never
+ * committed, rebuildable from the thumbnails + record.
+ */
+export function photoVecPath(dir: string = dataDir()): string {
+  return path.join(dir, "agentqs-photos-vec.db");
+}

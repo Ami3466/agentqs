@@ -7,6 +7,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { openReadonly } from "./db";
 import { semanticSearch } from "./embeddings";
+import { findSimilarImages, photoContext } from "./photos";
 import { fallbackModel } from "./models";
 import type { LlmMessage } from "./llm";
 
@@ -151,7 +152,7 @@ export function mentorTools(dbFile: string, used: Used) {
     execute: async ({ query, limit }) => {
       try {
         const vecFile = path.join(path.dirname(dbFile), "agentqs-vec.db");
-        const hits = semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
+        const hits = await semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
         used.hits += hits.length;
         for (const h of hits) used.sources.add(h.kind === "session" ? "sessions" : "memos");
         return { days: hits.map((h) => ({ date: h.date, snippet: h.snippet, score: h.score })) };
@@ -161,7 +162,55 @@ export function mentorTools(dbFile: string, used: Used) {
     },
   });
 
-  return { query_daily, search_notes, find_similar };
+  const find_similar_images = tool({
+    description:
+      "Text → image recall over the user's photos using the local CLIP index — finds photos that MATCH a natural-language description ('beach at sunset', 'my dog', 'whiteboard sketches', 'nights out with friends') with no labels and no key. " +
+      "Returns the closest photos with their date, caption (if any) and match score. Use it when the user refers to what they photographed or wants you to reason from their pictures.",
+    inputSchema: z.object({
+      query: z.string().describe("A natural-language description of the photo(s) to find."),
+      limit: z.number().int().min(1).max(20).optional(),
+    }),
+    execute: async ({ query, limit }) => {
+      try {
+        const hits = await findSimilarImages(query, Math.min(limit ?? 6, 20));
+        used.hits += hits.length;
+        if (hits.length) used.sources.add("photos");
+        return {
+          photos: hits.map((h) => ({ date: h.date, caption: h.caption, tags: h.tags, score: h.score })),
+        };
+      } catch (e) {
+        return { error: (e as Error).message, photos: [] };
+      }
+    },
+  });
+
+  const photo_context = tool({
+    description:
+      "What the user's photos say about a stretch of time around a date — how many photos, whether they were geotagged (out and about vs home), what's in them (captions / scene tags like people, nature, food). " +
+      "Use it to enrich a day the user asks about ('what was going on around June 4?') from their pictures.",
+    inputSchema: z.object({
+      date: z.string().describe("ISO date (YYYY-MM-DD) to center on."),
+      windowDays: z.number().int().min(0).max(30).optional().describe("Days either side (default 1)."),
+    }),
+    execute: async ({ date, windowDays }) => {
+      try {
+        const ctx = photoContext(date, windowDays ?? 1);
+        if (ctx.count) used.sources.add("photos");
+        used.hits += ctx.count;
+        return {
+          count: ctx.count,
+          geotagged: ctx.geotagged,
+          cameras: ctx.cameras,
+          tags: ctx.tags,
+          captions: ctx.captions.slice(0, 12),
+        };
+      } catch (e) {
+        return { error: (e as Error).message, count: 0 };
+      }
+    },
+  });
+
+  return { query_daily, search_notes, find_similar, find_similar_images, photo_context };
 }
 
 // ---- Schema catalog (what the model may query) ----------------------------
@@ -194,7 +243,7 @@ export function dailyCatalog(dbFile: string): { sources: string[]; hint: string 
       "Table `daily` (long/tidy): date TEXT (ISO day), source TEXT, metric TEXT, value_num REAL, value_text TEXT — one row per (date, source, metric).",
       `Dates ${range.lo}..${range.hi}. Sources: ${sources.join(", ")}.`,
       `Queryable numeric series (source.metric): ${cols}.`,
-      "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so your citations are attributed. Call search_notes for keywords in memos / past sessions, or find_similar for semantic recall ('days that felt like this'). When explaining how the user feels, line up 2+ sources.",
+      "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so your citations are attributed. Call search_notes for keywords in memos / past sessions, or find_similar for semantic recall ('days that felt like this'). For anything about the user's photos, call find_similar_images (text→image recall) or photo_context (what a date's photos show). When explaining how the user feels, line up 2+ sources.",
     ].join("\n");
     return { sources, hint };
   } finally {
