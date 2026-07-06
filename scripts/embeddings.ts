@@ -96,6 +96,9 @@ function seedRecord(recordDir: string) {
 
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-semantic-"));
+  // Isolate part 1 from the developer's real config: semanticSearch/ensureIndex read
+  // the Settings kill-switches via readConfig(), which follows AGENTQS_DATA_DIR.
+  process.env.AGENTQS_DATA_DIR = root;
   const rDir = path.join(root, "record");
   const vecFile = path.join(root, "agentqs-vec.db");
   seedRecord(rDir);

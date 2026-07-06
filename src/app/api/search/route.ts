@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { embeddingEnabled, readConfig } from "@/lib/config";
 import { answerRecall, semanticSearch } from "@/lib/embeddings";
 import type { LlmMessage } from "@/lib/llm";
 
@@ -28,6 +29,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Say what a day felt like." }, { status: 400 });
   }
   const limit = Math.max(1, Math.min(Number(body.limit) || 5, 25));
+
+  // Kill-switch: with embeddings off every query would return silent zero hits —
+  // tell the client WHY so the UI can say so instead of implying an empty record.
+  if (!embeddingEnabled(readConfig())) {
+    return NextResponse.json({ query, hits: [], answer: "", sources: [], disabled: true });
+  }
 
   try {
     const recall = await answerRecall(query, body.history, { limit });

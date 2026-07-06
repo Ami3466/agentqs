@@ -66,8 +66,10 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
       return { mode: "memo", text: "Nothing to save — send `// your note`.", grounded: false, sources: [], metrics: [], via: "memo" };
     }
     const item = appendInboxItem({ text, source: input.channel || "memo", kind: "text" }, { recordDir: rDir });
-    rebuild({ recordDir: rDir });
+    // Auto-structure first: when it merges, structurePending rebuilds the cache
+    // itself — rebuilding here too would run the whole derivation twice per message.
     const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
+    if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
     return {
       mode: "memo",
       text:

@@ -6,6 +6,7 @@
  * model to the same wide shape (paid, only here). Server-only (fs + provider).
  */
 import { activeLlm, autoStructureEnabled, readConfig } from "./config";
+import { wipeDemoOnImport } from "./demo";
 import { recordDir } from "./paths";
 import { mergeDailyCsv, readRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
 import { llmComplete } from "./llm";
@@ -63,6 +64,10 @@ export async function autoStructureNewItem(id: string): Promise<StructureRunResu
 
 /** Drain pending inbox items into daily rows. `{id}` structures one; `{}` drains all. */
 export async function structurePending(opts: { id?: string; all?: boolean } = {}): Promise<StructureRunResult> {
+  // Structuring real data is a real import — clear the demo record first, from EVERY
+  // face (GUI button, CLI, MCP, agent tool, auto-structure), so real rows never merge
+  // into demo CSVs that a later wipe would delete.
+  wipeDemoOnImport();
   const rDir = recordDir();
   const pending = readRecord(rDir).inbox.filter((i) => i.status === "pending");
 
@@ -88,6 +93,12 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
   let mutated = false;
 
   for (const item of targets) {
+    // Images never structure here — their body is a base64 data URL, not notes
+    // (the Photos import owns pictures). Skip before burning an LLM call on it.
+    if (item.kind === "image" || item.text.startsWith("data:")) {
+      results.push({ id: item.id, route: "csv", status: "empty", message: "Image capture — use the Photos import for pictures." });
+      continue;
+    }
     const hint = filenameOf(item);
     let structured = structureCsv(item.text);
     let route: StructureRoute = "csv";
