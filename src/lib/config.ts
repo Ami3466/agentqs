@@ -1,11 +1,14 @@
 import fs from "fs";
 import { configPath, dataDir, recordDir } from "./paths";
 import type { JournalView } from "./journal";
+import type { SavedGraph } from "./graphs";
+import { sanitizeSavedGraphs } from "./graphs";
 import type { Interval } from "./sources";
 import type { Skill } from "./skills";
 import type { AutomationCreds, AutomationRecipe } from "./automation-types";
 import type { WhoopCreds } from "./importers/whoop";
 import { recordInAppRepoEnabled } from "./record-git";
+import { whisperInstalled } from "./whisper-local";
 import {
   accountBase,
   isProvider,
@@ -76,6 +79,7 @@ export interface AppConfig {
   githubToken?: string; // GitHub PAT for the commits importer (optional)
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
   journalViews?: JournalView[]; // saved Journal table layouts, per user
+  savedGraphs?: SavedGraph[]; // saved correlation / timeline graph cards
   sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
@@ -135,6 +139,8 @@ export function sanitizeJournalViews(input: unknown): JournalView[] {
   }
   return out.slice(0, 50); // hard cap
 }
+
+export { sanitizeSavedGraphs };
 
 /** Coerce untrusted input into a clean ProviderAccount[] before it hits config.json. */
 export function sanitizeProviders(input: unknown): ProviderAccount[] {
@@ -282,6 +288,7 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
   }));
   const emb = cfg.embedding;
   const voice = cfg.voice;
+  const whisperModel = voice?.whisperModel && whisperInstalled(voice.whisperModel) ? voice.whisperModel : "";
   const ch = cfg.channels;
   const selectedModel =
     cfg.selectedModel ??
@@ -307,7 +314,7 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
       hasKey: Boolean(linkedApiKey(cfg, voice?.providerId, voice?.apiKey)),
       agentId: voice?.agentId || "",
       providerId: voice?.providerId || "",
-      whisperModel: voice?.whisperModel || "",
+      whisperModel,
       whisperLang: voice?.whisperLang || "en",
     },
     channels: {

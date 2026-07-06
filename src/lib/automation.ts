@@ -19,6 +19,7 @@ import {
   type AutomationCredType,
   type PublicAutomation,
 } from "./automation-types";
+import { pluginInstanceById } from "./importers/registry";
 
 const STEP_TYPES: AutomationStepType[] = [
   "goto",
@@ -29,6 +30,10 @@ const STEP_TYPES: AutomationStepType[] = [
   "extractTable",
 ];
 const CRED_TYPES: AutomationCredType[] = ["userpass", "token", "none"];
+
+function sourceIdTaken(id: string, recipes: AutomationRecipe[]): boolean {
+  return recipes.some((a) => a.id === id) || RESERVED_SOURCE_IDS.includes(id) || Boolean(pluginInstanceById(id));
+}
 
 export function listAutomations(cfg: AppConfig | null = readConfig()): AutomationRecipe[] {
   return cfg?.automations ?? [];
@@ -107,14 +112,15 @@ export function saveAutomation(input: SaveAutomationInput): PublicAutomation {
   if (!existingId) {
     // Creating by name: never silently overwrite a same-named recipe — a second
     // "Garmin" is a second ACCOUNT, so suffix to a free id (garmin-2, garmin-3…).
-    const base = id;
+    const base = RESERVED_SOURCE_IDS.includes(id) || pluginInstanceById(id) ? `${id}-automation` : id;
+    id = base;
     let n = 2;
-    while (recipes.some((a) => a.id === id) || RESERVED_SOURCE_IDS.includes(id)) {
+    while (sourceIdTaken(id, recipes)) {
       id = `${base}-${n++}`;
     }
   }
   const idx = recipes.findIndex((a) => a.id === id);
-  if (idx < 0 && RESERVED_SOURCE_IDS.includes(id)) {
+  if (idx < 0 && (RESERVED_SOURCE_IDS.includes(id) || pluginInstanceById(id))) {
     throw new Error(`"${id}" is a built-in source id. Pick another name.`);
   }
 

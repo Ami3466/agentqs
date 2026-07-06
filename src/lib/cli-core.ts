@@ -17,10 +17,13 @@ import { dbPath, recordDir } from "./paths";
 import { openReadonly } from "./db";
 import {
   appendInboxItem,
+  applyDailyEdits,
   mergeDailyCsv,
   rebuild,
+  readInboxFromRecord,
   readRecord,
   recordHash,
+  revertEditsFromAppliedMeta,
   updateInboxItems,
 } from "./record";
 import { readJournal } from "./journal";
@@ -60,6 +63,8 @@ import {
 } from "./photos";
 import type { Skill } from "./skills";
 import type { LlmMessage } from "./llm";
+import { WHISPER_MODELS, installWhisperModel, removeWhisperModel, whisperInstalled } from "./whisper-local";
+import type { DailyEdit } from "./record";
 
 // ---- chat / query ---------------------------------------------------------
 
@@ -118,6 +123,67 @@ export function journal(opts: { limit?: number; source?: string } = {}) {
     totalCells: data.totalCells,
     sources: [...new Set(data.metrics.map((m) => m.source))].sort(),
   };
+}
+
+export function journalEdit(edits: DailyEdit[]) {
+  const rDir = recordDir();
+  const result = applyDailyEdits(edits, { recordDir: rDir });
+  const rebuilt = rebuild({ recordDir: rDir });
+  return { ...result, dailyRows: rebuilt.daily };
+}
+
+export function logItems(limit = 50) {
+  return readInboxFromRecord(recordDir()).slice(-limit).reverse();
+}
+
+export function logReject(id: string) {
+  if (!id.trim()) throw new Error("Pass a log item id.");
+  const rDir = recordDir();
+  const item = readInboxFromRecord(rDir).find((i) => i.id === id);
+  if (!item) throw new Error(`No log item "${id}".`);
+  let reverted = 0;
+  if (item.status === "structured") {
+    const result = applyDailyEdits(revertEditsFromAppliedMeta(item.meta), { recordDir: rDir });
+    reverted = result.sets + result.clears;
+  }
+  updateInboxItems(
+    [{ id, status: "discarded", meta: { ...(item.meta && typeof item.meta === "object" ? item.meta : {}), rejectedAt: new Date().toISOString() } }],
+    { recordDir: rDir },
+  );
+  const rebuilt = rebuild({ recordDir: rDir });
+  return { id, discarded: true, reverted, dailyRows: rebuilt.daily };
+}
+
+export function whisperStatus() {
+  const cfg = readConfig();
+  const active = cfg?.voice?.whisperModel || "";
+  return {
+    active: active && whisperInstalled(active) ? active : "",
+    lang: cfg?.voice?.whisperLang || "en",
+    models: WHISPER_MODELS.map((m) => ({ ...m, installed: whisperInstalled(m.id) })),
+  };
+}
+
+export async function whisperInstall(model: string) {
+  if (!WHISPER_MODELS.some((m) => m.id === model)) throw new Error(`Unknown Whisper model "${model}".`);
+  await installWhisperModel(model);
+  const cfg = requireConfig();
+  cfg.voice = { ...cfg.voice, provider: cfg.voice?.provider || "", whisperModel: model };
+  writeConfig(cfg);
+  return whisperStatus();
+}
+
+export function whisperRemove(model?: string) {
+  const cfg = requireConfig();
+  const target = model || cfg.voice?.whisperModel || "";
+  if (!WHISPER_MODELS.some((m) => m.id === target)) throw new Error("No Whisper model selected.");
+  removeWhisperModel(target);
+  const latest = requireConfig();
+  if (latest.voice?.whisperModel === target) {
+    latest.voice = { ...latest.voice, provider: latest.voice.provider || "", whisperModel: "" };
+    writeConfig(latest);
+  }
+  return whisperStatus();
 }
 
 // ---- sources: list / connect / interval / sync ----------------------------

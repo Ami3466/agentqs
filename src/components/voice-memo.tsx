@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AudioLines, Check, Mic, Spinner, Square, X } from "./icons";
+import { Check, Journal, Mic, Send, Spinner, Square, X } from "./icons";
 import { cn } from "./ui";
 
-type Phase = "idle" | "recording" | "transcribing" | "done" | "error";
+type Phase = "idle" | "recording" | "transcribing" | "saving" | "done" | "error";
 
 interface Capability {
   ready: boolean;
@@ -18,6 +18,28 @@ interface Result {
   pending: number;
   backend: string;
   structured: boolean; // auto-structure (Settings) merged it straight into daily
+}
+
+function micErrorMessage(e: unknown): string {
+  if (e instanceof DOMException) {
+    if (e.name === "NotAllowedError") {
+      return "Microphone access is blocked. Allow microphone access in the browser or system settings, then retry.";
+    }
+    if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+      return "No microphone was found.";
+    }
+    if (e.name === "NotReadableError" || e.name === "TrackStartError") {
+      return "The microphone is unavailable or already in use by another app.";
+    }
+    if (e.name === "SecurityError") {
+      return "Microphone access requires a secure browser context.";
+    }
+    if (e.name === "AbortError") {
+      return "Microphone capture was interrupted before recording started.";
+    }
+    return e.message ? `Microphone error: ${e.message}` : `Microphone error: ${e.name}`;
+  }
+  return e instanceof Error ? `Microphone error: ${e.message}` : "Could not open the microphone.";
 }
 
 /** Pick the first mime the browser's MediaRecorder actually supports. */
@@ -103,8 +125,10 @@ async function toWav16k(blob: Blob): Promise<Blob | null> {
 export function VoiceMemo() {
   const router = useRouter();
   const [cap, setCap] = useState<Capability | null>(null);
+  const [probing, setProbing] = useState(false);
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
+  const [text, setText] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<Result | null>(null);
@@ -114,20 +138,39 @@ export function VoiceMemo() {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const probeSeqRef = useRef(0);
 
-  const active = phase === "recording" || phase === "transcribing";
+  const active = phase === "recording" || phase === "transcribing" || phase === "saving";
 
-  // Capability probe — is anything wired to transcribe a memo?
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/voice/memo")
-      .then((r) => (r.ok ? r.json() : { ready: false, backend: null, label: "Sign in to record." }))
-      .then((d) => alive && setCap(d as Capability))
-      .catch(() => alive && setCap({ ready: false, backend: null, label: "Voice unavailable." }));
-    return () => {
-      alive = false;
-    };
+  const probeCapability = useCallback(async () => {
+    const seq = probeSeqRef.current + 1;
+    probeSeqRef.current = seq;
+    setProbing(true);
+    try {
+      const res = await fetch("/api/voice/memo", { cache: "no-store" });
+      const data = res.ok
+        ? ((await res.json()) as Capability)
+        : ({ ready: false, backend: null, label: res.status === 401 ? "Sign in to record voice memos." : "Voice memo transcription is unavailable." } satisfies Capability);
+      if (probeSeqRef.current === seq) setCap(data);
+      return data;
+    } catch {
+      const data = { ready: false, backend: null, label: "Voice memo transcription is unavailable." } satisfies Capability;
+      if (probeSeqRef.current === seq) setCap(data);
+      return data;
+    } finally {
+      if (probeSeqRef.current === seq) setProbing(false);
+    }
   }, []);
+
+  // Re-probe every time the popover opens so Settings/API-key changes are reflected immediately.
+  useEffect(() => {
+    if (!open) return;
+    setCap(null);
+    setError("");
+    setResult(null);
+    setPhase((p) => (p === "done" || p === "error" ? "idle" : p));
+    void probeCapability();
+  }, [open, probeCapability]);
 
   // Close on outside click / Escape — but never while recording (that would hide
   // the live controls with the mic still hot).
@@ -168,26 +211,50 @@ export function VoiceMemo() {
     setError("");
     setResult(null);
     setElapsed(0);
+    if (!cap?.ready) {
+      setPhase("error");
+      setError(cap?.label || "Voice memo transcription is not configured.");
+      return;
+    }
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setPhase("error");
-      setError("This browser can't access the microphone.");
+      setError("This browser does not expose microphone access.");
+      return;
+    }
+    if (typeof MediaRecorder === "undefined") {
+      setPhase("error");
+      setError("This browser cannot record audio with MediaRecorder.");
       return;
     }
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
+    } catch (e) {
       setPhase("error");
-      setError("Microphone permission was denied.");
+      setError(micErrorMessage(e));
       return;
     }
     streamRef.current = stream;
     const mime = pickMime();
-    const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    let rec: MediaRecorder;
+    try {
+      rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    } catch (e) {
+      releaseStream();
+      setPhase("error");
+      setError(e instanceof Error ? `Could not start the recorder: ${e.message}` : "Could not start the recorder.");
+      return;
+    }
     recorderRef.current = rec;
     chunksRef.current = [];
     rec.ondataavailable = (e) => {
       if (e.data && e.data.size) chunksRef.current.push(e.data);
+    };
+    rec.onerror = (e) => {
+      stopTimer();
+      releaseStream();
+      setPhase("error");
+      setError(e instanceof ErrorEvent && e.error ? micErrorMessage(e.error) : "Recording failed.");
     };
     rec.onstop = () => void upload(rec.mimeType || mime || "audio/webm");
     rec.start();
@@ -258,21 +325,50 @@ export function VoiceMemo() {
     }
   }
 
+  async function saveTextMemo() {
+    const memo = text.trim();
+    if (!memo) return;
+    setError("");
+    setResult(null);
+    setPhase("saving");
+    try {
+      const res = await fetch("/api/inbox", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: memo, source: "memo", kind: "text" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPhase("error");
+        setError(data.error || "Could not save that memo.");
+        return;
+      }
+      setText("");
+      setResult({ text: memo, pending: data.pending, backend: "text", structured: Boolean(data.structured) });
+      setPhase("done");
+      router.refresh();
+    } catch {
+      setPhase("error");
+      setError("Could not reach the inbox.");
+    }
+  }
+
+  function resetComposer() {
+    setPhase("idle");
+    setError("");
+    setResult(null);
+  }
+
   function onButton() {
     if (active) return;
     if (!open) {
       setOpen(true);
-      if (cap?.ready) void startRecording();
       return;
     }
     setOpen(false);
   }
 
-  const buttonTitle = cap?.ready
-    ? "Record a voice memo"
-    : cap
-      ? "Voice memo — not configured"
-      : "Voice memo";
+  const buttonTitle = "Log quick memo";
 
   return (
     <div className="relative" ref={ref}>
@@ -288,7 +384,7 @@ export function VoiceMemo() {
             : "border-border bg-card text-muted-fg hover:bg-muted hover:text-fg",
         )}
       >
-        <Mic width={16} height={16} />
+        <Journal width={16} height={16} />
         {phase === "recording" ? (
           <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive/70" />
@@ -298,16 +394,21 @@ export function VoiceMemo() {
       </button>
 
       {open ? (
-        <div className="fixed inset-x-3 top-16 z-50 rounded-xl border border-border bg-card p-4 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[300px]">
+        <div className="fixed inset-x-3 top-16 z-50 rounded-xl border border-border bg-card p-4 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[340px]">
           <Panel
             cap={cap}
+            probing={probing}
             phase={phase}
+            text={text}
             elapsed={elapsed}
             error={error}
             result={result}
+            onTextChange={setText}
+            onSaveText={() => void saveTextMemo()}
             onStart={() => void startRecording()}
             onStop={stopRecording}
             onCancel={cancelRecording}
+            onReset={resetComposer}
             onClose={() => {
               setPhase("idle");
               setOpen(false);
@@ -321,65 +422,50 @@ export function VoiceMemo() {
 
 function Panel({
   cap,
+  probing,
   phase,
+  text,
   elapsed,
   error,
   result,
+  onTextChange,
+  onSaveText,
   onStart,
   onStop,
   onCancel,
+  onReset,
   onClose,
 }: {
   cap: Capability | null;
+  probing: boolean;
   phase: Phase;
+  text: string;
   elapsed: number;
   error: string;
   result: Result | null;
+  onTextChange: (text: string) => void;
+  onSaveText: () => void;
   onStart: () => void;
   onStop: () => void;
   onCancel: () => void;
+  onReset: () => void;
   onClose: () => void;
 }) {
-  const header = useMemo(
-    () => (
-      <div className="mb-3 flex items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-muted text-accent">
-          <AudioLines width={15} height={15} />
-        </span>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-fg">Voice memo</p>
-          <p className="truncate text-[11px] text-muted-fg">
-            {cap?.ready ? cap.label : "Transcribes into the inbox"}
-          </p>
-        </div>
-      </div>
-    ),
-    [cap],
-  );
-
-  // Not configured — config-gated setup hint, no recording.
-  if (cap && !cap.ready) {
-    return (
-      <div>
-        {header}
-        <p className="text-[13px] text-muted-fg">{cap.label}</p>
-        <p className="mt-2 text-[12px] text-muted-fg">
-          Install Whisper locally under{" "}
-          <a href="/settings#memos" className="font-medium text-fg underline decoration-border underline-offset-2 hover:text-accent">
-            Settings → Voice memos
-          </a>{" "}
-          for private, offline transcription — or add an OpenAI key to use hosted Whisper.
+  const canSaveText = text.trim().length > 0 && phase !== "saving" && phase !== "recording" && phase !== "transcribing";
+  const canRecord = Boolean(cap?.ready) && phase !== "saving";
+  const header = (
+    <div className="mb-3 flex items-center gap-2">
+      <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-muted text-accent">
+        <Journal width={15} height={15} />
+      </span>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-fg">Log quick memo</p>
+        <p className="truncate text-[11px] text-muted-fg">
+          {probing ? "Checking voice setup..." : cap?.ready ? cap.label : "Write now, or record when voice is configured"}
         </p>
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-3 w-full rounded-lg border border-border bg-muted px-3 py-2 text-[13px] font-medium text-fg transition-colors hover:bg-border/60"
-        >
-          Got it
-        </button>
       </div>
-    );
-  }
+    </div>
+  );
 
   if (phase === "recording") {
     return (
@@ -424,6 +510,17 @@ function Panel({
     );
   }
 
+  if (phase === "saving") {
+    return (
+      <div>
+        {header}
+        <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-fg">
+          <Spinner width={16} height={16} /> Saving...
+        </div>
+      </div>
+    );
+  }
+
   if (phase === "done" && result) {
     return (
       <div>
@@ -438,10 +535,10 @@ function Panel({
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={onStart}
+            onClick={onReset}
             className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-medium text-fg transition-colors hover:bg-muted"
           >
-            <Mic width={14} height={14} /> Again
+            <Journal width={14} height={14} /> New memo
           </button>
           <button
             type="button"
@@ -455,44 +552,50 @@ function Panel({
     );
   }
 
-  if (phase === "error") {
-    return (
-      <div>
-        {header}
-        <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-2.5 text-[13px] text-destructive">
-          {error}
-        </p>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={onStart}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-medium text-fg transition-colors hover:bg-muted"
-          >
-            <Mic width={14} height={14} /> Retry
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-border bg-muted px-3 py-2 text-[13px] font-medium text-fg transition-colors hover:bg-border/60"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // idle (before the mic stream opens)
+  // idle / post-error composer
   return (
     <div>
       {header}
-      <button
-        type="button"
-        onClick={onStart}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2.5 text-[13px] font-medium text-accent-fg transition-opacity hover:opacity-90"
-      >
-        <Mic width={15} height={15} /> Start recording
-      </button>
+      {phase === "error" && error ? (
+        <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/5 p-2.5 text-[13px] text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <textarea
+        value={text}
+        onChange={(e) => onTextChange(e.target.value)}
+        rows={4}
+        placeholder="Type a memo..."
+        className="min-h-[96px] w-full resize-none rounded-lg border border-border bg-bg px-3 py-2 text-[13px] text-fg outline-none transition-colors placeholder:text-muted-fg focus:border-ring"
+      />
+      <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+        <button
+          type="button"
+          onClick={onSaveText}
+          disabled={!canSaveText}
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Send width={14} height={14} /> Save memo
+        </button>
+        <button
+          type="button"
+          onClick={onStart}
+          disabled={!canRecord}
+          title={cap?.ready ? "Record memo" : cap?.label || "Checking voice setup"}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-muted-fg transition-colors hover:bg-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {probing ? <Spinner width={14} height={14} /> : <Mic width={15} height={15} />}
+        </button>
+      </div>
+      {cap && !cap.ready ? (
+        <p className="mt-3 text-[12px] leading-5 text-muted-fg">
+          {cap.label} Configure voice under{" "}
+          <a href="/settings#memos" className="font-medium text-fg underline decoration-border underline-offset-2 hover:text-accent">
+            Settings - Voice memos
+          </a>
+          .
+        </p>
+      ) : null}
     </div>
   );
 }

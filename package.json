@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node .next/standalone/server.js",
     "lint": "next lint",
     "cli": "tsx bin/agentqs-cli.ts",
     "mcp": "tsx bin/agentqs-cli.ts serve --mcp",
@@ -52,6 +52,7 @@
     "next": "14.2.15",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "recharts": "^3.9.2",
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.9",
     "tailwind-merge": "^3.6.0",

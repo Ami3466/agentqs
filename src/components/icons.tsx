@@ -48,6 +48,17 @@ export const Data = (p: P) => (
   </svg>
 );
 
+export const Chart = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M3 3v18h18" />
+    <path d="m7 15 4-4 3 3 5-7" />
+    <circle cx="7" cy="15" r="1" />
+    <circle cx="11" cy="11" r="1" />
+    <circle cx="14" cy="14" r="1" />
+    <circle cx="19" cy="7" r="1" />
+  </svg>
+);
+
 export const Settings = (p: P) => (
   <svg {...base} {...p}>
     <circle cx="12" cy="12" r="3" />

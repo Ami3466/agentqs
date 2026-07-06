@@ -1,11 +1,32 @@
+import fs from "fs";
+import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { readConfig } from "@/lib/config";
+import { dataDir } from "@/lib/paths";
 import { channelEnv, getChannelAdapter } from "@/lib/channels/registry";
 import { composeReply } from "@/lib/reply";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const DEDUPE_LIMIT = 1000;
+
+function seenWebhook(id: string | undefined): boolean {
+  if (!id) return false;
+  const file = path.join(dataDir(), "channel-webhooks-seen.json");
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const ids = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf8")) as unknown) : [];
+    const list = Array.isArray(ids) ? ids.filter((v): v is string => typeof v === "string") : [];
+    if (list.includes(id)) return true;
+    list.push(id);
+    fs.writeFileSync(file, JSON.stringify(list.slice(-DEDUPE_LIMIT)), { mode: 0o600 });
+  } catch {
+    /* best-effort: webhook processing should continue if de-dupe storage fails */
+  }
+  return false;
+}
 
 /**
  * One channel-agnostic webhook, `/api/channels/<channel>` (telegram · slack). The
@@ -55,6 +76,9 @@ export async function POST(req: Request, { params }: { params: { channel: string
   }
 
   const inbound = verdict.message;
+  if (seenWebhook(inbound.eventId)) {
+    return NextResponse.json({ ok: true, ignored: "duplicate webhook" });
+  }
   // Per-channel reply prefs from Settings: AI vs log-only, the persona, and an
   // optional model override — so a bot can answer as a different skill/model than
   // the app, or just capture everything with zero tokens.

@@ -77,8 +77,8 @@ async function main() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (data dir = ${root})…`);
-  const server = spawn("node_modules/.bin/next", ["start", "-p", String(port)], {
-    env: { ...process.env, AGENTQS_DATA_DIR: root, SESSION_SECRET: "loop5-ships-when-secret" },
+  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
+    env: { ...process.env, PORT: String(port), HOSTNAME: "127.0.0.1", AGENTQS_DATA_DIR: root, SESSION_SECRET: "loop5-ships-when-secret" },
     stdio: "ignore",
   });
 
@@ -89,7 +89,7 @@ async function main() {
     const setup = await fetch(`${base}/api/setup`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "tester", password: "loop5pass" }),
+      body: JSON.stringify({ username: "tester", password: "loop5pass", confirm: "loop5pass" }),
     });
     check("setup created the account", setup.ok);
     const setCookie = setup.headers.get("set-cookie") || "";

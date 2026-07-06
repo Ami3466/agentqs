@@ -91,6 +91,11 @@ export const slackAdapter: ChannelAdapter = {
     return {
       message: {
         channel: "slack",
+        eventId: payload.event_id
+          ? `slack:${String(payload.event_id)}`
+          : ev.client_msg_id
+            ? `slack:${String(ev.client_msg_id)}`
+            : undefined,
         target: String(channel),
         userId: String(ev.user ?? channel),
         text,

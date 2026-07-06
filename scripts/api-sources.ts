@@ -39,13 +39,30 @@ const FIXTURES: Record<string, string> = {
   notion: "samples/notion-search.json",
   deezer: "samples/deezer-history.json",
   swarm: "samples/swarm-checkins.json",
+  mastodon: "samples/mastodon-statuses.json",
+  withings: "samples/withings-measures.json",
 };
 
 // Split-credential sources take "<a>:<b>" in the single credential slot.
 const CRED: Record<string, string> = {
   lastfm: "APIKEY:testuser",
   trakt: "CLIENTID:ACCESSTOKEN",
+  mastodon: "mastodon.example:ACCESSTOKEN",
 };
+
+function fetchForFixture(pluginId: string, body: unknown) {
+  if (pluginId !== "mastodon") return fixtureFetch(body);
+  return (async (url: string | URL | Request) => {
+    const href = String(url);
+    const payload = href.includes("/verify_credentials")
+      ? { id: "42" }
+      : body;
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+}
 
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-api-"));
@@ -62,7 +79,7 @@ async function main() {
     const body = JSON.parse(fs.readFileSync(path.resolve(fx), "utf8"));
     const summary = await importPlugin(
       plugin,
-      { from, to, credential: CRED[plugin.id], fetchImpl: fixtureFetch(body) },
+      { from, to, credential: CRED[plugin.id], fetchImpl: fetchForFixture(plugin.id, body) },
       recordDir,
     );
 

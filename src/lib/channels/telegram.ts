@@ -69,6 +69,7 @@ export const telegramAdapter: ChannelAdapter = {
     return {
       message: {
         channel: "telegram",
+        eventId: update?.update_id == null ? undefined : `telegram:${String(update.update_id)}`,
         target: String(chatId),
         userId: String(msg.from?.id ?? chatId),
         text,

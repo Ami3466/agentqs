@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Chat, Data, Journal, Settings } from "./icons";
+import { Chart, Chat, Data, Journal, Settings } from "./icons";
 import { cn } from "./ui";
 
 const TABS = [
   { href: "/", label: "Chat", Icon: Chat, match: (p: string) => p === "/" },
+  { href: "/graphs", label: "Graphs", Icon: Chart, match: (p: string) => p.startsWith("/graphs") },
   { href: "/journal", label: "Journal", Icon: Journal, match: (p: string) => p.startsWith("/journal") },
   { href: "/data", label: "Data", Icon: Data, match: (p: string) => p.startsWith("/data") },
   { href: "/settings", label: "Settings", Icon: Settings, match: (p: string) => p.startsWith("/settings") },
