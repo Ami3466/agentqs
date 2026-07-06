@@ -43,7 +43,12 @@ export function SourcesPanel({
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [flowHint, setFlowHint] = useState(false);
-  const [wizard, setWizard] = useState(false);
+  // The automation wizard, optionally seeded from a specific roster source.
+  const [wizardSeed, setWizardSeed] = useState<{ name?: string; url?: string } | null>(null);
+  const openWizard = useCallback((seed: { name?: string; url?: string } = {}) => {
+    setWizardSeed(seed);
+    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
   const ranAuto = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -221,6 +226,7 @@ export function SourcesPanel({
         removing={removing}
         onIntervalChange={onIntervalChange}
         onRemove={onRemove}
+        onSetup={() => openWizard({ name: s.name, url: s.setupUrl })}
       />
     );
   }
@@ -281,11 +287,13 @@ export function SourcesPanel({
           )}
 
           {tab === "connections" ? (
-            wizard ? (
+            wizardSeed ? (
               <AutomationSetup
-                onCancel={() => setWizard(false)}
+                initialName={wizardSeed.name ?? ""}
+                initialUrl={wizardSeed.url ?? ""}
+                onCancel={() => setWizardSeed(null)}
                 onDone={() => {
-                  setWizard(false);
+                  setWizardSeed(null);
                   setTab("automated");
                   void load();
                   onChanged();
@@ -294,7 +302,7 @@ export function SourcesPanel({
             ) : (
               <button
                 type="button"
-                onClick={() => setWizard(true)}
+                onClick={() => openWizard()}
                 className="flex w-full items-center gap-3 border-t border-border p-4 text-left transition-colors hover:bg-muted/40"
               >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-muted text-muted-fg">
@@ -348,26 +356,32 @@ function TabCount({ children }: { children: React.ReactNode }) {
 }
 
 /** Generic (non-GitHub, non-plugin) source row: Tier-2 file importers + not-yet-live
- *  integrations. Connected rows show last-sync + an interval dropdown + Remove;
- *  overdue ones badge stale. Not-connected rows sit in the Connections catalog with
- *  how-to-connect context (local file → CLI; stub → soon). */
+ *  roster integrations. Connected rows show last-sync + an interval dropdown +
+ *  Remove; overdue ones badge stale. Not-connected roster rows carry a REAL wire-up
+ *  path (never a fake "connected" state): `setup: "automation"` opens the record +
+ *  scrape wizard (seeded with the brand); `setup: "file"` expands the export + CLI
+ *  import steps. Live file importers (Chrome, iPhone) keep their local · CLI hint. */
 function SourceRow({
   source,
   saving,
   removing,
   onIntervalChange,
   onRemove,
+  onSetup,
 }: {
   source: SourceView;
   saving: boolean;
   removing: boolean;
   onIntervalChange: (i: Interval) => void;
   onRemove?: () => void;
+  onSetup?: () => void;
 }) {
-  const { id, name, kind, detail, connected, lastSync, stale, interval, live } = source;
+  const { id, name, kind, detail, connected, lastSync, stale, interval, live, setup } = source;
   const Icon = sourceIcon(id);
+  const [howto, setHowto] = useState(false);
   return (
-    <div className="flex items-center gap-3 p-4">
+    <div className="flex flex-col p-4">
+     <div className="flex items-center gap-3">
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-fg">
         <Icon width={18} height={18} />
       </span>
@@ -388,7 +402,7 @@ function SourceRow({
             </span>
           ) : !live ? (
             <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              soon
+              {setup === "file" ? "export" : "no API"}
             </span>
           ) : null}
         </div>
@@ -427,10 +441,35 @@ function SourceRow({
           >
             local · CLI
           </span>
+        ) : setup === "automation" ? (
+          <Button size="sm" variant="secondary" onClick={onSetup}>
+            <RefreshCw width={13} height={13} /> Set up
+          </Button>
         ) : (
-          <span className="text-xs text-muted-fg">not yet available</span>
+          <Button size="sm" variant="secondary" onClick={() => setHowto((v) => !v)}>
+            {howto ? "Hide" : "Set up"}
+          </Button>
         )}
+       </div>
       </div>
+
+      {!connected && !live && setup === "file" && howto ? (
+        <div className="mt-3 space-y-2 pl-12 text-xs text-muted-fg">
+          <p>
+            {name} has no live API — export it, then import the file. A cloud replica
+            picks the rows up over git.
+          </p>
+          <ol className="list-decimal space-y-1 pl-4">
+            <li>Export your {name} data ({detail}) to a file.</li>
+            <li>
+              Drop it in the box at the top of this page, or run it through the CLI:
+            </li>
+          </ol>
+          <code className="block overflow-x-auto rounded-md border border-border bg-muted px-2 py-1.5 font-mono text-[11px] text-fg">
+            agentqs import:file --source {id} &lt;path-to-export&gt;
+          </code>
+        </div>
+      ) : null}
     </div>
   );
 }

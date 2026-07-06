@@ -35,12 +35,31 @@ interface Registered {
   detail: string;
   csv?: string; // daily/<csv>.csv this source owns (so it isn't double-counted as manual)
   live: boolean; // has a working importer
+  /** Real wire-up path for a not-yet-live source (never a fake "connected" row):
+   *  "file" → a local export imported via the CLI; "automation" → the record-login
+   *  + scrape wizard. */
+  setup: "automation" | "file";
+  setupUrl?: string; // seeds the wizard's Start URL for automation sources
 }
 
-/** Not-yet-live file-based integrations (later loops wire these up). GitHub, the
- *  Tier-1 plugins, and the Tier-2 file importers are composed separately below. */
+/**
+ * Roster of integrations that don't (yet) have a live in-app importer, shown as
+ * real connectable sources — never faked as connected. Two honest wire-up paths:
+ *   • file       — you export the data (Apple Health / Watch, Android Health
+ *                  Connect) and import the file via the CLI / local daemon.
+ *   • automation — no ready API, so the record-login + scrape wizard drives the
+ *                  site headlessly (Garmin, Withings, Instapaper, Mastodon, Apple
+ *                  Weather). Wiring one up moves it to Automated imports for real.
+ */
 const PLACEHOLDERS: Registered[] = [
-  { id: "apple-health", name: "Apple Health", kind: "manual", detail: "steps, HR, sleep, workouts", live: false },
+  { id: "apple-health", name: "Apple Health", kind: "manual", detail: "steps, HR, sleep, workouts", live: false, setup: "file" },
+  { id: "apple-watch", name: "Apple Watch", kind: "manual", detail: "workouts, heart rate, activity rings", live: false, setup: "file" },
+  { id: "health-connect", name: "Health Connect", kind: "manual", detail: "Android health + fitness aggregate", live: false, setup: "file" },
+  { id: "garmin", name: "Garmin", kind: "manual", detail: "activities, sleep, body battery", live: false, setup: "automation", setupUrl: "https://connect.garmin.com/signin" },
+  { id: "withings", name: "Withings", kind: "manual", detail: "weight, body composition, sleep", live: false, setup: "automation", setupUrl: "https://account.withings.com/connectionwou/account_login" },
+  { id: "instapaper", name: "Instapaper", kind: "manual", detail: "articles saved + read", live: false, setup: "automation", setupUrl: "https://www.instapaper.com/user/login" },
+  { id: "mastodon", name: "Mastodon", kind: "manual", detail: "posts per day", live: false, setup: "automation" },
+  { id: "apple-weather", name: "Apple Weather", kind: "manual", detail: "daily conditions + temperature", live: false, setup: "automation", setupUrl: "https://weather.apple.com" },
 ];
 
 function intervalFor(cfg: AppConfig | null, id: string): Interval {
@@ -222,6 +241,8 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
       due: false,
       syncEndpoint: null,
       live: reg.live,
+      setup: reg.setup,
+      setupUrl: reg.setupUrl,
     });
   }
 

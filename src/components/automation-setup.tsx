@@ -34,10 +34,22 @@ interface RunResult {
   headers: string[];
 }
 
-export function AutomationSetup({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+export function AutomationSetup({
+  onDone,
+  onCancel,
+  initialName = "",
+  initialUrl = "",
+}: {
+  onDone: () => void;
+  onCancel: () => void;
+  /** Seed name/URL when the wizard is opened from a specific roster source
+   *  (e.g. "Garmin" → its login page), so the user isn't typing from scratch. */
+  initialName?: string;
+  initialUrl?: string;
+}) {
   const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
+  const [name, setName] = useState(initialName);
+  const [url, setUrl] = useState(initialUrl);
   const [credType, setCredType] = useState<AutomationCredType>("userpass");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
