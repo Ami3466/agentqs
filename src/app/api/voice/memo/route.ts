@@ -94,7 +94,18 @@ export async function POST(req: Request) {
   try {
     ({ text, backend } = await transcribeMemo({ audio, mime, filename }, env));
   } catch (e) {
-    return NextResponse.json({ error: `Transcription failed: ${(e as Error).message}` }, { status: 502 });
+    if (env.whisperModel && env.openaiKey) {
+      try {
+        ({ text, backend } = await transcribeMemo(
+          { audio, mime, filename },
+          { ...env, whisperModel: "" },
+        ));
+      } catch {
+        return NextResponse.json({ error: `Transcription failed: ${(e as Error).message}` }, { status: 502 });
+      }
+    } else {
+      return NextResponse.json({ error: `Transcription failed: ${(e as Error).message}` }, { status: 502 });
+    }
   }
 
   text = text.trim();

@@ -196,9 +196,11 @@ async function main() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (WHISPER_BIN=node ${path.basename(stub)}, data dir = ${root})…`);
-  const server = spawn("node_modules/.bin/next", ["start", "-p", String(port)], {
+  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
     env: {
       ...process.env,
+      PORT: String(port),
+      HOSTNAME: "127.0.0.1",
       AGENTQS_DATA_DIR: root,
       // A fresh models dir — the real repo cache (set above for the say-check)
       // must not leak in, or "none installed" below would be false.

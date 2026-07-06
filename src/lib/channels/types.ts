@@ -16,6 +16,7 @@
 /** A normalized inbound message, whatever platform it arrived on. */
 export interface InboundMessage {
   channel: string; // "telegram" | "slack"
+  eventId?: string; // platform delivery id for retry de-dupe
   target: string; // where the reply goes (chat id / channel id)
   userId: string; // sender id (provenance / logging)
   text: string; // the message text

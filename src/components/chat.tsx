@@ -81,7 +81,8 @@ function toIsoDate(mmddyyyy: string): string | null {
   const dd = Number(mmddyyyy.slice(2, 4));
   const yyyy = Number(mmddyyyy.slice(4, 8));
   if (!Number.isFinite(mm) || !Number.isFinite(dd) || !Number.isFinite(yyyy)) return null;
-  if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) return null;
   return `${yyyy.toString().padStart(4, "0")}-${mmddyyyy.slice(0, 2)}-${mmddyyyy.slice(2, 4)}`;
 }
 
@@ -97,7 +98,7 @@ function scopeTokenAtEnd(text: string): ScopeToken | null {
   };
 }
 
-function parseScope(raw: string): { text: string; dateRange: string | null; columns: string[] } {
+function parseScope(raw: string, metricKeys: Set<string>): { text: string; dateRange: string | null; columns: string[] } {
   const tokens = raw.trim().split(/\s+/).filter(Boolean);
   const keep: string[] = [];
   const columns: string[] = [];
@@ -108,7 +109,7 @@ function parseScope(raw: string): { text: string; dateRange: string | null; colu
     if (date) {
       const start = toIsoDate(date[1]);
       const end = toIsoDate(date[2]);
-      if (start && end) {
+      if (start && end && start <= end) {
         dateRange = `${start}..${end}`;
         continue;
       }
@@ -116,8 +117,11 @@ function parseScope(raw: string): { text: string; dateRange: string | null; colu
 
     const column = token.match(/^@([A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*)$/);
     if (column) {
-      columns.push(...column[1].split(",").filter(Boolean));
-      continue;
+      const requested = column[1].split(",").filter(Boolean);
+      if (requested.length && requested.every((c) => metricKeys.has(c))) {
+        columns.push(...requested);
+        continue;
+      }
     }
 
     keep.push(token);
@@ -140,12 +144,20 @@ function replaceRange(text: string, start: number, end: number, insert: string):
 function scopeSuggestions(token: ScopeToken | null, metrics: JournalData["metrics"]): ScopeSuggestion[] {
   if (!token) return [];
   const query = token.query.toLowerCase();
-  const dateSuggestion: ScopeSuggestion = {
-    kind: "date",
-    label: "Date range",
-    detail: "Type @mmddyyyy-mmddyyyy",
-    insert: "@mmddyyyy-mmddyyyy",
-  };
+  const suggestions: ScopeSuggestion[] = [];
+  const range = token.query.match(/^(\d{8})-(\d{8})$/);
+  if (range) {
+    const start = toIsoDate(range[1]);
+    const end = toIsoDate(range[2]);
+    if (start && end && start <= end) {
+      suggestions.push({
+        kind: "date",
+        label: `${start} to ${end}`,
+        detail: "Date range",
+        insert: token.raw,
+      });
+    }
+  }
 
   const columns = metrics
     .filter((m) => {
@@ -161,7 +173,7 @@ function scopeSuggestions(token: ScopeToken | null, metrics: JournalData["metric
       insert: `@${m.key}`,
     }));
 
-  return [dateSuggestion, ...columns];
+  return [...suggestions, ...columns];
 }
 
 function insertScopeToken(input: string, token: ScopeToken | null, insert: string): string {
@@ -211,6 +223,7 @@ export function Chat() {
   const filtered = useMemo(() => filterCommands(input), [input]);
   const scopeToken = useMemo(() => scopeTokenAtEnd(input), [input]);
   const scopeItems = useMemo(() => scopeSuggestions(scopeToken, journal?.metrics ?? []), [journal, scopeToken]);
+  const metricKeySet = useMemo(() => new Set((journal?.metrics ?? []).map((m) => m.key)), [journal]);
 
   // Restore the last-used skill + model choice.
   useEffect(() => {
@@ -527,7 +540,7 @@ export function Chat() {
   }
 
   async function sendChat(raw: string) {
-    const scoped = parseScope(raw);
+    const scoped = parseScope(raw, metricKeySet);
     const text = (scoped.text || raw).trim();
     const message = `${buildScopePrefix(scoped)}${text}`.trim();
     const useSkill = chosen ? skill : skills[0]?.id ?? DEFAULT_SKILL;

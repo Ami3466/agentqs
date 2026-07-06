@@ -144,9 +144,11 @@ async function main() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (data dir = ${root}, NO AI key)…`);
-  const server = spawn("node_modules/.bin/next", ["start", "-p", String(port)], {
+  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
     env: {
       ...process.env,
+      PORT: String(port),
+      HOSTNAME: "127.0.0.1",
       AGENTQS_DATA_DIR: root,
       SESSION_SECRET: "loop15-ships-when-secret",
       // Deliberately no ANTHROPIC/OPENAI/GOOGLE key — the whole point is keyless.
@@ -162,7 +164,7 @@ async function main() {
     const setup = await fetch(`${base}/api/setup`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "tester", password: "loop15pass" }),
+      body: JSON.stringify({ username: "tester", password: "loop15pass", confirm: "loop15pass" }),
     });
     check("setup created the account with NO AI key", setup.ok);
     const cookie = ((setup.headers.get("set-cookie") || "").match(/agentqs_session=[^;]+/) || [""])[0];

@@ -16,6 +16,7 @@ providers only when you choose to connect them.
 - ✅ **Ask grounded questions** — Chat can query your record instead of guessing from a prompt
 - ✅ **Structure when you decide** — raw captures sit in the inbox until you structure them
 - ✅ **Local semantic search** — embeddings run on-device by default
+- ✅ **Graphs** — compare metrics, counts and timelines from the rebuilt record
 - ✅ **CLI, API and MCP** — use the same core from the app, terminal, Codex or Claude Code
 - ✅ **Bring your own model** — Anthropic, OpenAI, Gemini or compatible endpoints from Settings
 
@@ -73,6 +74,12 @@ record tools such as SQL over daily metrics, text search over memos/sessions and
 semantic search. Without a provider, local deterministic paths still work for
 basic record operations and some cross-source summaries.
 
+## Graphs
+
+The Graphs tab turns numeric metrics and activity counts into saved correlation
+and timeline views. Saved graph definitions live in `config.json`; the underlying
+record still stays in plain CSV/JSONL and can be rebuilt at any time.
+
 ## CLI and MCP
 
 Install locally:
@@ -91,6 +98,8 @@ agentqs import ./export.csv --name mood
 agentqs structure
 agentqs query "select date, value_num from daily where metric='mood'"
 agentqs chat "what changed this week?"
+agentqs log list --limit 20
+agentqs whisper status
 agentqs sources
 agentqs rebuild --verify
 ```
@@ -108,28 +117,102 @@ reads, writes, imports, queries and edits through local tools. In-app provider
 usage only happens when you configure a provider in Settings and use web Chat,
 web Structure, channels, or another app path that explicitly calls that provider.
 
-## Run locally
+## Run Locally
 
 ```bash
 cp .env.example .env      # optional; providers can also be added in Settings
 npm install
+npm run build             # production compile/type check
 npm run dev               # http://localhost:3000
 ```
 
 On first visit, create the local account. The welcome dialog can seed generic
 demo data; it is sample data and is marked as demo data.
 
-## Docker
+By default local data is written to `./data`, which is gitignored. To keep a real
+record outside this public repo, set `AGENTQS_DATA_DIR`:
+
+```bash
+export AGENTQS_DATA_DIR="$HOME/agentqs-data"
+npm run cli -- rebuild --verify
+npm run dev
+```
+
+## Run in Docker or Cloud
+
+Build and run with Compose:
+
+```bash
+docker compose up --build
+```
+
+Or run an image directly:
 
 ```bash
 docker run -d \
   -v ~/agentqs-data:/data \
-  -p 3000:3000 agentqs
+  -p 3000:3000 \
+  -e AGENTQS_DATA_DIR=/data \
+  -e SESSION_SECRET="$(openssl rand -hex 32)" \
+  agentqs
 ```
 
-Mount local file-source directories read-only if you want the container to read
-things like browser history from the host. A remote container cannot read files
-on your laptop unless you run a local ingest/daemon flow and sync the record.
+For cloud hosting, the important rule is the same as Docker: mount persistent
+storage at `/data` and set `AGENTQS_DATA_DIR=/data`. The container stores
+`config.json`, `record/`, SQLite caches, embeddings and thumbnails there. Use a
+stable `SESSION_SECRET` if you do not want sessions invalidated between deploys.
+
+Remote cloud instances cannot read files on your laptop. For local-only sources
+such as browser history, iPhone backups or photos, run the CLI on the machine
+that has those files and sync the resulting private record directory separately.
+
+## Real Data Test Fixture
+
+This repo is public, so real journal data should stay outside it. The current
+validated external fixture is:
+
+- source repo: `/Users/example/Desktop/example-journal`
+- agentqs data dir: `/Users/example/Desktop/agentqs-example-data`
+
+Recreate the fixture without copying private data into this project:
+
+```bash
+cd /Users/example/Desktop
+git clone https://github.com/Ami3466/example-journal.git example-journal
+cd /Users/example/Desktop/agentqs
+export AGENTQS_DATA_DIR=/Users/example/Desktop/agentqs-example-data
+
+for f in \
+  /Users/example/Desktop/example-journal/data/productivity/*.csv \
+  /Users/example/Desktop/example-journal/data/iphone/*.csv \
+  /Users/example/Desktop/example-journal/data/whoop/*.csv \
+  /Users/example/Desktop/example-journal/data/sleep/*.csv \
+  /Users/example/Desktop/example-journal/data/browsing/*.csv \
+  /Users/example/Desktop/example-journal/data/calendar/*.csv \
+  /Users/example/Desktop/example-journal/data/journal/*.csv \
+  /Users/example/Desktop/example-journal/data/daily/*.csv
+do
+  [ -f "$f" ] && npm run cli -- import "$f" --name "$(basename "$f" .csv)"
+done
+
+for f in \
+  /Users/example/Desktop/example-journal/sessions/*.md \
+  /Users/example/Desktop/example-journal/logs/*.md \
+  /Users/example/Desktop/example-journal/data/notion-pages/*.md \
+  /Users/example/Desktop/example-journal/BACKGROUND.md \
+  /Users/example/Desktop/example-journal/PATTERNS.md
+do
+  [ -f "$f" ] && npm run cli -- import "$f" --name "$(basename "$f")"
+done
+
+npm run cli -- rebuild --verify
+npm run cli -- query "select source, count(*) as rows from daily group by source order by rows desc limit 10"
+```
+
+Expected shape after the import: tens of thousands of daily rows, with Markdown
+and non-date goal-tracker files left as pending inbox captures for later
+structure. Open the app against the fixture with the same `AGENTQS_DATA_DIR` and
+`npm run dev`.
 
 ## Record format
 

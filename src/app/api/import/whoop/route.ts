@@ -133,10 +133,13 @@ export async function POST(req: Request) {
   }
 
   // Persist the creds with rotated tokens + the sync time so status survives reloads.
-  cfg.whoopCreds = summary.creds;
-  cfg.sourceSyncedAt = { ...(cfg.sourceSyncedAt ?? {}), whoop: new Date().toISOString() };
+  const latest = readConfig();
+  if (latest) {
+    latest.whoopCreds = summary.creds;
+    latest.sourceSyncedAt = { ...(latest.sourceSyncedAt ?? {}), whoop: new Date().toISOString() };
+  }
   try {
-    writeConfig(cfg);
+    if (latest) writeConfig(latest);
   } catch {
     /* non-fatal: the record already holds the data */
   }
@@ -155,6 +158,6 @@ export async function POST(req: Request) {
     minutes: summary.minutes,
     hrDays: summary.hrDays,
     dailyRows: r.daily,
-    syncedAt: cfg.sourceSyncedAt.whoop,
+    syncedAt: latest?.sourceSyncedAt?.whoop ?? null,
   });
 }

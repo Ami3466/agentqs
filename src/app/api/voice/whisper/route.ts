@@ -15,8 +15,9 @@ export const dynamic = "force-dynamic";
  *  on disk, and which one memos actually use. */
 function status() {
   const cfg = readConfig();
+  const active = cfg?.voice?.whisperModel || "";
   return {
-    active: cfg?.voice?.whisperModel || "",
+    active: active && whisperInstalled(active) ? active : "",
     lang: cfg?.voice?.whisperLang || "en",
     models: WHISPER_MODELS.map((m) => ({
       id: m.id,
@@ -45,8 +46,7 @@ export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const cfg = readConfig();
-  if (!cfg) return NextResponse.json({ error: "No config." }, { status: 400 });
+  if (!readConfig()) return NextResponse.json({ error: "No config." }, { status: 400 });
 
   const body = await req.json().catch(() => ({}));
   const model = typeof body.model === "string" ? body.model : "";
@@ -63,8 +63,11 @@ export async function POST(req: Request) {
     );
   }
 
-  cfg.voice = { ...cfg.voice, provider: cfg.voice?.provider || "", whisperModel: model };
-  writeConfig(cfg);
+  const latest = readConfig();
+  if (latest) {
+    latest.voice = { ...latest.voice, provider: latest.voice?.provider || "", whisperModel: model };
+    writeConfig(latest);
+  }
   return NextResponse.json({ ok: true, ...status() });
 }
 

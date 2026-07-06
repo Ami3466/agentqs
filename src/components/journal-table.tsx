@@ -58,7 +58,7 @@ function reconcileOrder(
   const out: string[] = [];
   const seen = new Set<string>();
   for (const id of order) {
-    if ((id === "date" || metricKeys.has(id)) && !seen.has(id)) {
+    if ((id === "date" || metricKeys.has(id) || id.startsWith("custom:")) && !seen.has(id)) {
       out.push(id);
       seen.add(id);
     }

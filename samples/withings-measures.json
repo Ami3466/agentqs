@@ -1,0 +1,23 @@
+{
+  "status": 0,
+  "body": {
+    "measuregrps": [
+      {
+        "date": 1782374400,
+        "measures": [{ "type": 1, "value": 813, "unit": -1 }]
+      },
+      {
+        "date": 1781769600,
+        "measures": [{ "type": 1, "value": 818, "unit": -1 }]
+      },
+      {
+        "date": 1781251200,
+        "measures": [{ "type": 1, "value": 821, "unit": -1 }]
+      },
+      {
+        "date": 1780646400,
+        "measures": [{ "type": 1, "value": 824, "unit": -1 }]
+      }
+    ]
+  }
+}

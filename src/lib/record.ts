@@ -584,6 +584,7 @@ export function mergeDailyCsv(
 
 export type DailyEdit =
   | { op: "set"; source: string; metric: string; date: string; value: string } // "" clears the cell
+  | { op: "revertSet"; source: string; metric: string; date: string; value: string; expected: string } // conditional undo
   | { op: "deleteColumn"; source: string; metric: string }
   | { op: "deleteRow"; date: string }; // removes the date across every source
 
@@ -592,6 +593,27 @@ export interface DailyEditResult {
   clears: number;
   deletedColumns: number;
   deletedRows: number;
+}
+
+export function revertEditsFromAppliedMeta(meta: unknown): DailyEdit[] {
+  if (!meta || typeof meta !== "object") return [];
+  const o = meta as { source?: unknown; applied?: unknown };
+  if (typeof o.source !== "string" || !Array.isArray(o.applied)) return [];
+  const edits: DailyEdit[] = [];
+  for (const c of [...o.applied].reverse()) {
+    if (!c || typeof c !== "object") continue;
+    const cell = c as { d?: unknown; m?: unknown; p?: unknown; v?: unknown };
+    if (typeof cell.d !== "string" || typeof cell.m !== "string" || typeof cell.v !== "string") continue;
+    edits.push({
+      op: "revertSet",
+      source: o.source,
+      metric: cell.m,
+      date: cell.d,
+      value: typeof cell.p === "string" ? cell.p : "",
+      expected: cell.v,
+    });
+  }
+  return edits;
 }
 
 /** Sources become filenames under record/daily — keep them to the same slug shape
@@ -642,6 +664,7 @@ export function applyDailyEdits(
   fs.mkdirSync(dailyDir, { recursive: true });
 
   const touched = new Map<string, DailyTable>();
+  const dirty = new Set<string>();
   const fileOf = (source: string) => path.join(dailyDir, `${source}.csv`);
   const load = (source: string): DailyTable => {
     let t = touched.get(source);
@@ -667,13 +690,43 @@ export function applyDailyEdits(
       if (!date || !metric) continue;
       const t = load(safeSource(e.source));
       if (value === "") {
-        if (t.table.get(date)?.delete(metric)) result.clears++;
+        if (t.table.get(date)?.delete(metric)) {
+          dirty.add(safeSource(e.source));
+          result.clears++;
+        }
         continue;
       }
+      const source = safeSource(e.source);
+      const t2 = load(source);
+      const current = t2.table.get(date)?.get(metric);
+      if (current === value) continue;
+      if (!t2.metricOrder.includes(metric)) t2.metricOrder.push(metric);
+      const row = t2.table.get(date) ?? new Map<string, string>();
+      row.set(metric, value);
+      t2.table.set(date, row);
+      dirty.add(source);
+      result.sets++;
+    } else if (e.op === "revertSet") {
+      const date = e.date.trim();
+      const metric = e.metric.trim();
+      const value = e.value.trim();
+      const expected = e.expected.trim();
+      if (!date || !metric) continue;
+      const t = load(safeSource(e.source));
+      if ((t.table.get(date)?.get(metric) ?? "") !== expected) continue;
+      if (value === "") {
+        if (t.table.get(date)?.delete(metric)) {
+          dirty.add(safeSource(e.source));
+          result.clears++;
+        }
+        continue;
+      }
+      if (t.table.get(date)?.get(metric) === value) continue;
       if (!t.metricOrder.includes(metric)) t.metricOrder.push(metric);
       const row = t.table.get(date) ?? new Map<string, string>();
       row.set(metric, value);
       t.table.set(date, row);
+      dirty.add(safeSource(e.source));
       result.sets++;
     } else if (e.op === "deleteColumn") {
       const metric = e.metric.trim();
@@ -681,21 +734,27 @@ export function applyDailyEdits(
       const i = t.metricOrder.indexOf(metric);
       if (i >= 0) {
         t.metricOrder.splice(i, 1);
+        dirty.add(safeSource(e.source));
         result.deletedColumns++;
       }
-      for (const row of t.table.values()) row.delete(metric);
+      for (const row of t.table.values()) {
+        if (row.delete(metric)) dirty.add(safeSource(e.source));
+      }
     } else {
       const date = e.date.trim();
       if (!date) continue;
       let removed = false;
       for (const source of new Set([...allSources(), ...touched.keys()])) {
-        if (load(source).table.delete(date)) removed = true;
+        if (load(source).table.delete(date)) {
+          dirty.add(source);
+          removed = true;
+        }
       }
       if (removed) result.deletedRows++;
     }
   }
 
-  for (const [source, t] of touched) writeDailyTable(fileOf(source), t);
+  for (const source of dirty) writeDailyTable(fileOf(source), load(source));
   return result;
 }
 

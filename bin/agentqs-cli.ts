@@ -10,6 +10,7 @@
  *       agentqs <command>               (after `npm link`)
  */
 import { spawn } from "child_process";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Command } from "commander";
@@ -85,6 +86,46 @@ program
     }
   });
 
+program
+  .command("journal-edit <edits>")
+  .description("apply daily table edits from a JSON array")
+  .action((edits: string) => {
+    try {
+      const parsed = JSON.parse(edits);
+      if (!Array.isArray(parsed)) throw new Error("edits must be a JSON array.");
+      out(core.journalEdit(parsed), (d) => `Applied edits: ${d.sets} set, ${d.clears} cleared, ${d.deletedColumns} columns, ${d.deletedRows} rows.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+const log = program.command("log").description("inspect and reject captured log items");
+log
+  .command("list", { isDefault: true })
+  .description("show recent inbox/log items")
+  .option("-l, --limit <n>", "items to show", (v) => parseInt(v, 10), 50)
+  .action((opts: { limit: number }) => {
+    try {
+      out(core.logItems(opts.limit), (rows: any[]) =>
+        rows.length
+          ? rows.map((i) => `${i.ts}  ${i.status.padEnd(10)}  ${i.id}  ${i.text.slice(0, 80).replace(/\s+/g, " ")}`).join("\n")
+          : "(no log items)",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+log
+  .command("reject <id>")
+  .description("mark a log item rejected")
+  .action((id: string) => {
+    try {
+      out(core.logReject(id), (d) => `Rejected ${d.id}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
 // ---- sources + sync -------------------------------------------------------
 program
   .command("sources")
@@ -138,6 +179,41 @@ whoop
   .action((email: string, password: string) => {
     try {
       out(core.whoopConnect(email, password), (d) => `Connected WHOOP as ${d.email}. Run: agentqs sync whoop`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+const whisper = program.command("whisper").description("manage built-in local Whisper for voice memos");
+whisper
+  .command("status", { isDefault: true })
+  .description("show installed local Whisper models")
+  .action(() => {
+    try {
+      out(core.whisperStatus(), (d) =>
+        `active=${d.active || "(none)"} lang=${d.lang}\n` +
+        d.models.map((m: any) => `${m.installed ? "●" : "○"} ${m.id.padEnd(6)} ${m.size} ${m.hint}`).join("\n"),
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+whisper
+  .command("install <model>")
+  .description("download and activate: tiny | base | small")
+  .action(async (model: string) => {
+    try {
+      out(await core.whisperInstall(model), (d) => `Whisper active: ${d.active || "(none)"}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+whisper
+  .command("remove [model]")
+  .description("remove a local Whisper model")
+  .action((model?: string) => {
+    try {
+      out(core.whisperRemove(model), (d) => `Whisper active: ${d.active || "(none)"}.`);
     } catch (e) {
       die(e);
     }
@@ -491,8 +567,15 @@ program
       return; // stays alive on stdio
     }
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const nextBin = path.join(here, "..", "node_modules", ".bin", "next");
-    const child = spawn(nextBin, ["start", "-p", opts.port], { stdio: "inherit", cwd: path.join(here, "..") });
+    const root = path.join(here, "..");
+    const standalone = path.join(root, ".next", "standalone", "server.js");
+    const child = fs.existsSync(standalone)
+      ? spawn(process.execPath, [standalone], {
+          stdio: "inherit",
+          cwd: root,
+          env: { ...process.env, PORT: opts.port, HOSTNAME: process.env.HOSTNAME || "0.0.0.0" },
+        })
+      : spawn(path.join(root, "node_modules", ".bin", "next"), ["start", "-p", opts.port], { stdio: "inherit", cwd: root });
     child.on("exit", (code) => process.exit(code ?? 0));
   });
 

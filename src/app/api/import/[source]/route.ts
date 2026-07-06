@@ -104,13 +104,14 @@ export async function POST(req: Request, { params }: { params: { source: string 
   }
 
   // Persist a freshly supplied credential + the sync time so status survives reloads.
-  if (cfg) {
+  const latest = readConfig();
+  if (latest) {
     if (body.credential && body.credential.trim()) {
-      cfg.sourceCreds = { ...(cfg.sourceCreds ?? {}), [instanceId]: body.credential.trim() };
+      latest.sourceCreds = { ...(latest.sourceCreds ?? {}), [instanceId]: body.credential.trim() };
     }
-    cfg.sourceSyncedAt = { ...(cfg.sourceSyncedAt ?? {}), [instanceId]: new Date().toISOString() };
+    latest.sourceSyncedAt = { ...(latest.sourceSyncedAt ?? {}), [instanceId]: new Date().toISOString() };
     try {
-      writeConfig(cfg);
+      writeConfig(latest);
     } catch {
       /* non-fatal: the record already has the data */
     }
@@ -128,6 +129,6 @@ export async function POST(req: Request, { params }: { params: { source: string 
     metrics: summary.metrics,
     cells: summary.cells,
     dailyRows: r.daily,
-    syncedAt: cfg?.sourceSyncedAt?.[instanceId] ?? null,
+    syncedAt: latest?.sourceSyncedAt?.[instanceId] ?? null,
   });
 }
