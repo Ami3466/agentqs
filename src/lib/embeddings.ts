@@ -41,6 +41,11 @@ interface VecDb {
   vec: boolean; // did the sqlite-vec extension load?
 }
 
+/** Warn at most once per process that the sqlite-vec extension didn't load, so a
+ *  silent degrade to the JS fallback can't hide on an exotic host. We still fall back
+ *  (the feature keeps working, a hair slower), but the reason is now on stderr. */
+let vecLoadWarned = false;
+
 /** Open a vec-index connection, loading the sqlite-vec extension when available.
  *  Uses the default rollback journal (not WAL) so a build leaves no -wal/-shm
  *  sidecars to rename around. */
@@ -51,8 +56,17 @@ function openVec(file: string): VecDb {
     sqliteVec.load(db);
     db.prepare("SELECT vec_version()").get();
     vec = true;
-  } catch {
-    vec = false; // fall back to JS cosine over the stored BLOBs
+  } catch (e) {
+    // Fall back to JS cosine over the stored BLOBs, but never silently. Surface WHY
+    // the loadable extension failed so a degraded backend is diagnosable, not invisible.
+    vec = false;
+    if (!vecLoadWarned) {
+      vecLoadWarned = true;
+      console.warn(
+        `[embeddings] sqlite-vec extension failed to load. Falling back to the slower ` +
+          `JS-cosine backend. Reason: ${(e as Error).message}`,
+      );
+    }
   }
   return { db, vec };
 }
