@@ -129,6 +129,7 @@ export function ConnectApi({ model = "" }: { model?: string }) {
             {snip.title} · from the terminal
           </p>
           <div className="space-y-3">
+            <CopyBlock label="Install the CLI (once)" code="npm link" />
             <CopyBlock label="CLI" code={snip.cli} />
             <CopyBlock label="API" code={snip.api(base)} />
             {snip.extra ? (
@@ -136,7 +137,7 @@ export function ConnectApi({ model = "" }: { model?: string }) {
             ) : null}
             <div className="space-y-3 border-t border-border pt-3">
               <p className="text-[11px] text-muted-fg">
-                Drive your whole record from Claude Code. Add the MCP server once:
+                Drive your whole record from Claude Code — add the MCP server once:
               </p>
               <CopyBlock label="Connect to Claude Code (MCP)" code={MCP_ADD} />
               <CopyBlock label="…or paste into .mcp.json" code={MCP_JSON} />
