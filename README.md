@@ -66,6 +66,8 @@ Connect apps, set a sync interval per source, and drop files into the inbox. Hit
 
 ![Data](docs/images/data.png)
 
+**No API? Automate the site.** For a source with no ready API, the Data tab's **Connections → Automate a site without an API** wizard walks you through it: pick the source, hand it a login, record the click-path to your data once (a real headless browser scrapes the table via Playwright), then schedule how often it replays. The result lands under **Automated imports** as an editable feed — same interval, Run-now, and Remove as any other source. A scraped table with a date column merges into your daily timeline; anything else lands in the inbox for Structure. Needs a one-time `npx playwright install chromium`.
+
 ## Built for Claude Code — CLI-first
 
 Every capability is reachable three ways off **one core** (`src/lib/cli-core.ts`): the
@@ -97,6 +99,11 @@ agentqs source interval github daily             # schedule an automated import
 agentqs source remove chrome                     # remove an automated import (data + schedule)
 agentqs sync github                              # run one source now (omit to sync all connected)
 agentqs source file chrome                        # import a local-disk source (Chrome/iPhone)
+agentqs automation add "Power bill" --url https://… --cred-type userpass \
+  --username you --password ••• --table "table.usage"   # automate a site with no API
+agentqs automation run power-bill                # replay it now (Playwright; --headed to watch)
+agentqs automation schedule power-bill weekly    # set its cron cadence
+agentqs automation list                          # your automations + last-run status
 agentqs skill add "Stoic" --system "…"           # add a mentor — answers everywhere
 agentqs skill list                               # built-ins + your own
 agentqs config set model claude-sonnet-4-5       # provider · model · key · theme

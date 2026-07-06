@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Clock, Plug, sourceIcon, Spinner, Trash } from "@/components/icons";
+import { AlertTriangle, Check, Clock, Plug, RefreshCw, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { SourceConnect } from "@/components/source-connect";
+import { AutomationSetup } from "@/components/automation-setup";
+import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, cn } from "@/components/ui";
 import { ago, type Interval, type SourceView } from "@/lib/sources";
@@ -40,6 +42,7 @@ export function SourcesPanel({
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [flowHint, setFlowHint] = useState(false);
+  const [wizard, setWizard] = useState(false);
   const ranAuto = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -150,6 +153,22 @@ export function SourcesPanel({
     const onRemove = withRemove ? () => void removeSource(s.id) : undefined;
     const onIntervalChange = (i: Interval) => void changeInterval(s.id, i);
 
+    if (s.automation) {
+      return (
+        <AutomationRow
+          key={s.id}
+          source={s}
+          saving={saving}
+          removing={removing}
+          onIntervalChange={onIntervalChange}
+          onRemove={onRemove}
+          onRan={() => {
+            void load();
+            onChanged();
+          }}
+        />
+      );
+    }
     if (s.id === "github") {
       return (
         <GithubConnect
@@ -234,14 +253,49 @@ export function SourcesPanel({
         <div className="flex items-center gap-2 p-4 text-xs text-muted-fg">
           <Spinner width={13} height={13} /> Loading sources…
         </div>
-      ) : list.length === 0 ? (
-        <p className="p-6 text-center text-xs text-muted-fg">
-          {tab === "automated"
-            ? "No automated imports yet. Connect a source under Connections to start a feed."
-            : "Every available integration is already connected."}
-        </p>
       ) : (
-        <div className="divide-y divide-border">{list.map(row)}</div>
+        <>
+          {list.length === 0 ? (
+            <p className="p-6 text-center text-xs text-muted-fg">
+              {tab === "automated"
+                ? "No automated imports yet. Connect a source, or automate a site below."
+                : "Every available integration is already connected."}
+            </p>
+          ) : (
+            <div className="divide-y divide-border">{list.map(row)}</div>
+          )}
+
+          {tab === "connections" ? (
+            wizard ? (
+              <AutomationSetup
+                onCancel={() => setWizard(false)}
+                onDone={() => {
+                  setWizard(false);
+                  setTab("automated");
+                  void load();
+                  onChanged();
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setWizard(true)}
+                className="flex w-full items-center gap-3 border-t border-border p-4 text-left transition-colors hover:bg-muted/40"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-muted text-muted-fg">
+                  <RefreshCw width={17} height={17} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-fg">Automate a site without an API</p>
+                  <p className="truncate text-xs text-muted-fg">
+                    Record a login + the click-path to your data, then schedule it — Playwright replays it for you.
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs font-medium text-muted-fg">Set up →</span>
+              </button>
+            )
+          ) : null}
+        </>
       )}
     </div>
   );

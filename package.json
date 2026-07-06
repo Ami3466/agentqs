@@ -27,7 +27,8 @@
     "voice:test": "tsx scripts/voice-memo.ts",
     "channels:test": "tsx scripts/channels.ts",
     "semantic:test": "tsx scripts/embeddings.ts",
-    "agent:test": "tsx scripts/agent-brain.ts"
+    "agent:test": "tsx scripts/agent-brain.ts",
+    "automation:test": "tsx scripts/automation.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.8",
@@ -54,5 +55,8 @@
     "tailwindcss": "3.4.13",
     "tsx": "^4.23.0",
     "typescript": "5.5.3"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.61.1"
   }
 }
