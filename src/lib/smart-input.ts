@@ -3,7 +3,7 @@
  * routed by its prefix into one of three modes:
  *
  *   plain text  → talk to the mentor (the model / grounded answer)
- *   `>>`        → a memo: appended raw to the inbox, no LLM, no reply
+ *   `//`        → a memo: appended raw to the inbox, no LLM, no reply
  *   `/`         → a command: /sync · /structure · /new · /skill
  *
  * Pure data + string helpers only (no fs, no React) so the exact same routing is

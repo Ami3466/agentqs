@@ -7,7 +7,7 @@ import { Button, Field, Input } from "@/components/ui";
 
 export function SetupForm() {
   const router = useRouter();
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,7 @@ export function SetupForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (username.trim().length < 2) return setError("Pick a username (2+ characters).");
+    if (!email.includes("@")) return setError("Enter a valid email.");
     if (password.length < 6) return setError("Password must be at least 6 characters.");
     if (password !== confirm) return setError("Passwords don't match.");
 
@@ -24,7 +24,7 @@ export function SetupForm() {
     const res = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: username.trim(), password }),
+      body: JSON.stringify({ username: email.trim().toLowerCase(), password }),
     });
     setBusy(false);
 
@@ -39,50 +39,44 @@ export function SetupForm() {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Field label="Username" htmlFor="username">
+      <Field label="Email" htmlFor="email">
         <Input
-          id="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="you"
-          autoComplete="username"
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          autoComplete="email"
           autoFocus
         />
       </Field>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Password" htmlFor="password">
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="6+ characters"
-            autoComplete="new-password"
-          />
-        </Field>
-        <Field label="Confirm" htmlFor="confirm">
-          <Input
-            id="confirm"
-            type="password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            placeholder="repeat"
-            autoComplete="new-password"
-          />
-        </Field>
-      </div>
+      <Field label="Password" htmlFor="password">
+        <Input
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="6+ characters"
+          autoComplete="new-password"
+        />
+      </Field>
+      <Field label="Confirm" htmlFor="confirm">
+        <Input
+          id="confirm"
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder="repeat password"
+          autoComplete="new-password"
+        />
+      </Field>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <Button type="submit" variant="primary" disabled={busy} className="w-full">
         {busy ? <Spinner width={16} height={16} /> : null}
-        {busy ? "Creating…" : "Create & enter"}
+        {busy ? "Creating…" : "Create account"}
       </Button>
-
-      <p className="text-center text-xs text-muted-fg">
-        Add your AI key later in Settings — you&apos;re in first.
-      </p>
     </form>
   );
 }
