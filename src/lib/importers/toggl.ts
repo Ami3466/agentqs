@@ -1,0 +1,76 @@
+import {
+  getJson,
+  inWindow,
+  num,
+  type DailyTable,
+  type ImporterContext,
+  type ImporterPlugin,
+  type ImporterResult,
+} from "./plugin";
+
+/**
+ * Toggl Track — where your tracked hours went. Uses the v9 time-entries list:
+ *
+ *   GET https://api.track.toggl.com/api/v9/me/time_entries
+ *       ?start_date=<from>&end_date=<to>
+ *
+ * Auth is an API token (Toggl uses HTTP Basic "<token>:api_token"). Entries are
+ * bucketed by their start day into a per-day count + tracked hours; a still-running
+ * entry (negative duration) is skipped.
+ */
+
+interface TogglEntry {
+  start?: string;
+  duration?: number; // seconds; negative while running
+}
+
+const API = "https://api.track.toggl.com/api/v9/me/time_entries";
+
+export function normalizeToggl(entries: TogglEntry[], from: string, to: string): DailyTable {
+  const count = new Map<string, number>();
+  const seconds = new Map<string, number>();
+  for (const e of entries) {
+    const day = (e.start ?? "").slice(0, 10);
+    if (!day || !inWindow(day, from, to)) continue;
+    if (typeof e.duration !== "number" || e.duration < 0) continue; // running entry
+    count.set(day, (count.get(day) ?? 0) + 1);
+    seconds.set(day, (seconds.get(day) ?? 0) + e.duration);
+  }
+  const header = ["date", "entries", "tracked_hours"];
+  const rows = [...count.keys()]
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .map((d) => [d, String(count.get(d) ?? 0), num((seconds.get(d) ?? 0) / 3600)]);
+  return { header, rows };
+}
+
+export const togglPlugin: ImporterPlugin = {
+  id: "toggl",
+  name: "Toggl Track",
+  detail: "tracked entries & hours",
+  live: true,
+  requiresCredential: true,
+  credentialLabel: "Toggl API token",
+  credentialPlaceholder: "your Toggl API token",
+  envKey: "TOGGL_TOKEN",
+  primaryMetric: "tracked_hours",
+  unit: "hours",
+  async fetch(ctx: ImporterContext): Promise<ImporterResult> {
+    const fetchImpl = ctx.fetchImpl ?? fetch;
+    const url = new URL(API);
+    url.searchParams.set("start_date", ctx.from);
+    url.searchParams.set("end_date", ctx.to);
+    const basic = Buffer.from(`${ctx.credential ?? ""}:api_token`).toString("base64");
+    let raw: unknown;
+    try {
+      raw = await getJson(
+        url.toString(),
+        { Authorization: `Basic ${basic}`, Accept: "application/json" },
+        fetchImpl,
+      );
+    } catch (e) {
+      throw new Error(`Toggl time entries → ${(e as Error).message}`);
+    }
+    const entries = Array.isArray(raw) ? (raw as TogglEntry[]) : [];
+    return { table: normalizeToggl(entries, ctx.from, ctx.to), meta: { pulledEntries: entries.length } };
+  },
+};

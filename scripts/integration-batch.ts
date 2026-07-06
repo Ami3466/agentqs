@@ -34,6 +34,14 @@ const FIXTURES: Record<string, string> = {
   rescuetime: "samples/rescuetime-daily.json",
   gcal: "samples/gcal-events.json",
   spotify: "samples/spotify-recent.json",
+  oura: "samples/oura-readiness.json",
+  fitbit: "samples/fitbit-steps.json",
+  strava: "samples/strava-activities.json",
+  lastfm: "samples/lastfm-recent.json",
+  toggl: "samples/toggl-entries.json",
+  todoist: "samples/todoist-completed.json",
+  trakt: "samples/trakt-history.json",
+  notion: "samples/notion-search.json",
 };
 
 async function main() {

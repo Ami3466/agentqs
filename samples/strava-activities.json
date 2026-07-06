@@ -1,0 +1,6 @@
+[
+  { "start_date_local": "2026-06-01T07:00:00Z", "distance": 5200, "moving_time": 1620, "type": "Run" },
+  { "start_date_local": "2026-06-01T18:00:00Z", "distance": 12000, "moving_time": 2700, "type": "Ride" },
+  { "start_date_local": "2026-06-03T06:30:00Z", "distance": 8100, "moving_time": 2400, "type": "Run" },
+  { "start_date_local": "2026-06-04T19:00:00Z", "distance": 3000, "moving_time": 1200, "type": "Run" }
+]

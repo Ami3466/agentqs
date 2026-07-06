@@ -1,0 +1,8 @@
+{
+  "data": [
+    { "day": "2026-06-01", "score": 82, "temperature_deviation": -0.1 },
+    { "day": "2026-06-02", "score": 76, "temperature_deviation": 0.2 },
+    { "day": "2026-06-03", "score": 68, "temperature_deviation": 0.5 },
+    { "day": "2026-06-04", "score": 88, "temperature_deviation": -0.2 }
+  ]
+}

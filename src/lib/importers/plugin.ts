@@ -137,6 +137,45 @@ export async function getJson(
   return res.json();
 }
 
+/** POST JSON to a URL and parse the JSON reply — same error shape as getJson.
+ *  Used by the few API sources whose list endpoint is a POST (e.g. Notion search). */
+export async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  fetchImpl: FetchLike,
+): Promise<unknown> {
+  const res = await fetchImpl(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    let text = "";
+    try {
+      text = (await res.text()).trim().slice(0, 200);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`${res.status}${text ? ` — ${text}` : ""}`);
+  }
+  return res.json();
+}
+
+/** Unix seconds for a YYYY-MM-DD day boundary (UTC). endOfDay → 23:59:59. */
+export function unixSec(date: string, endOfDay = false): number {
+  const t = Date.parse(`${date}T${endOfDay ? "23:59:59" : "00:00:00"}Z`);
+  return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+}
+
+/** Split a "a:b" combined credential (e.g. Last.fm key:user, Trakt id:token). */
+export function splitCredential(cred: string | undefined): [string, string] {
+  const raw = (cred ?? "").trim();
+  const i = raw.indexOf(":");
+  if (i < 0) return [raw, ""];
+  return [raw.slice(0, i).trim(), raw.slice(i + 1).trim()];
+}
+
 /** Round to 2 decimals and strip a trailing ".0"/".00" so CSV stays tidy. */
 export function num(n: number): string {
   if (!Number.isFinite(n)) return "";
