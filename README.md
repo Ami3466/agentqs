@@ -111,7 +111,16 @@ agentqs rebuild --verify                         # rebuild the cache (assert det
 ```
 
 Add `--json` to any command for machine-readable output. The **same core** backs
-`/api/chat`, `/api/journal`, `/api/skills`, `/api/import/[source]`, `/api/structure`, …
+`/api/chat`, `/api/journal`, `/api/skills`, `/api/import/[source]`, `/api/structure`,
+`/api/models` (live model list from your provider), `/api/keys`, `/api/demo`, …
+
+**API key:** mint one in the header **Connect / API** panel (or `POST /api/keys`). Pass
+it as `Authorization: Bearer <key>` to reach every endpoint from a headless agent — the
+panel fills the key straight into copy-paste curl / CLI / MCP / Claude-Code-skill snippets.
+
+**Demo data:** the first-run Welcome popup offers generic sample data (`POST /api/demo`)
+so a new instance isn't empty. It's clearly not your data and is **auto-wiped on your
+first real import** — no mixing.
 
 **Connect to Claude Code (MCP):** `agentqs serve --mcp` speaks MCP over stdio and
 exposes the whole core as tools (`chat`, `query`, `journal`, `sources`, `sync`,

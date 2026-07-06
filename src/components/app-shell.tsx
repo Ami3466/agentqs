@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Brand } from "./brand";
 import { ConnectApi } from "./connect-api";
+import { Onboarding, TourButton } from "./onboarding";
 import { TabNav } from "./tab-nav";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu } from "./user-menu";
@@ -31,6 +32,7 @@ export function AppShell({
           </span>
           <div className="ml-auto flex items-center gap-2">
             <ConnectApi />
+            <TourButton />
             <VoiceMemo />
             <ThemeToggle />
             <UserMenu username={username} />
@@ -45,6 +47,8 @@ export function AppShell({
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         {children}
       </main>
+
+      <Onboarding />
     </div>
   );
 }

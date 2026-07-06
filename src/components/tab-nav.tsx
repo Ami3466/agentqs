@@ -22,6 +22,7 @@ export function TabNav() {
           <Link
             key={href}
             href={href}
+            id={`tour-tab-${label.toLowerCase()}`}
             aria-current={active ? "page" : undefined}
             className={cn(
               "relative inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { structurePending } from "@/lib/structure-run";
+import { wipeDemoOnImport } from "@/lib/demo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +19,7 @@ export async function POST(req: Request) {
   }
 
   const body = (await req.json().catch(() => ({}))) as { id?: string; all?: boolean };
+  wipeDemoOnImport(); // structuring a real drop is a real import — clear demo first
   const r = await structurePending({ id: body.id, all: body.all });
   if (!r.ok) {
     return NextResponse.json({ error: r.error }, { status: r.error?.includes("isn't in") ? 404 : 400 });

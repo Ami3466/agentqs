@@ -3,13 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Eye, EyeOff, Moon, Spinner, Sparkles, Sun } from "@/components/icons";
+import { Check, Eye, EyeOff, Moon, Plus, RefreshCw, Spinner, Sparkles, Sun, Trash } from "@/components/icons";
 import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
-import {
-  DEFAULT_MODEL,
-  PROVIDERS,
-  modelsForProvider,
-} from "@/lib/models";
+import { PROVIDERS } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
 import type { PublicConfig } from "@/lib/config";
 
@@ -49,9 +45,14 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [username, setUsername] = useState(config.username);
   const [password, setPassword] = useState("");
   const [provider, setProvider] = useState(config.llmProvider || "");
-  const [model, setModel] = useState(config.model || DEFAULT_MODEL);
+  const [model, setModel] = useState(config.model || "");
   const [llmKey, setLlmKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+
+  // Live model list — fetched from the provider's /models, never hardcoded.
+  const [models, setModels] = useState<string[]>(config.model ? [config.model] : []);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsErr, setModelsErr] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -60,12 +61,75 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
 
-  // Personas = built-ins + any custom mentors added from the CLI / MCP / API.
+  // Mentors = built-ins + any custom ones added here or from the CLI / MCP / API.
   const [skills, setSkills] = useState<(Skill & { builtin: boolean })[]>(
     SKILLS.map((s) => ({ ...s, builtin: true })),
   );
+  const [newName, setNewName] = useState("");
+  const [newSystem, setNewSystem] = useState("");
+  const [addingMentor, setAddingMentor] = useState(false);
+  const [mentorErr, setMentorErr] = useState("");
 
-  const providerModels = modelsForProvider(provider);
+  async function loadModels() {
+    if (!provider) return;
+    setLoadingModels(true);
+    setModelsErr("");
+    try {
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, ...(llmKey ? { key: llmKey } : {}) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setModelsErr(d.error || "Could not load models.");
+        return;
+      }
+      const list = Array.isArray(d.models) ? (d.models as string[]) : [];
+      setModels(list);
+      if (list.length && !list.includes(model)) setModel(list[0]);
+    } catch {
+      setModelsErr("Could not reach the provider.");
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function refreshSkills() {
+    const d = await fetch("/api/skills").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (d && Array.isArray(d.skills)) setSkills(d.skills);
+  }
+
+  async function addMentor() {
+    setMentorErr("");
+    if (newName.trim().length < 2 || newSystem.trim().length < 10) {
+      setMentorErr("Give a name and a system prompt (10+ chars).");
+      return;
+    }
+    setAddingMentor(true);
+    try {
+      const res = await fetch("/api/skills", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), system: newSystem.trim() }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMentorErr(d.error || "Could not add mentor.");
+        return;
+      }
+      setNewName("");
+      setNewSystem("");
+      await refreshSkills();
+    } finally {
+      setAddingMentor(false);
+    }
+  }
+
+  async function removeMentor(id: string) {
+    await fetch(`/api/skills?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+    await refreshSkills();
+  }
 
   // Local semantic index status (default-on, no key) for the Semantic search section.
   useEffect(() => {
@@ -183,10 +247,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 id="provider"
                 value={provider}
                 onChange={(e) => {
-                  const next = e.target.value;
-                  setProvider(next);
-                  const models = modelsForProvider(next);
-                  if (models.length && !models.includes(model)) setModel(models[0]);
+                  setProvider(e.target.value);
+                  setModels([]);
+                  setModel("");
+                  setModelsErr("");
                 }}
               >
                 <option value="">Not set</option>
@@ -197,23 +261,45 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 ))}
               </Select>
             </Field>
-            <Field label="Model" htmlFor="model">
-              <Select
-                id="model"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                disabled={!providerModels.length}
-              >
-                {providerModels.length ? (
-                  providerModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">Pick a provider first</option>
-                )}
-              </Select>
+            <Field
+              label="Model"
+              htmlFor="model"
+              hint={
+                modelsErr
+                  ? modelsErr
+                  : models.length
+                    ? undefined
+                    : "Load the live list from your provider."
+              }
+            >
+              <div className="flex gap-2">
+                <Select
+                  id="model"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={!models.length}
+                  className="flex-1"
+                >
+                  {models.length ? (
+                    models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">{provider ? "Load models →" : "Pick a provider first"}</option>
+                  )}
+                </Select>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void loadModels()}
+                  disabled={!provider || loadingModels}
+                  title="Fetch this provider's live models"
+                >
+                  {loadingModels ? <Spinner width={14} height={14} /> : <RefreshCw width={14} height={14} />}
+                </Button>
+              </div>
             </Field>
           </div>
 
@@ -334,10 +420,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </p>
       </Section>
 
-      {/* Personas / skills */}
+      {/* Mentors */}
       <Section
-        title="Personas"
-        desc="The voices your mentor can take. Switch mid-chat with the skill chip or /skill."
+        title="Mentors"
+        desc="The voices your chat can take. Pick one from the mentor chip mid-conversation."
       >
         <div className="space-y-2">
           {skills.map((s) => (
@@ -346,7 +432,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
             >
               <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-fg/50" aria-hidden />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-fg">
                   {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
                   {s.builtin ? null : (
@@ -357,11 +443,45 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 </p>
                 <p className="text-xs text-muted-fg">{s.blurb}</p>
               </div>
+              {s.builtin ? null : (
+                <button
+                  type="button"
+                  onClick={() => void removeMentor(s.id)}
+                  className="shrink-0 rounded p-1 text-muted-fg hover:text-destructive"
+                  aria-label={`Remove ${s.name}`}
+                >
+                  <Trash width={15} height={15} />
+                </button>
+              )}
             </div>
           ))}
         </div>
+
+        {/* Add a mentor */}
+        <div className="mt-4 space-y-2 rounded-lg border border-border p-3">
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Mentor name — e.g. Stoic"
+          />
+          <textarea
+            value={newSystem}
+            onChange={(e) => setNewSystem(e.target.value)}
+            rows={3}
+            placeholder="System prompt — how this mentor should think and reply."
+            className="w-full resize-y rounded-lg border border-border bg-card px-3 py-2 text-sm text-fg outline-none placeholder:text-muted-fg/70 focus:border-ring/60"
+          />
+          <div className="flex items-center gap-3">
+            <Button type="button" size="sm" onClick={() => void addMentor()} disabled={addingMentor}>
+              {addingMentor ? <Spinner width={14} height={14} /> : <Plus width={14} height={14} />}
+              Add mentor
+            </Button>
+            {mentorErr ? <span className="text-xs text-destructive">{mentorErr}</span> : null}
+          </div>
+        </div>
+
         <p className="mt-3 text-xs text-muted-fg">
-          Add your own from the terminal:{" "}
+          Or from the terminal:{" "}
           <code className="font-mono">agentqs skill add &quot;Stoic&quot; --system &quot;…&quot;</code>
         </p>
       </Section>

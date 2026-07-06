@@ -94,6 +94,12 @@ export function JournalWorkspace() {
         </div>
       </div>
 
+      {mode === "table" ? (
+        <p className="mb-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-fg">
+          One row per day. Every source&apos;s metrics merged into a single daily record — show, hide, reorder and resize columns, then save the layout as a view.
+        </p>
+      ) : null}
+
       <JournalSearch />
 
       {loading || !data ? (

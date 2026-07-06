@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { hashPassword } from "@/lib/auth";
 import { readConfig, sessionSecretFor, writeConfig } from "@/lib/config";
 import { getCurrentUser, setSessionCookie } from "@/lib/session";
-import { modelsForProvider } from "@/lib/models";
+import { isProvider } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,15 +43,15 @@ export async function POST(req: Request) {
   // AI provider
   if (typeof body.llmProvider === "string") {
     const provider = body.llmProvider;
-    if (provider && !modelsForProvider(provider).length) {
+    if (provider && !isProvider(provider)) {
       return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
     }
     cfg.llmProvider = provider;
     if (!provider) cfg.model = "";
   }
+  // Model is a live id fetched from the provider — trust any non-empty string.
   if (typeof body.model === "string" && cfg.llmProvider) {
-    const models = modelsForProvider(cfg.llmProvider);
-    cfg.model = models.includes(body.model) ? body.model : models[0] || "";
+    cfg.model = body.model.trim();
   }
   if (typeof body.llmKey === "string" && body.llmKey) {
     cfg.llmKey = body.llmKey;

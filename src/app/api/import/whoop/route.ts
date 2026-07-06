@@ -7,6 +7,7 @@ import { recordDir } from "@/lib/paths";
 import { parseCsv, rebuild } from "@/lib/record";
 import { windowDays } from "@/lib/importers/plugin";
 import { importWhoop, whoopHrDir, type WhoopCreds } from "@/lib/importers/whoop";
+import { wipeDemoOnImport } from "@/lib/demo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,6 +116,8 @@ export async function POST(req: Request) {
 
   const creds: WhoopCreds = { ...stored, email, password: password || stored.password };
   const { from, to } = windowDays(body.days && body.days > 0 ? body.days : 90);
+
+  wipeDemoOnImport(); // first real import clears the generic demo record
 
   let summary;
   try {
