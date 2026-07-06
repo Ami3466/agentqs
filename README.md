@@ -132,20 +132,29 @@ terminal.
 
 One daily record, fed from wherever your life happens.
 
+**API-first:** every source that ships an API is pulled through it — never a manual export. Manual/file import is only for sources that genuinely have no API (a local Chrome-history SQLite, an iPhone backup, Apple Health on-device).
+
 **Body & health**
 - **WHOOP — per-minute.** Not just a daily score: **minute-by-minute heart rate**, HRV, recovery, sleep stages and strain. This is what makes correlations *real* — "that meeting spiked me to 110," "this person costs me +10 bpm," "I never recover on days I skip lunch." Most tools only ever see your daily average. **agentqs sees every minute.**
-- **Apple Health** — steps, heart rate, sleep, workouts, energy.
+- **Oura** — readiness score & body-temperature deviation (personal access token)
+- **Fitbit** — steps per day (OAuth)
+- **Strava** — activities, distance & moving time (OAuth)
+- **Apple Health** — steps, heart rate, sleep, workouts, energy (on-device export — no API)
 
 **Focus & work**
 - **RescueTime** — where your hours actually go
 - **GitHub** — commits per day
-- **Browsing** — what you read (Chrome/Firefox/Safari history)
-- **Screen Time** — per-app usage from your iPhone
+- **Toggl Track** — tracked entries & hours
+- **Todoist** — tasks completed per day
+- **Notion** — pages edited per day (integration token)
+- **Browsing** — what you read (local Chrome/Firefox/Safari history — no API)
+- **Screen Time** — per-app usage from your iPhone (local backup — no API)
 
 **Life**
 - **Google Calendar** — meetings, and how they land on your body
-- **Spotify** — what you listened to
-- **Notion** — your journals and notes
+- **Spotify** — tracks & minutes listened
+- **Last.fm** — scrobbles per day (API key + username)
+- **Trakt** — shows & movies watched
 - **WhatsApp / iMessage** — conversation history
 - **Location** — where you were (OwnTracks live, or Google Timeline)
 
@@ -220,30 +229,45 @@ dense per-day series, and merges them into `record/daily/github.csv`. In the app
 the **Data** tab does the same with one click (paste a token → real commits land
 in your record and rebuild into the daily table).
 
-### Tier-1 plugins — RescueTime · Google Calendar · Spotify
+### API plugins — one interface, every API source
 
-The single-credential Tier-1 APIs live behind one shared **plugin** interface
+Every single-credential API lives behind one shared **plugin** interface
 (`src/lib/importers/plugin.ts`): `credential → fetch a window → normalize into a
 wide daily table → merge into record/daily/<id>.csv → rebuild`. Adding a source is
 one file plus a registry entry — no new route, no new UI. They all share the
 generic `/api/import/[source]` route and the `SourceConnect` Data-tab row (paste a
-credential → sync → sparkline + interval), and one CLI:
+credential → sync → sparkline + interval), one CLI, and the MCP `sync` tool:
 
 ```bash
-# RescueTime uses a simple API key; Calendar / Spotify take an OAuth access token
+# RescueTime/Oura/Toggl/Todoist use an API key; the OAuth ones take an access token
 npm run import:source -- --source rescuetime --credential <key> --rebuild
-npm run import:source -- --source spotify --credential <token> --days 30 --rebuild
+npm run import:source -- --source strava --credential <token> --days 30 --rebuild
+
+# Last.fm and Trakt need two values in the one credential slot ("a:b")
+agentqs source connect lastfm "<api_key>:<username>" && agentqs sync lastfm
+agentqs source connect trakt "<client_id>:<access_token>" && agentqs sync trakt
 
 # offline: run the real fetch → normalize → merge → rebuild path against a fixture
 npm run import:source -- --source gcal --fixture samples/gcal-events.json \
   --from 2026-06-01 --to 2026-06-30 --record /tmp/rec --rebuild
 ```
 
-| Source | Auth | Daily metrics |
+| Source | Auth | Primary daily metrics |
 |---|---|---|
 | **RescueTime** | API key | `productivity_pulse`, `productive_hours`, `distracting_hours`, `total_hours` |
 | **Google Calendar** | OAuth token | `meetings`, `meeting_hours` |
 | **Spotify** | OAuth token | `tracks`, `minutes` |
+| **Oura** | personal access token | `readiness_score`, `temp_deviation` |
+| **Fitbit** | OAuth token | `steps` |
+| **Strava** | OAuth token | `activities`, `km`, `moving_hours` |
+| **Last.fm** | API key `:` username | `scrobbles` |
+| **Toggl Track** | API token | `entries`, `tracked_hours` |
+| **Todoist** | API token | `completed` |
+| **Trakt** | client id `:` access token | `plays` |
+| **Notion** | integration token | `pages_edited` |
+
+`npm run api:test` drives all of them end to end (fetch → normalize → merge →
+assert real numbers) against offline fixtures — no network, no keys.
 
 ### WHOOP — the unofficial app login (the differentiator)
 

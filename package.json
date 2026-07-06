@@ -23,6 +23,7 @@
     "session:test": "tsx scripts/session-continuity.ts",
     "sync:test": "tsx scripts/sync-engine.ts",
     "integration:test": "tsx scripts/integration-batch.ts",
+    "api:test": "tsx scripts/api-sources.ts",
     "whoop:test": "tsx scripts/whoop.ts",
     "files:test": "tsx scripts/import-files-test.ts",
     "voice:test": "tsx scripts/voice-memo.ts",

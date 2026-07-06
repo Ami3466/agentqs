@@ -1,0 +1,80 @@
+import {
+  getJson,
+  inWindow,
+  splitCredential,
+  unixSec,
+  type DailyTable,
+  type ImporterContext,
+  type ImporterPlugin,
+  type ImporterResult,
+} from "./plugin";
+
+/**
+ * Last.fm — scrobbles (what you actually played, everywhere). Uses the recent
+ * tracks feed for the window:
+ *
+ *   GET https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks
+ *       &user=<user>&api_key=<key>&from=<unix>&to=<unix>&limit=200&format=json
+ *
+ * Auth is an API key, and the endpoint also needs the username — so the single
+ * credential slot takes both as "<api_key>:<username>". Scrobbles are bucketed by
+ * their play day; the now-playing track (no date) is ignored.
+ */
+
+interface LfmTrack {
+  date?: { uts?: string };
+}
+interface LfmResp {
+  recenttracks?: { track?: LfmTrack[] };
+}
+
+const API = "https://ws.audioscrobbler.com/2.0/";
+
+export function normalizeLastfm(tracks: LfmTrack[], from: string, to: string): DailyTable {
+  const scrobbles = new Map<string, number>();
+  for (const t of tracks) {
+    const uts = Number(t.date?.uts);
+    if (!Number.isFinite(uts) || uts <= 0) continue; // now-playing has no date
+    const day = new Date(uts * 1000).toISOString().slice(0, 10);
+    if (!inWindow(day, from, to)) continue;
+    scrobbles.set(day, (scrobbles.get(day) ?? 0) + 1);
+  }
+  const header = ["date", "scrobbles"];
+  const rows = [...scrobbles.keys()]
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .map((d) => [d, String(scrobbles.get(d) ?? 0)]);
+  return { header, rows };
+}
+
+export const lastfmPlugin: ImporterPlugin = {
+  id: "lastfm",
+  name: "Last.fm",
+  detail: "scrobbles per day",
+  live: true,
+  requiresCredential: true,
+  credentialLabel: "API key + username",
+  credentialPlaceholder: "<api_key>:<username>",
+  envKey: "LASTFM_KEY",
+  primaryMetric: "scrobbles",
+  unit: "scrobbles",
+  async fetch(ctx: ImporterContext): Promise<ImporterResult> {
+    const fetchImpl = ctx.fetchImpl ?? fetch;
+    const [apiKey, user] = splitCredential(ctx.credential);
+    const url = new URL(API);
+    url.searchParams.set("method", "user.getrecenttracks");
+    url.searchParams.set("user", user);
+    url.searchParams.set("api_key", apiKey);
+    url.searchParams.set("from", String(unixSec(ctx.from)));
+    url.searchParams.set("to", String(unixSec(ctx.to, true)));
+    url.searchParams.set("limit", "200");
+    url.searchParams.set("format", "json");
+    let raw: unknown;
+    try {
+      raw = await getJson(url.toString(), { Accept: "application/json" }, fetchImpl);
+    } catch (e) {
+      throw new Error(`Last.fm recent tracks → ${(e as Error).message}`);
+    }
+    const tracks = (raw as LfmResp)?.recenttracks?.track ?? [];
+    return { table: normalizeLastfm(tracks, ctx.from, ctx.to), meta: { pulledScrobbles: tracks.length } };
+  },
+};
