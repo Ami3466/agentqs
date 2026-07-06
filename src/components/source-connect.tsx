@@ -100,6 +100,9 @@ export function SourceConnect({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // Cadence chosen AS PART OF connecting — defaults to Daily so a newly connected
+  // API source actually auto-syncs (Manual is still selectable here).
+  const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
 
   async function loadStatus() {
     const res = await fetch(`/api/import/${id}`);
@@ -112,6 +115,7 @@ export function SourceConnect({
   }, [version, id]);
 
   async function sync() {
+    const wasConnected = Boolean(status?.connected);
     setBusy(true);
     setError("");
     setMsg("");
@@ -129,6 +133,8 @@ export function SourceConnect({
     setCred("");
     setOpen(false);
     setMsg(`${data.days} day${data.days === 1 ? "" : "s"} of ${data.name} → ${data.dailyRows} daily rows.`);
+    // First-time connect → persist the cadence chosen in the connect form.
+    if (!wasConnected) onIntervalChange?.(pendingInterval);
     await loadStatus();
     setTimeout(() => setMsg(""), 6000);
   }
@@ -253,6 +259,11 @@ export function SourceConnect({
               {busy ? <Spinner width={16} height={16} /> : null}
               {busy ? "Syncing…" : "Connect & sync"}
             </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-fg">Auto-sync</span>
+            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
+            <span className="text-[11px] text-muted-fg">Change it anytime after connecting.</span>
           </div>
         </div>
       ) : null}
