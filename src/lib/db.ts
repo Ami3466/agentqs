@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import Database from "better-sqlite3";
 
 /**
@@ -78,11 +80,29 @@ export function open(path: string): DB {
   return db;
 }
 
+function sqlString(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
 /** Open an existing cache read-only — the query path (Data/Journal previews).
- * `query_only` guarantees the derived cache is never mutated by a reader. */
-export function openReadonly(path: string): DB {
-  const db = new Database(path, { readonly: true, fileMustExist: true });
+ * `query_only` guarantees the derived cache is never mutated by a reader.
+ *
+ * If a private high-resolution store exists next to the cache, attach it as the
+ * `hires` schema. That data is intentionally not part of the public/plain-text
+ * record: it can be huge (browser visits, per-minute heart rate) and private, but
+ * local SQL can still query it as `hires.chrome_visits` and `hires.heart_rate`.
+ */
+export function openReadonly(file: string): DB {
+  const db = new Database(file, { readonly: true, fileMustExist: true });
   db.pragma("query_only = ON");
+  const hires = path.join(path.dirname(file), "hires.db");
+  if (fs.existsSync(hires)) {
+    try {
+      db.exec(`ATTACH DATABASE ${sqlString(hires)} AS hires`);
+    } catch {
+      /* non-fatal: the main record cache is still readable */
+    }
+  }
   return db;
 }
 

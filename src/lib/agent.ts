@@ -89,6 +89,7 @@ export function mentorTools(dbFile: string, used: Used) {
     description:
       "Run a read-only SQL SELECT over the local `daily` table and get the user's real numbers back. " +
       "The table is long/tidy — columns: date (TEXT, ISO day), source (TEXT), metric (TEXT), value_num (REAL, the number), value_text (TEXT, raw cell). " +
+      "When present, high-resolution private tables are also attached under the `hires` schema: `hires.chrome_visits` (ts, domain, category, title, url) and `hires.heart_rate` (datetime, timestamp_ms, hr). " +
       "One row per (date, source, metric). Always SELECT the `source` column so citations are attributed. " +
       "Example: SELECT date, source, metric, value_num FROM daily WHERE source='whoop' AND metric='sleep_hours' ORDER BY date DESC LIMIT 14.",
     inputSchema: z.object({
@@ -319,6 +320,7 @@ export function dailyCatalog(dbFile: string): { sources: string[]; hint: string 
     const hint = [
       "DATA — the user's real daily record is a local SQLite table you can query with tools. Never invent numbers; fetch them.",
       "Table `daily` (long/tidy): date TEXT (ISO day), source TEXT, metric TEXT, value_num REAL, value_text TEXT — one row per (date, source, metric).",
+      "If a private high-resolution store is attached, you can also query `hires.chrome_visits` (ts, domain, category, title, url) and `hires.heart_rate` (datetime, timestamp_ms, hr). Use these for raw browser visit or per-minute heart-rate questions; use `daily` for day-level trends.",
       `Dates ${range.lo}..${range.hi}. Sources: ${sources.join(", ")}.`,
       `Queryable numeric series (source.metric): ${cols}.`,
       "Call query_daily with a SELECT to pull the exact figures before you answer — SELECT the `source` column so citations are attributed. Call search_notes for keywords in memos / past sessions, or find_similar for semantic recall ('days that felt like this'). For anything about photos, call find_similar_images (text→image recall) or photo_context (what a date's photos show). When explaining how the user feels, line up 2+ sources.",
