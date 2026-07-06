@@ -636,10 +636,9 @@ npm run log:test           # the Data-tab capture log, over the built app
 
 ## License
 
-**Free for personal use. Not for sale.**
+**Free to use. Not for sale.**
 
-agentqs is source-available under the
-[PolyForm Noncommercial License 1.0.0](LICENSE): use it, self-host it, change it,
-share it — for any noncommercial purpose. You may **not** sell it, offer it as a
-paid product or service, or use it commercially. For a commercial license, open
-an issue.
+agentqs is licensed under [MIT with the Commons Clause](LICENSE): use it,
+self-host it, change it, share it — free. You may **not** sell it or offer it
+as a paid product or service (including paid hosting or support built on it).
+For a commercial license, open an issue.
