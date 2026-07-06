@@ -6,7 +6,7 @@ export default function DataPage() {
     <div>
       <PageHeader
         title="Data"
-        subtitle="One pipe, all your sources. Set a sync interval per source; drop files into the inbox."
+        subtitle="Drop any file to feed your record, or connect a live source that syncs on its own."
       />
       <DataWorkspace />
     </div>

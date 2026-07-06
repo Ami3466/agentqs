@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { Inbox, Spinner, Upload, Wand, X } from "@/components/icons";
+import { useCallback, useEffect, useState } from "react";
+import { Inbox, Spinner, Wand, X } from "@/components/icons";
 import { cn } from "@/components/ui";
 
 interface Item {
@@ -21,14 +21,6 @@ interface StructResult {
   message?: string;
 }
 
-const TEXT_EXT = /\.(csv|tsv|tab|psv|txt|md|json|log)$/i;
-function isTextFile(f: File): boolean {
-  return f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
-}
-function kindOf(name: string): string {
-  return /\.(csv|tsv|tab|psv)$/i.test(name) ? "csv" : "file";
-}
-
 function ago(iso: string): string {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
   if (s < 60) return "just now";
@@ -38,10 +30,11 @@ function ago(iso: string): string {
 }
 
 /**
- * The pending bucket (Loop 6) plus the Loop-7 Structure step. Everything lands
- * here raw and free — memos (`>>` in Chat), dropped/uploaded CSVs and notes.
+ * The pending bucket (Loop 6) + the Loop-7 Structure step. Everything captured
+ * lands here raw and free — memos (`>>` in Chat) and files from the dropzone above.
  * Structure routes clean CSV → direct column map (no LLM) and prose → the model,
- * writing wide daily rows. `onChanged` bumps the parent so the daily preview
+ * writing wide daily rows. Uploading lives in the one hero Dropzone; this panel is
+ * just the queue + Structure. `onChanged` bumps the parent so the daily preview
  * refetches; `version` triggers this panel's own refetch after any mutation.
  */
 export function InboxPanel({
@@ -53,11 +46,8 @@ export function InboxPanel({
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [pending, setPending] = useState<number | null>(null);
-  const [busy, setBusy] = useState<string | null>(null); // item id | "all" | "upload"
+  const [busy, setBusy] = useState<string | null>(null); // item id | "all"
   const [flash, setFlash] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [drag, setDrag] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const dragDepth = useRef(0);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/inbox");
@@ -74,46 +64,6 @@ export function InboxPanel({
   function say(tone: "ok" | "error", text: string) {
     setFlash({ tone, text });
     window.setTimeout(() => setFlash((f) => (f && f.text === text ? null : f)), 7000);
-  }
-
-  async function uploadFiles(files: FileList | File[]) {
-    const list = Array.from(files);
-    if (!list.length) return;
-    setBusy("upload");
-    let ok = 0;
-    try {
-      for (const f of list) {
-        if (!isTextFile(f)) {
-          say("error", `Skipped ${f.name} — text/CSV files only for now.`);
-          continue;
-        }
-        const text = await f.text();
-        if (!text.trim()) {
-          say("error", `Skipped ${f.name} — empty file.`);
-          continue;
-        }
-        const res = await fetch("/api/inbox", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            text,
-            source: "drop",
-            kind: kindOf(f.name),
-            meta: { filename: f.name, bytes: f.size },
-          }),
-        });
-        if (res.ok) ok++;
-      }
-      if (ok) {
-        say(
-          "ok",
-          `${ok} file${ok === 1 ? "" : "s"} added — hit Structure to turn ${ok === 1 ? "it" : "them"} into daily rows.`,
-        );
-        onChanged();
-      }
-    } finally {
-      setBusy(null);
-    }
   }
 
   async function structure(id?: string) {
@@ -163,81 +113,32 @@ export function InboxPanel({
     }
   }
 
-  function onDragEnter(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    dragDepth.current += 1;
-    setDrag(true);
-  }
-  function onDragOver(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-  }
-  function onDragLeave(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    dragDepth.current = Math.max(0, dragDepth.current - 1);
-    if (dragDepth.current === 0) setDrag(false);
-  }
-  function onDrop(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    dragDepth.current = 0;
-    setDrag(false);
-    if (e.dataTransfer?.files?.length) void uploadFiles(e.dataTransfer.files);
-  }
-
   const anyBusy = busy !== null;
 
   return (
-    <div
-      onDragEnter={onDragEnter}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      className="relative p-4"
-    >
+    <div className="p-4">
       <div className="flex items-center gap-2">
         <Inbox width={16} height={16} className="text-muted-fg" />
         <p className="text-sm font-semibold text-fg">Pending inbox</p>
         {pending != null ? (
-          <span className="ml-auto inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">
             {pending}
           </span>
         ) : null}
-      </div>
-      <p className="mt-1 text-xs text-muted-fg">
-        Everything lands here raw and free. Hit <b>Structure</b> to turn it into clean daily data —
-        tokens are only spent on prose notes.
-      </p>
-
-      <div className="mt-3 flex items-center gap-2">
         <button
           type="button"
           onClick={() => structure()}
           disabled={!pending || anyBusy}
-          className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[13px] font-medium text-accent-fg transition-colors hover:opacity-90 disabled:opacity-40"
+          className="ml-auto inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[13px] font-medium text-accent-fg transition-colors hover:opacity-90 disabled:opacity-40"
         >
           {busy === "all" ? <Spinner width={14} height={14} /> : <Wand width={14} height={14} />}
           Structure all
         </button>
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={anyBusy}
-          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 text-[13px] font-medium text-fg transition-colors hover:bg-muted disabled:opacity-40"
-        >
-          {busy === "upload" ? <Spinner width={14} height={14} /> : <Upload width={14} height={14} />}
-          Upload
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept=".csv,.tsv,.tab,.psv,.txt,.md,.json,.log,text/*,application/json"
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files) void uploadFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
       </div>
+      <p className="mt-1 text-xs text-muted-fg">
+        Raw captures — dropped files and <code className="font-mono">&gt;&gt;</code> memos. Structure
+        turns them into daily rows; tokens are only spent on prose.
+      </p>
 
       {flash ? (
         <p className={cn("mt-2 text-xs", flash.tone === "error" ? "text-destructive" : "text-accent")}>
@@ -284,19 +185,11 @@ export function InboxPanel({
           ))}
         </ul>
       ) : (
-        <div className="mt-3 flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-8 text-center text-xs text-muted-fg">
-          <Upload width={18} height={18} className="opacity-60" />
-          Drop a CSV or text file here, log a memo with <code className="font-mono">&gt;&gt;</code> in
-          Chat, or Upload above.
+        <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-fg">
+          Inbox empty. Drop a file above or log a memo with{" "}
+          <code className="font-mono">&gt;&gt;</code> in Chat.
         </div>
       )}
-
-      {drag ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-accent bg-accent/10 text-accent">
-          <Upload width={22} height={22} />
-          <p className="text-sm font-medium">Drop to add to your inbox</p>
-        </div>
-      ) : null}
     </div>
   );
 }

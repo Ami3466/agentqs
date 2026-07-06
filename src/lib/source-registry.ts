@@ -61,17 +61,6 @@ function hasRows(file: string): boolean {
   }
 }
 
-function dailyStems(dir: string): string[] {
-  try {
-    return fs
-      .readdirSync(path.join(dir, "daily"))
-      .filter((f) => f.toLowerCase().endsWith(".csv"))
-      .map((f) => f.slice(0, -4));
-  } catch {
-    return [];
-  }
-}
-
 /** GitHub is connected once its record file holds commits; last-sync prefers the
  *  saved API timestamp, falling back to the file mtime. It is only DUE (auto-sync)
  *  when a token is actually available to run the sync. */
@@ -144,18 +133,14 @@ function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FIL
   };
 }
 
-/** Compose the full sources list: GitHub + Tier-1 plugins + Tier-2 file importers
- *  + placeholder integrations + discovered manual sources (daily/*.csv not owned). */
+/** Compose the sources list = real, repeatable integrations only: GitHub +
+ *  Tier-1 API plugins + Tier-2 file importers + not-yet-live placeholders. A
+ *  one-off dropped CSV is NOT a source — it lands in the inbox and, once
+ *  structured, shows up in the daily table, never as a fake "connected" feed. */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   const out: SourceView[] = [githubRow(cfg, dir)];
   for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
   for (const importer of FILE_IMPORTERS) out.push(fileSourceRow(cfg, dir, importer));
-
-  const owned = new Set<string>([
-    "github",
-    ...PLUGINS.map((p) => p.id),
-    ...FILE_IMPORTERS.map((f) => f.id),
-  ]);
 
   for (const reg of PLACEHOLDERS) {
     out.push({
@@ -170,27 +155,6 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
       due: false,
       syncEndpoint: null,
       live: reg.live,
-    });
-  }
-
-  // Discovered manual sources — structured drops / pasted exports land as
-  // daily/<stem>.csv. They can't auto-sync, so an overdue one is badged stale.
-  for (const stem of dailyStems(dir)) {
-    if (owned.has(stem)) continue;
-    const lastSync = fileMtimeISO(path.join(dir, "daily", `${stem}.csv`));
-    const interval = intervalFor(cfg, stem);
-    out.push({
-      id: stem,
-      name: stem,
-      kind: "manual",
-      detail: "imported daily data",
-      connected: true,
-      interval,
-      lastSync,
-      stale: isStale(lastSync, interval),
-      due: false,
-      syncEndpoint: null,
-      live: true,
     });
   }
 
