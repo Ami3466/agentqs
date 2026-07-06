@@ -18,16 +18,22 @@ export function DataWorkspace() {
   const [version, setVersion] = useState(0);
   const bump = () => setVersion((v) => v + 1);
 
+  // "Automate imports" (inbox) → open the automation setup flow: focus the Sources
+  // card on its Connections catalog and scroll it into view. Bumping the signal
+  // re-triggers even if you're already looking at that tab.
+  const [automateSignal, setAutomateSignal] = useState(0);
+  const openAutomation = () => setAutomateSignal((n) => n + 1);
+
   return (
     <div className="space-y-4">
       <Dropzone onUploaded={bump} />
 
       <Card>
-        <InboxPanel version={version} onChanged={bump} />
+        <InboxPanel version={version} onChanged={bump} onAutomate={openAutomation} />
       </Card>
 
       <Card>
-        <SourcesPanel version={version} onChanged={bump} />
+        <SourcesPanel version={version} onChanged={bump} automateSignal={automateSignal} />
       </Card>
 
       <Card>

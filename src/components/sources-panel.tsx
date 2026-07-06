@@ -25,9 +25,13 @@ type Tab = "connections" | "automated";
 export function SourcesPanel({
   version,
   onChanged,
+  automateSignal = 0,
 }: {
   version: number;
   onChanged: () => void;
+  /** Incremented by the inbox "Automate imports" button — opens the setup flow by
+   *  focusing the Connections catalog here and scrolling it into view. */
+  automateSignal?: number;
 }) {
   const [sources, setSources] = useState<SourceView[] | null>(null);
   const [tab, setTab] = useState<Tab>("connections");
@@ -35,7 +39,9 @@ export function SourcesPanel({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [flowHint, setFlowHint] = useState(false);
   const ranAuto = useRef(false);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (): Promise<SourceView[] | null> => {
     const res = await fetch("/api/sources");
@@ -85,6 +91,17 @@ export function SourcesPanel({
     settled.current = true;
     if (sources.some((s) => s.connected)) setTab("automated");
   }, [sources]);
+
+  // Automation setup flow entry: on each signal bump, jump to the Connections
+  // catalog (where you wire up a recurring feed), scroll it into view, and nudge.
+  useEffect(() => {
+    if (!automateSignal) return;
+    setTab("connections");
+    setFlowHint(true);
+    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const t = window.setTimeout(() => setFlowHint(false), 8000);
+    return () => window.clearTimeout(t);
+  }, [automateSignal]);
 
   async function changeInterval(id: string, interval: Interval) {
     setSavingId(id);
@@ -175,7 +192,7 @@ export function SourcesPanel({
   }
 
   return (
-    <div>
+    <div ref={rootRef} className="scroll-mt-4">
       <div className="border-b border-border p-4">
         <div className="flex items-center gap-2">
           <Plug width={16} height={16} className="text-muted-fg" />
@@ -197,6 +214,14 @@ export function SourcesPanel({
           </TabButton>
         </div>
       </div>
+
+      {flowHint && tab === "connections" ? (
+        <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2.5 text-xs text-fg">
+          <Plug width={13} height={13} className="text-muted-fg" />
+          Pick a source below to connect it and schedule how often it imports — no more
+          dropping files by hand.
+        </div>
+      ) : null}
 
       {autoMsg ? (
         <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-xs text-accent">
