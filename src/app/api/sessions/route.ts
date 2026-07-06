@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/session";
 import { readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import { appendSession, readSessionsFromRecord, rebuild } from "@/lib/record";
-import { skillById } from "@/lib/skills";
+import { resolveSkill } from "@/lib/skills-store";
 import type { LlmMessage } from "@/lib/llm";
 import {
   openCommitments,
@@ -91,7 +91,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Nothing to save — a session needs at least one message." }, { status: 400 });
   }
 
-  const skill = skillById(body.skill).id;
+  const skill = resolveSkill(body.skill).id;
   const startedAt = body.startedAt || new Date().toISOString();
   const date = startedAt.slice(0, 10);
   const cfg = readConfig();

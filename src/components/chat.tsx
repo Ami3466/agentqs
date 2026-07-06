@@ -13,7 +13,7 @@ import { Sparkline } from "@/components/sparkline";
 import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
 import type { SparkPayload } from "@/lib/grounding";
-import { DEFAULT_SKILL, SKILLS, skillById } from "@/lib/skills";
+import { DEFAULT_SKILL, SKILLS, type Skill } from "@/lib/skills";
 import { COMMANDS, filterCommands, memoText, modeOf, parseCommand } from "@/lib/smart-input";
 
 // ---- Messages -------------------------------------------------------------
@@ -53,6 +53,9 @@ const SKILL_KEY = "agentqs.skill";
 export function Chat() {
   const router = useRouter();
   const [skill, setSkill] = useState(DEFAULT_SKILL);
+  // Built-ins + custom mentors (added from the CLI / MCP / API). Falls back to the
+  // built-in list until /api/skills responds, so the chip renders instantly.
+  const [skills, setSkills] = useState<Skill[]>(SKILLS);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
@@ -68,14 +71,29 @@ export function Chat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const mode = modeOf(input);
-  const activeSkill = skillById(skill);
+  const resolve = (id: string): Skill => skills.find((s) => s.id === id) ?? skills[0] ?? SKILLS[0];
+  const activeSkill = resolve(skill);
 
   const filtered = useMemo(() => filterCommands(input), [input]);
 
   // Restore the last-used persona.
   useEffect(() => {
     const savedSkill = typeof window !== "undefined" ? window.localStorage.getItem(SKILL_KEY) : null;
-    if (savedSkill && SKILLS.some((s) => s.id === savedSkill)) setSkill(savedSkill);
+    if (savedSkill) setSkill(savedSkill); // resolve() falls back if it's since been removed
+  }, []);
+
+  // Load custom mentors so the chip + /skill offer everything the record knows.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/skills")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive && d && Array.isArray(d.skills) && d.skills.length) setSkills(d.skills as Skill[]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // Load persisted sessions (the synthesis store) for the sidebar + memory hint.
@@ -168,7 +186,7 @@ export function Chat() {
    * not the raw transcript. Continuing from here starts a fresh conversation. */
   function openSaved(s: SavedSession) {
     setViewingId(s.id);
-    setSkill(SKILLS.some((k) => k.id === s.skill) ? s.skill : skill);
+    setSkill(skills.some((k) => k.id === s.skill) ? s.skill : skill);
     setMessages([{ id: nid(), role: "recap", text: "", session: s }]);
   }
 
@@ -211,11 +229,11 @@ export function Chat() {
     }
     if (cmd === "skill") {
       const target = args[0]?.toLowerCase();
-      if (target && SKILLS.some((s) => s.id === target)) {
+      if (target && skills.some((s) => s.id === target)) {
         chooseSkill(target);
-        push({ role: "note", tone: "ok", text: `Switched to ${skillById(target).name}.` });
+        push({ role: "note", tone: "ok", text: `Switched to ${resolve(target).name}.` });
       } else {
-        push({ role: "note", text: `Pick a persona: ${SKILLS.map((s) => s.id).join(" · ")}` });
+        push({ role: "note", text: `Pick a persona: ${skills.map((s) => s.id).join(" · ")}` });
       }
       return;
     }
@@ -438,7 +456,7 @@ export function Chat() {
                 </span>
                 <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-fg">
                   <span>{s.date}</span>
-                  <span>· {skillById(s.skill).name}</span>
+                  <span>· {resolve(s.skill).name}</span>
                   {s.commitments.length ? (
                     <span className="inline-flex items-center gap-0.5 text-accent">
                       · <Check width={10} height={10} /> {s.commitments.length}
@@ -473,7 +491,7 @@ export function Chat() {
               ) : null}
             </div>
           ) : (
-            messages.map((m) => <Bubble key={m.id} m={m} />)
+            messages.map((m) => <Bubble key={m.id} m={m} skills={skills} />)
           )}
           {busy && !streamingId ? (
             <div className="flex items-center gap-2 text-xs text-muted-fg">
@@ -539,7 +557,7 @@ export function Chat() {
                   <p className="border-b border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
                     Persona
                   </p>
-                  {SKILLS.map((s) => (
+                  {skills.map((s) => (
                     <button
                       key={s.id}
                       type="button"
@@ -610,7 +628,8 @@ export function Chat() {
 
 // ---- One message ----------------------------------------------------------
 
-function Bubble({ m }: { m: Msg }) {
+function Bubble({ m, skills }: { m: Msg; skills: Skill[] }) {
+  const resolve = (id: string): Skill => skills.find((s) => s.id === id) ?? skills[0] ?? SKILLS[0];
   if (m.role === "recap" && m.session) {
     const s = m.session;
     return (
@@ -623,7 +642,7 @@ function Bubble({ m }: { m: Msg }) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-fg">{s.title ?? "Session"}</span>
             <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              {skillById(s.skill).name}
+              {resolve(s.skill).name}
             </span>
             <span className="text-[11px] text-muted-fg">{s.date}</span>
           </div>
@@ -698,7 +717,7 @@ function Bubble({ m }: { m: Msg }) {
       <div className="max-w-[85%]">
         {m.skill ? (
           <p className="mb-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-muted-fg">
-            <Sparkles width={11} height={11} className="text-accent" /> {skillById(m.skill).name}
+            <Sparkles width={11} height={11} className="text-accent" /> {resolve(m.skill).name}
           </p>
         ) : null}
         <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-muted px-3.5 py-2 text-sm text-fg">

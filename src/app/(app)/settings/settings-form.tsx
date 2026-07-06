@@ -10,7 +10,7 @@ import {
   PROVIDERS,
   modelsForProvider,
 } from "@/lib/models";
-import { SKILLS } from "@/lib/skills";
+import { SKILLS, type Skill } from "@/lib/skills";
 import type { PublicConfig } from "@/lib/config";
 
 interface EmbedStatus {
@@ -60,6 +60,11 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
 
+  // Personas = built-ins + any custom mentors added from the CLI / MCP / API.
+  const [skills, setSkills] = useState<(Skill & { builtin: boolean })[]>(
+    SKILLS.map((s) => ({ ...s, builtin: true })),
+  );
+
   const providerModels = modelsForProvider(provider);
 
   // Local semantic index status (default-on, no key) for the Semantic search section.
@@ -69,6 +74,12 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (alive && d) setEmbed(d as EmbedStatus);
+      })
+      .catch(() => {});
+    fetch("/api/skills")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive && d && Array.isArray(d.skills)) setSkills(d.skills);
       })
       .catch(() => {});
     return () => {
@@ -329,23 +340,30 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         desc="The voices your mentor can take. Switch mid-chat with the skill chip or /skill."
       >
         <div className="space-y-2">
-          {SKILLS.map((s) => (
+          {skills.map((s) => (
             <div
               key={s.id}
               className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
             >
-              <span className="mt-0.5 text-accent">
-                <Sparkles width={15} height={15} />
-              </span>
+              <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-fg/50" aria-hidden />
               <div className="min-w-0">
                 <p className="text-sm font-medium text-fg">
                   {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
+                  {s.builtin ? null : (
+                    <span className="ml-2 rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-fg">
+                      custom
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-muted-fg">{s.blurb}</p>
               </div>
             </div>
           ))}
         </div>
+        <p className="mt-3 text-xs text-muted-fg">
+          Add your own from the terminal:{" "}
+          <code className="font-mono">agentqs skill add &quot;Stoic&quot; --system &quot;…&quot;</code>
+        </p>
       </Section>
 
       {/* Save bar */}
