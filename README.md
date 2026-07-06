@@ -358,8 +358,10 @@ npm run smart:test         # ships-when proof (Loop 6): the shared smart-input c
 ## Sync engine — schedules, lazy-sync, stale badges
 
 The **Data** tab lists every source with its type (`api` / `manual`), last-sync,
-and a per-source **interval** dropdown (Manual · Hourly · Daily · Weekly). The
-cadence is saved per user in `config.json` (`sourceIntervals`).
+and a per-source **interval** dropdown (Manual · Hourly · Daily · Weekly). You
+pick the cadence **when you connect** an API/OAuth source (it defaults to **Daily**
+so it starts syncing on its own), and can change it any time from the source row.
+The cadence is saved per user in `config.json` (`sourceIntervals`).
 
 - **API sources auto-sync (lazy, on open).** When the Data tab opens, any api
   source whose interval has elapsed is **due** — the app runs it in the

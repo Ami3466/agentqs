@@ -56,6 +56,9 @@ export function GithubConnect({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // Cadence the user picks AS PART OF connecting — defaults to Daily so a freshly
+  // connected source actually auto-syncs (they can still choose Manual here).
+  const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
 
   async function loadStatus() {
     const res = await fetch("/api/import/github");
@@ -69,6 +72,7 @@ export function GithubConnect({
   }, [version]);
 
   async function sync() {
+    const wasConnected = Boolean(status?.connected);
     setBusy(true);
     setError("");
     setMsg("");
@@ -88,6 +92,9 @@ export function GithubConnect({
     setMsg(
       `${data.commits} commits from @${data.login}${data.capped ? " (capped)" : ""} → ${data.dailyRows} daily rows.`,
     );
+    // First-time connect → persist the cadence chosen in the connect form so the
+    // source starts on a schedule instead of silently defaulting to Manual.
+    if (!wasConnected) onIntervalChange?.(pendingInterval);
     await loadStatus();
     setTimeout(() => setMsg(""), 6000);
   }
@@ -203,6 +210,11 @@ export function GithubConnect({
               {busy ? <Spinner width={16} height={16} /> : null}
               {busy ? "Syncing…" : "Connect & sync"}
             </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-fg">Auto-sync</span>
+            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
+            <span className="text-[11px] text-muted-fg">Change it anytime after connecting.</span>
           </div>
         </div>
       ) : null}

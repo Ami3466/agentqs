@@ -35,13 +35,17 @@ fs.mkdirSync(dailyDir, { recursive: true });
 fs.writeFileSync(path.join(dailyDir, "github.csv"), "date,commits\n2026-07-01,5\n2026-07-02,3\n");
 fs.writeFileSync(path.join(dailyDir, "chrome.csv"), "date,visits\n2026-07-01,42\n");
 fs.writeFileSync(path.join(dailyDir, "mood.csv"), "date,mood\n2026-07-01,7\n");
+// A connected Tier-1 plugin (RescueTime) — proves the schedule is honored for
+// EVERY api source, not just GitHub's bespoke row.
+fs.writeFileSync(path.join(dailyDir, "rescuetime.csv"), "date,productivity_pulse\n2026-07-01,63\n");
 
 // Backdate the manual importer's file 2 days so a "daily" cadence is overdue.
 const twoDaysSec = Date.now() / 1000 - 2 * 86_400;
 fs.utimesSync(path.join(dailyDir, "chrome.csv"), twoDaysSec, twoDaysSec);
 
-// A token must be resolvable for GitHub to be auto-syncable (`due`).
+// A credential must be resolvable for a source to be auto-syncable (`due`).
 process.env.GITHUB_TOKEN = "ghp_shipswhen_test";
+process.env.RESCUETIME_KEY = "rt_shipswhen_test";
 
 const base: AppConfig = {
   username: "tester",
@@ -58,15 +62,21 @@ console.log("\nScenario 1 — GitHub: daily, last synced 2 days ago → due on r
 const cfg1: AppConfig = {
   ...base,
   githubSyncedAt: daysAgoISO(2),
-  sourceIntervals: { github: "daily", chrome: "daily", mood: "daily" },
+  sourceSyncedAt: { rescuetime: daysAgoISO(2) },
+  sourceIntervals: { github: "daily", chrome: "daily", mood: "daily", rescuetime: "daily" },
 };
 const s1 = buildSources(cfg1, root);
 const gh1 = s1.find((s) => s.id === "github")!;
 const chrome1 = s1.find((s) => s.id === "chrome")!;
+const rt1 = s1.find((s) => s.id === "rescuetime")!;
 check("GitHub is an api source, connected", gh1.kind === "api" && gh1.connected);
 check("GitHub interval persisted as daily", gh1.interval === "daily");
 check("GitHub is DUE → auto-syncs on open", gh1.due === true);
 check("GitHub exposes a sync endpoint", gh1.syncEndpoint === "/api/import/github");
+// Same schedule contract holds for a generic Tier-1 plugin, not just GitHub.
+check("RescueTime interval persisted as daily", rt1.interval === "daily");
+check("RescueTime is DUE → auto-syncs on open", rt1.due === true);
+check("RescueTime exposes its sync endpoint", rt1.syncEndpoint === "/api/import/rescuetime");
 
 console.log("\nScenario 2 — a real manual importer badges stale; a dropped CSV is not a source");
 check("Chrome is a manual source, connected", chrome1.kind === "manual" && chrome1.connected);
