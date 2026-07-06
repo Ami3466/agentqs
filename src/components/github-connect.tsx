@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, RefreshCw, Spinner } from "@/components/icons";
-import { brandIcon } from "@/components/brand-icons";
+import { Check, Eye, EyeOff, GitHub, RefreshCw, Spinner } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
-import { markTourStep } from "@/lib/tour";
 
 interface Day {
   date: string;
@@ -87,19 +85,17 @@ export function GithubConnect({
       `${data.commits} commits from @${data.login}${data.capped ? " (capped)" : ""} → ${data.dailyRows} daily rows.`,
     );
     await loadStatus();
-    markTourStep("source"); // real action: a source is now connected — tour re-confirms
     setTimeout(() => setMsg(""), 6000);
   }
 
   const connected = status?.connected;
   const canSyncNow = Boolean(status?.hasToken) || Boolean(token);
-  const Icon = brandIcon("github");
 
   return (
     <div className="p-4">
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-muted text-fg">
-          <Icon width={18} height={18} />
+          <GitHub width={18} height={18} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -161,9 +157,10 @@ export function GithubConnect({
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
           <p className="text-xs text-muted-fg">
-            Paste a GitHub token (fine-grained PAT or classic{" "}
-            <code className="font-mono">repo</code>). Stored in your data dir, reads only your commit
-            counts. Or set <code className="font-mono">GITHUB_TOKEN</code>.
+            Paste a GitHub token (a fine-grained PAT, read-only, or a classic{" "}
+            <code className="font-mono">repo</code> token). Stored in your data dir; used only to
+            read your commit counts. Or set <code className="font-mono">GITHUB_TOKEN</code> in the
+            environment.
           </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">

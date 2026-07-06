@@ -23,7 +23,7 @@ export async function POST() {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
   try {
-    const result = await buildIndex();
+    const result = buildIndex();
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

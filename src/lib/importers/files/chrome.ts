@@ -159,8 +159,7 @@ function chromeDefaultPaths(): string[] {
 export const chromeImporter: FileImporter = {
   id: "chrome",
   name: "Chrome history",
-  detail: "browsing history · visits, pages, domains per day",
-  connectHint: "Reads Chrome/Chromium/Brave's local History DB. Run it where the browser lives.",
+  detail: "browsing history · local file (agentqs import:file --source chrome)",
   live: true,
   primaryMetric: "visits",
   unit: "visits",

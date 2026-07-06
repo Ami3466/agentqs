@@ -2,9 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ChevronDown, Terminal } from "./icons";
+import { Check, ChevronDown, Copy, Terminal } from "./icons";
 import { cn } from "./ui";
-import { CopyBlock } from "./copy-block";
 
 /**
  * The Supabase-style Connect / API affordance (Loop 15). Context-aware: on each tab
@@ -21,45 +20,40 @@ interface Snip {
   extra?: { label: string; code: (base: string) => string };
 }
 
-/** The Settings snippet quotes the user's actual saved model (never a hardcoded
- *  id); MODEL_ID is a self-evident placeholder until a provider is connected. */
-function snippetsFor(model: string): Record<string, Snip> {
-  const m = model || "MODEL_ID";
-  return {
-    chat: {
-      title: "Chat",
-      cli: `agentqs chat "why have I felt off this week?"`,
-      api: (b) => `curl -N ${b}/api/chat \\
+const SNIPPETS: Record<string, Snip> = {
+  chat: {
+    title: "Chat",
+    cli: `agentqs chat "why have I felt off this week?"`,
+    api: (b) => `curl -N ${b}/api/chat \\
   -H 'content-type: application/json' \\
   -d '{"message":"why have I felt off this week?"}'`,
-    },
-    journal: {
-      title: "Journal",
-      cli: `agentqs journal --table`,
-      api: (b) => `curl ${b}/api/journal`,
-      extra: {
-        label: "Semantic search — find days that felt like this",
-        code: (b) => `curl ${b}/api/search \\
+  },
+  journal: {
+    title: "Journal",
+    cli: `agentqs journal --table`,
+    api: (b) => `curl ${b}/api/journal`,
+    extra: {
+      label: "Semantic search — find days that felt like this",
+      code: (b) => `curl ${b}/api/search \\
   -H 'content-type: application/json' \\
   -d '{"query":"anxious, could not sleep"}'`,
-      },
     },
-    data: {
-      title: "Data",
-      cli: `agentqs sync --source github --login torvalds`,
-      api: (b) => `curl -X POST ${b}/api/import/github \\
+  },
+  data: {
+    title: "Data",
+    cli: `agentqs sync --source github`,
+    api: (b) => `curl -X POST ${b}/api/import/github \\
   -H 'content-type: application/json' \\
   -d '{"login":"torvalds"}'`,
-    },
-    settings: {
-      title: "Settings",
-      cli: `agentqs config set model ${m}`,
-      api: (b) => `curl -X POST ${b}/api/settings \\
+  },
+  settings: {
+    title: "Settings",
+    cli: `agentqs config set model claude-sonnet-4-5`,
+    api: (b) => `curl -X POST ${b}/api/settings \\
   -H 'content-type: application/json' \\
-  -d '{"model":"${m}"}'`,
-    },
-  };
-}
+  -d '{"model":"claude-sonnet-4-5"}'`,
+  },
+};
 
 const MCP_JSON = `{
   "mcpServers": {
@@ -72,19 +66,47 @@ const MCP_JSON = `{
 
 const MCP_ADD = `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'`;
 
-function tabKey(pathname: string): "chat" | "journal" | "data" | "settings" {
+function tabKey(pathname: string): keyof typeof SNIPPETS {
   if (pathname.startsWith("/journal")) return "journal";
   if (pathname.startsWith("/data")) return "data";
   if (pathname.startsWith("/settings")) return "settings";
   return "chat";
 }
 
-export function ConnectApi({ model = "" }: { model?: string }) {
+function CopyBlock({ label, code }: { label: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+          {label}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard?.writeText(code);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          className="inline-flex items-center gap-1 text-[11px] text-muted-fg transition-colors hover:text-fg"
+        >
+          {copied ? <Check width={12} height={12} /> : <Copy width={12} height={12} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[12px] leading-relaxed text-fg">
+        {code}
+      </pre>
+    </div>
+  );
+}
+
+export function ConnectApi() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [base, setBase] = useState("http://localhost:3000");
   const ref = useRef<HTMLDivElement>(null);
-  const snip = snippetsFor(model)[tabKey(pathname)];
+  const snip = SNIPPETS[tabKey(pathname)];
 
   useEffect(() => {
     if (typeof window !== "undefined") setBase(window.location.origin);
@@ -129,7 +151,6 @@ export function ConnectApi({ model = "" }: { model?: string }) {
             {snip.title} · from the terminal
           </p>
           <div className="space-y-3">
-            <CopyBlock label="Install the CLI (once)" code="npm link" />
             <CopyBlock label="CLI" code={snip.cli} />
             <CopyBlock label="API" code={snip.api(base)} />
             {snip.extra ? (
@@ -137,7 +158,7 @@ export function ConnectApi({ model = "" }: { model?: string }) {
             ) : null}
             <div className="space-y-3 border-t border-border pt-3">
               <p className="text-[11px] text-muted-fg">
-                Drive your whole record from Claude Code — add the MCP server once:
+                Drive your whole record from Claude Code. Add the MCP server once:
               </p>
               <CopyBlock label="Connect to Claude Code (MCP)" code={MCP_ADD} />
               <CopyBlock label="…or paste into .mcp.json" code={MCP_JSON} />

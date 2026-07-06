@@ -112,7 +112,6 @@ export async function POST(req: Request) {
           provider: cfg!.llmProvider,
           apiKey: cfg!.llmKey,
           model: cfg!.model,
-          models: cfg!.llmModels,
           system: proseExtractionSystem(),
           messages: [{ role: "user", content: proseExtractionUser(item.text, captureDate) }],
           maxTokens: 700,

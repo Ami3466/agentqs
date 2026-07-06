@@ -2,7 +2,6 @@ import fs from "fs";
 import { configPath, dataDir } from "./paths";
 import type { JournalView } from "./journal";
 import type { Interval } from "./sources";
-import { effectiveMentors, type Mentor } from "./mentors";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -15,14 +14,11 @@ export interface AppConfig {
   llmProvider: string; // "" | anthropic | openai | google
   llmKey: string;
   model: string;
-  llmModels?: string[]; // model ids fetched live from the provider (survives reload)
   theme: string; // light | dark | system
   createdAt: string;
-  onboardedAt?: string; // ISO when the first-run tour was finished/dismissed; absent = show it
   githubToken?: string; // GitHub PAT for the commits importer (optional)
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
   journalViews?: JournalView[]; // saved Journal table layouts, per user
-  mentors?: Mentor[]; // custom + edited mentors; absent = the three built-ins
   sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
@@ -91,12 +87,9 @@ export interface PublicConfig {
   llmProvider: string;
   hasLlmKey: string; // masked tail, or ""
   model: string;
-  llmModels: string[]; // fetched model ids, to repopulate the picker on reload
   theme: string;
   dataDir: string;
   createdAt: string;
-  onboardedAt: string; // "" until the first-run tour is finished/dismissed
-  mentors: Mentor[]; // effective mentor list (built-ins seeded + custom), for the editor + chip
 }
 
 export function publicConfig(cfg: AppConfig): PublicConfig {
@@ -106,11 +99,8 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     llmProvider: cfg.llmProvider,
     hasLlmKey: key ? `••••••••${key.slice(-4)}` : "",
     model: cfg.model,
-    llmModels: cfg.llmModels ?? [],
     theme: cfg.theme,
     dataDir: dataDir(),
     createdAt: cfg.createdAt,
-    onboardedAt: cfg.onboardedAt ?? "",
-    mentors: effectiveMentors(cfg.mentors),
   };
 }

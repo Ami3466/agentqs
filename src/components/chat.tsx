@@ -8,14 +8,13 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Bookmark, Check, ChevronDown, Inbox, Mark, Person, Plus, Send, Spinner, Terminal } from "@/components/icons";
+import { Check, ChevronDown, Inbox, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
 import { Sparkline } from "@/components/sparkline";
 import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
 import type { SparkPayload } from "@/lib/grounding";
-import { BUILTIN_MENTORS, DEFAULT_MENTOR, mentorById, type Mentor } from "@/lib/mentors";
+import { DEFAULT_SKILL, SKILLS, skillById } from "@/lib/skills";
 import { COMMANDS, filterCommands, memoText, modeOf, parseCommand } from "@/lib/smart-input";
-import { CHAT_PREFILL_EVENT, markTourStep, takeChatPrefill } from "@/lib/tour";
 
 // ---- Messages -------------------------------------------------------------
 
@@ -24,7 +23,7 @@ interface Msg {
   id: string;
   role: Role;
   text: string;
-  mentor?: string; // mentor that produced an assistant reply
+  skill?: string; // persona that produced an assistant reply
   pending?: number; // memo: inbox count after saving
   tone?: "ok" | "error";
   session?: SavedSession; // recap: the synthesized session being viewed
@@ -39,7 +38,7 @@ interface SavedSession {
   id: string;
   date: string;
   startedAt: string;
-  mentor: string;
+  skill: string;
   title: string | null;
   summary: string | null;
   insights: string[];
@@ -49,12 +48,11 @@ interface SavedSession {
 let seq = 0;
 const nid = () => `m${Date.now().toString(36)}_${(seq++).toString(36)}`;
 
-const MENTOR_KEY = "agentqs.mentor";
+const SKILL_KEY = "agentqs.skill";
 
 export function Chat() {
   const router = useRouter();
-  const [mentors, setMentors] = useState<Mentor[]>(BUILTIN_MENTORS);
-  const [mentor, setMentor] = useState(DEFAULT_MENTOR);
+  const [skill, setSkill] = useState(DEFAULT_SKILL);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
@@ -62,35 +60,22 @@ export function Chat() {
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState(false);
   const [viewingId, setViewingId] = useState<string | null>(null);
-  const [mentorOpen, setMentorOpen] = useState(false);
+  const [skillOpen, setSkillOpen] = useState(false);
   const [hi, setHi] = useState(0); // highlighted command in the palette
 
-  const mentorRef = useRef<HTMLDivElement>(null);
+  const skillRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const mode = modeOf(input);
-  const activeMentor = mentorById(mentor, mentors);
+  const activeSkill = skillById(skill);
 
   const filtered = useMemo(() => filterCommands(input), [input]);
 
-  // Load the merged built-in + custom mentor list, then restore the last-used pick.
+  // Restore the last-used persona.
   useEffect(() => {
-    let alive = true;
-    fetch("/api/mentors")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!alive || !d || !Array.isArray(d.mentors) || !d.mentors.length) return;
-        const list = d.mentors as Mentor[];
-        setMentors(list);
-        const savedMentor =
-          typeof window !== "undefined" ? window.localStorage.getItem(MENTOR_KEY) : null;
-        if (savedMentor && list.some((m) => m.id === savedMentor)) setMentor(savedMentor);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
+    const savedSkill = typeof window !== "undefined" ? window.localStorage.getItem(SKILL_KEY) : null;
+    if (savedSkill && SKILLS.some((s) => s.id === savedSkill)) setSkill(savedSkill);
   }, []);
 
   // Load persisted sessions (the synthesis store) for the sidebar + memory hint.
@@ -107,43 +92,20 @@ export function Chat() {
     };
   }, []);
 
-  // The first-run tour deep-links here with a suggested question (or `>>` to show
-  // the memo path): drop it into the input, live if mounted and on mount if the
-  // nav just landed us here.
+  // Close the skill dropdown on outside click / Escape.
   useEffect(() => {
-    const load = (text: string) => {
-      if (!text) return;
-      setInput(text);
-      requestAnimationFrame(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        el.focus();
-        el.setSelectionRange(el.value.length, el.value.length);
-      });
-    };
-    load(takeChatPrefill());
-    const onPrefill = (e: Event) => {
-      load((e as CustomEvent<string>).detail);
-      takeChatPrefill(); // clear the stashed copy so a later mount won't reload it
-    };
-    window.addEventListener(CHAT_PREFILL_EVENT, onPrefill as EventListener);
-    return () => window.removeEventListener(CHAT_PREFILL_EVENT, onPrefill as EventListener);
-  }, []);
-
-  // Close the mentor dropdown on outside click / Escape.
-  useEffect(() => {
-    if (!mentorOpen) return;
+    if (!skillOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (mentorRef.current && !mentorRef.current.contains(e.target as Node)) setMentorOpen(false);
+      if (skillRef.current && !skillRef.current.contains(e.target as Node)) setSkillOpen(false);
     };
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setMentorOpen(false);
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setSkillOpen(false);
     document.addEventListener("mousedown", onClick);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [mentorOpen]);
+  }, [skillOpen]);
 
   // Keep the palette highlight in range as the filter narrows.
   useEffect(() => {
@@ -159,10 +121,10 @@ export function Chat() {
     setMessages((prev) => [...prev, { ...m, id: nid() }]);
   }
 
-  function chooseMentor(id: string) {
-    setMentor(id);
-    setMentorOpen(false);
-    if (typeof window !== "undefined") window.localStorage.setItem(MENTOR_KEY, id);
+  function chooseSkill(id: string) {
+    setSkill(id);
+    setSkillOpen(false);
+    if (typeof window !== "undefined") window.localStorage.setItem(SKILL_KEY, id);
     inputRef.current?.focus();
   }
 
@@ -178,7 +140,7 @@ export function Chat() {
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: convo, mentor }),
+        body: JSON.stringify({ messages: convo, skill }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.session) {
@@ -206,7 +168,7 @@ export function Chat() {
    * not the raw transcript. Continuing from here starts a fresh conversation. */
   function openSaved(s: SavedSession) {
     setViewingId(s.id);
-    setMentor(mentors.some((k) => k.id === s.mentor) ? s.mentor : mentor);
+    setSkill(SKILLS.some((k) => k.id === s.skill) ? s.skill : skill);
     setMessages([{ id: nid(), role: "recap", text: "", session: s }]);
   }
 
@@ -231,7 +193,6 @@ export function Chat() {
         push({ role: "note", tone: "error", text: data.error || "Could not save that memo." });
       } else {
         push({ role: "memo", text, pending: data.pending });
-        markTourStep("memo"); // real action: a memo landed in the inbox
       }
     } catch {
       push({ role: "note", tone: "error", text: "Could not reach the inbox." });
@@ -248,13 +209,13 @@ export function Chat() {
       void newSession();
       return;
     }
-    if (cmd === "mentor") {
+    if (cmd === "skill") {
       const target = args[0]?.toLowerCase();
-      if (target && mentors.some((s) => s.id === target)) {
-        chooseMentor(target);
-        push({ role: "note", tone: "ok", text: `Switched to ${mentorById(target, mentors).name}.` });
+      if (target && SKILLS.some((s) => s.id === target)) {
+        chooseSkill(target);
+        push({ role: "note", tone: "ok", text: `Switched to ${skillById(target).name}.` });
       } else {
-        push({ role: "note", text: `Pick a mentor: ${mentors.map((s) => s.id).join(" · ")}` });
+        push({ role: "note", text: `Pick a persona: ${SKILLS.map((s) => s.id).join(" · ")}` });
       }
       return;
     }
@@ -312,14 +273,14 @@ export function Chat() {
 
     // Drop in an empty assistant bubble the stream fills token-by-token.
     const aid = nid();
-    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", mentor, streaming: true }]);
+    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", skill, streaming: true }]);
     setStreamingId(aid);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, mentor, history }),
+        body: JSON.stringify({ message: text, skill, history }),
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
@@ -327,7 +288,6 @@ export function Chat() {
         push({ role: "note", tone: "error", text: data.error || "The model didn't answer." });
         return;
       }
-      markTourStep("chat"); // real action: a question reached the mentor
 
       // Read the NDJSON stream: {t:"delta"} tokens, then one {t:"done"} (or {t:"error"}).
       const reader = res.body.getReader();
@@ -347,7 +307,7 @@ export function Chat() {
             t?: string;
             v?: string;
             error?: string;
-            mentor?: string;
+            skill?: string;
             grounded?: boolean;
             sources?: string[];
             spark?: SparkPayload | null;
@@ -364,7 +324,7 @@ export function Chat() {
               ...m,
               streaming: false,
               text: m.text.trim() ? m.text : "(no reply)",
-              mentor: f.mentor || m.mentor,
+              skill: f.skill || m.skill,
               grounded: Boolean(f.grounded),
               sources: Array.isArray(f.sources) && f.sources.length ? f.sources : undefined,
               spark: f.spark ?? undefined,
@@ -430,9 +390,12 @@ export function Chat() {
     }
   }
 
-  // Hints live in the one helper line below, never here. Memo/command modes need
-  // typed characters, so their placeholders would never show — the chat one is it.
-  const placeholder = `Message your ${activeMentor.name.toLowerCase()}…`;
+  const placeholder =
+    mode === "memo"
+      ? "Memo — saved to your inbox, no reply"
+      : mode === "command"
+        ? "Command — /sync · /structure · /new · /skill"
+        : `Message your ${activeSkill.name.toLowerCase()}…  ( >> memo · / commands )`;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
@@ -456,8 +419,8 @@ export function Chat() {
         <div className="mt-2 space-y-1">
           {saved.length === 0 ? (
             <p className="px-1 pt-2 text-xs text-muted-fg">
-              Each chat is saved as a summary the mentor reads next time.{" "}
-              <code className="font-mono">/new</code> ends one.
+              Each conversation is distilled to a summary + commitments here, and the mentor reads
+              it next time. <code className="font-mono">/new</code> ends one.
             </p>
           ) : (
             saved.map((s) => (
@@ -475,7 +438,7 @@ export function Chat() {
                 </span>
                 <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-fg">
                   <span>{s.date}</span>
-                  <span>· {mentorById(s.mentor, mentors).name}</span>
+                  <span>· {skillById(s.skill).name}</span>
                   {s.commitments.length ? (
                     <span className="inline-flex items-center gap-0.5 text-accent">
                       · <Check width={10} height={10} /> {s.commitments.length}
@@ -494,22 +457,23 @@ export function Chat() {
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 py-10 text-center">
               <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-muted text-accent">
-                <Mark width={20} height={20} />
+                <Sparkles width={20} height={20} />
               </span>
               <p className="text-lg font-medium text-fg">Ask your life anything.</p>
               <p className="max-w-md text-sm text-muted-fg">
                 &ldquo;Why have I felt off this week?&rdquo; — grounded in your real sleep, heart
-                rate, calendar and messages.
+                rate, calendar and messages. Plain text talks · <code className="font-mono">&gt;&gt;</code>{" "}
+                logs a memo · <code className="font-mono">/</code> runs a command.
               </p>
               {saved.length ? (
                 <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-[12px] text-muted-fg">
-                  <Bookmark width={12} height={12} className="text-accent" />
+                  <Sparkles width={12} height={12} className="text-accent" />
                   Remembers {saved.length} past session{saved.length === 1 ? "" : "s"} — it may pick up an open commitment.
                 </p>
               ) : null}
             </div>
           ) : (
-            messages.map((m) => <Bubble key={m.id} m={m} mentors={mentors} />)
+            messages.map((m) => <Bubble key={m.id} m={m} />)
           )}
           {busy && !streamingId ? (
             <div className="flex items-center gap-2 text-xs text-muted-fg">
@@ -532,7 +496,7 @@ export function Chat() {
                   type="button"
                   onMouseEnter={() => setHi(i)}
                   onClick={() => {
-                    if (c.cmd === "/mentor") setInput("/mentor ");
+                    if (c.cmd === "/skill") setInput("/skill ");
                     else void runCommand(c.cmd);
                     inputRef.current?.focus();
                   }}
@@ -558,53 +522,39 @@ export function Chat() {
                   : "border-input focus-within:border-ring/60",
             )}
           >
-            {/* mentor chip */}
-            <div className="relative" ref={mentorRef}>
+            {/* skill chip */}
+            <div className="relative" ref={skillRef}>
               <button
                 type="button"
-                onClick={() => setMentorOpen((v) => !v)}
+                onClick={() => setSkillOpen((v) => !v)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-muted"
-                title="Switch mentor"
+                title="Switch persona"
               >
-                <Person width={14} height={14} className="text-accent" />
-                {activeMentor.name}
-                <ChevronDown width={13} height={13} className={cn("transition-transform", mentorOpen && "rotate-180")} />
+                <Sparkles width={14} height={14} className="text-accent" />
+                {activeSkill.name}
+                <ChevronDown width={13} height={13} className={cn("transition-transform", skillOpen && "rotate-180")} />
               </button>
-              {mentorOpen ? (
+              {skillOpen ? (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-card shadow-xl">
                   <p className="border-b border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-                    Mentor
+                    Persona
                   </p>
-                  <div className="max-h-72 overflow-y-auto">
-                    {mentors.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => chooseMentor(s.id)}
-                        className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
-                      >
-                        <span className="mt-0.5 w-4 shrink-0 text-accent">
-                          {s.id === mentor ? <Check width={14} height={14} /> : null}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium text-fg">{s.name}</span>
-                          {s.blurb ? (
-                            <span className="block truncate text-xs text-muted-fg">{s.blurb}</span>
-                          ) : null}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMentorOpen(false);
-                      router.push("/settings");
-                    }}
-                    className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors hover:bg-muted"
-                  >
-                    <Plus width={14} height={14} className="text-accent" /> New mentor
-                  </button>
+                  {SKILLS.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => chooseSkill(s.id)}
+                      className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
+                    >
+                      <span className="mt-0.5 w-4 shrink-0 text-accent">
+                        {s.id === skill ? <Check width={14} height={14} /> : null}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-fg">{s.name}</span>
+                        <span className="block truncate text-xs text-muted-fg">{s.blurb}</span>
+                      </span>
+                    </button>
+                  ))}
                 </div>
               ) : null}
             </div>
@@ -647,7 +597,8 @@ export function Chat() {
             ) : (
               <>
                 <b className="font-medium text-fg">Enter</b> to send · <code className="font-mono">&gt;&gt;</code>{" "}
-                memo · <code className="font-mono">/</code> commands
+                memo · <code className="font-mono">/</code> commands · persona:{" "}
+                <b className="font-medium text-fg">{activeSkill.name}</b>
               </>
             )}
           </p>
@@ -659,20 +610,20 @@ export function Chat() {
 
 // ---- One message ----------------------------------------------------------
 
-function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
+function Bubble({ m }: { m: Msg }) {
   if (m.role === "recap" && m.session) {
     const s = m.session;
     return (
       <div className="space-y-2">
         <p className="flex items-center justify-center gap-1.5 text-center text-[11px] text-muted-fg">
-          <Bookmark width={11} height={11} className="text-accent" />
+          <Sparkles width={11} height={11} className="text-accent" />
           What the mentor remembers from this session — the synthesis, not the transcript.
         </p>
         <div className="rounded-xl border border-border bg-muted/40 p-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-fg">{s.title ?? "Session"}</span>
             <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              {mentorById(s.mentor, mentors).name}
+              {skillById(s.skill).name}
             </span>
             <span className="text-[11px] text-muted-fg">{s.date}</span>
           </div>
@@ -712,7 +663,7 @@ function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
       <div className="flex justify-center">
         <div className="max-w-[85%] rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-fg">
           <div className="mb-0.5 flex items-center gap-1.5 text-[11px] font-medium text-accent">
-            <Check width={12} height={12} /> saved to inbox
+            <Check width={12} height={12} /> memo saved to inbox · no reply
             {typeof m.pending === "number" ? <span className="text-muted-fg">· {m.pending} pending</span> : null}
           </div>
           {m.text}
@@ -745,9 +696,9 @@ function Bubble({ m, mentors }: { m: Msg; mentors: Mentor[] }) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[85%]">
-        {m.mentor ? (
+        {m.skill ? (
           <p className="mb-1 flex items-center gap-1 pl-1 text-[11px] font-medium text-muted-fg">
-            <Person width={11} height={11} className="text-accent" /> {mentorById(m.mentor, mentors).name}
+            <Sparkles width={11} height={11} className="text-accent" /> {skillById(m.skill).name}
           </p>
         ) : null}
         <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-muted px-3.5 py-2 text-sm text-fg">

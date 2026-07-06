@@ -46,7 +46,7 @@ CREATE TABLE sessions (
   date        TEXT,                  -- day bucket for the Journal timeline
   started_at  TEXT NOT NULL,
   ended_at    TEXT,
-  skill       TEXT NOT NULL,         -- internal column: the mentor id (resolve to a display name via mentorById)
+  skill       TEXT NOT NULL,         -- mentor | therapist | coach | ...
   title       TEXT,
   summary     TEXT,
   transcript  TEXT,                  -- optional full text

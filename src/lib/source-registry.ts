@@ -1,14 +1,12 @@
 /**
  * Server-only source composition (uses fs). Builds the Data-tab sources list by
- * merging the known integrations with the manual sources discovered in the record,
- * then layering each source's saved interval + derived last-sync and computing
- * stale/due via the pure helpers in ./sources.
+ * merging a registry of known integrations with the manual sources discovered in
+ * the record, then layering each source's saved interval + derived last-sync and
+ * computing stale/due via the pure helpers in ./sources.
  *
- * Every row is actionable — there are no dead placeholders. GitHub keeps its
- * bespoke row/route; the Tier-1 API plugins are composed from the plugin registry
- * (paste-a-credential → sync); the Tier-2/3 file importers carry the exact
- * `agentqs import:file` command they run; the upload sources carry a per-source
- * upload into the inbox. Adding a source is one registry entry, not a branch here.
+ * GitHub keeps its bespoke row/route (Loop 3); the Tier-1 plugins (RescueTime,
+ * Google Calendar, Spotify, WHOOP-stub) are composed generically from the plugin
+ * registry so adding a source is one entry, not a new branch here.
  */
 import fs from "fs";
 import path from "path";
@@ -18,15 +16,29 @@ import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { PLUGINS } from "./importers/registry";
 import { resolveCredential } from "./importers/plugin";
 import { FILE_IMPORTERS } from "./importers/files/registry";
-import { UPLOAD_SOURCES } from "./upload-sources";
-import { SELF_SOURCE } from "./self-log";
 import {
   isDue,
   isStale,
   isValidInterval,
   type Interval,
+  type SourceKind,
   type SourceView,
 } from "./sources";
+
+interface Registered {
+  id: string;
+  name: string;
+  kind: SourceKind;
+  detail: string;
+  csv?: string; // daily/<csv>.csv this source owns (so it isn't double-counted as manual)
+  live: boolean; // has a working importer
+}
+
+/** Not-yet-live file-based integrations (later loops wire these up). GitHub, the
+ *  Tier-1 plugins, and the Tier-2 file importers are composed separately below. */
+const PLACEHOLDERS: Registered[] = [
+  { id: "apple-health", name: "Apple Health", kind: "manual", detail: "steps, HR, sleep, workouts", live: false },
+];
 
 function intervalFor(cfg: AppConfig | null, id: string): Interval {
   const raw = cfg?.sourceIntervals?.[id];
@@ -82,7 +94,6 @@ function githubRow(cfg: AppConfig | null, dir: string): SourceView {
     due: connected && hasToken && isDue(lastSync, interval),
     syncEndpoint: "/api/import/github",
     live: true,
-    connectVia: "api",
   };
 }
 
@@ -106,15 +117,13 @@ function pluginRow(cfg: AppConfig | null, dir: string, plugin: (typeof PLUGINS)[
     due: plugin.live && connected && hasCred && isDue(lastSync, interval),
     syncEndpoint: plugin.live ? `/api/import/${plugin.id}` : null,
     live: plugin.live,
-    connectVia: "api",
   };
 }
 
-/** Row for a Tier-2/3 file importer (browser history, iPhone backup, chat.db,
- *  Apple Health, OwnTracks). These read a local file on the user's own machine, so
- *  the server can never auto-sync them — they're `manual` and carry the exact
- *  `agentqs import:file` command to run locally (a cloud replica gets the rows via
- *  git). Connected once the record file has rows; overdue → stale. */
+/** Row for a Tier-2 file importer (Chrome history, iPhone backup). These read a
+ *  local file on the user's own machine, so the server can never auto-sync them —
+ *  they're `manual` (run `agentqs import:file` / the local daemon; a cloud replica
+ *  gets the rows via git). Connected once the record file has rows; overdue → stale. */
 function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FILE_IMPORTERS)[number]): SourceView {
   const file = path.join(dir, "daily", `${importer.id}.csv`);
   const connected = hasRows(file);
@@ -132,75 +141,56 @@ function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FIL
     due: false, // local file — the server can't reach the user's disk
     syncEndpoint: null,
     live: importer.live,
-    connectVia: "cli",
-    importCmd: `agentqs import:file --source ${importer.id} --rebuild`,
-    connectHint: importer.connectHint ?? null,
   };
 }
 
-/** Row for an upload source (WhatsApp/Notion/Takeout/Slack/Telegram export). No
- *  live local file to poll, so the connect affordance is a per-source upload that
- *  lands the export in the inbox; Structure turns it into daily rows. */
-function uploadSourceRow(cfg: AppConfig | null, dir: string, src: (typeof UPLOAD_SOURCES)[number]): SourceView {
-  const file = path.join(dir, "daily", `${src.id}.csv`);
-  const connected = hasRows(file);
-  const lastSync = fileMtimeISO(file);
-  const interval = intervalFor(cfg, src.id);
-  return {
-    id: src.id,
-    name: src.name,
-    kind: "manual",
-    detail: src.detail,
-    connected,
-    interval,
-    lastSync,
-    stale: connected ? isStale(lastSync, interval) : false,
-    due: false,
-    syncEndpoint: null,
-    live: true,
-    connectVia: "upload",
-    uploadAccept: src.accept,
-    connectHint: src.hint,
-  };
-}
-
-/** Compose the full sources list: GitHub + Tier-1 API plugins + Tier-2/3 file
- *  importers + upload sources + discovered manual drops (daily/*.csv not owned). */
+/** Compose the full sources list: GitHub + Tier-1 plugins + Tier-2 file importers
+ *  + placeholder integrations + discovered manual sources (daily/*.csv not owned). */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   const out: SourceView[] = [githubRow(cfg, dir)];
   for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
   for (const importer of FILE_IMPORTERS) out.push(fileSourceRow(cfg, dir, importer));
-  for (const src of UPLOAD_SOURCES) out.push(uploadSourceRow(cfg, dir, src));
 
   const owned = new Set<string>([
     "github",
     ...PLUGINS.map((p) => p.id),
     ...FILE_IMPORTERS.map((f) => f.id),
-    ...UPLOAD_SOURCES.map((s) => s.id),
   ]);
+
+  for (const reg of PLACEHOLDERS) {
+    out.push({
+      id: reg.id,
+      name: reg.name,
+      kind: reg.kind,
+      detail: reg.detail,
+      connected: false,
+      interval: intervalFor(cfg, reg.id),
+      lastSync: null,
+      stale: false,
+      due: false,
+      syncEndpoint: null,
+      live: reg.live,
+    });
+  }
 
   // Discovered manual sources — structured drops / pasted exports land as
   // daily/<stem>.csv. They can't auto-sync, so an overdue one is badged stale.
-  // `self` is the built-in daily check-in (written by the Journal's log card).
   for (const stem of dailyStems(dir)) {
     if (owned.has(stem)) continue;
-    const isSelf = stem === SELF_SOURCE;
     const lastSync = fileMtimeISO(path.join(dir, "daily", `${stem}.csv`));
     const interval = intervalFor(cfg, stem);
     out.push({
       id: stem,
-      name: isSelf ? "Daily check-in" : stem,
+      name: stem,
       kind: "manual",
-      detail: isSelf ? "mood · energy · focus · sleep, 1–10" : "imported daily data",
+      detail: "imported daily data",
       connected: true,
       interval,
       lastSync,
       stale: isStale(lastSync, interval),
       due: false,
-      live: true,
       syncEndpoint: null,
-      connectVia: "upload",
-      connectHint: isSelf ? "Log it on the Journal → How was today" : null,
+      live: true,
     });
   }
 

@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, RefreshCw, Spinner } from "@/components/icons";
-import { brandIcon } from "@/components/brand-icons";
+import { useEffect, useState, type ComponentType, type SVGProps } from "react";
+import {
+  Activity,
+  Calendar,
+  Check,
+  Eye,
+  EyeOff,
+  Gauge,
+  Music,
+  Plug,
+  RefreshCw,
+  Spinner,
+} from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
-import { markTourStep } from "@/lib/tour";
 
 /**
  * Generic connect/sync row for a Tier-1 plugin source (RescueTime · Google
@@ -38,6 +47,13 @@ interface Status {
   average: number | null;
   series: Point[];
 }
+
+const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
+  rescuetime: Gauge,
+  gcal: Calendar,
+  spotify: Music,
+  whoop: Activity,
+};
 
 /** Dependency-free bar sparkline of the primary metric, accent-coloured. */
 function Spark({ data }: { data: Point[] }) {
@@ -120,14 +136,12 @@ export function SourceConnect({
     setOpen(false);
     setMsg(`${data.days} day${data.days === 1 ? "" : "s"} of ${data.name} → ${data.dailyRows} daily rows.`);
     await loadStatus();
-    markTourStep("source"); // real action: a source is now connected — tour re-confirms
     setTimeout(() => setMsg(""), 6000);
   }
 
-  const Icon = brandIcon(id);
+  const Icon = ICONS[id] ?? Plug;
   const connected = status?.connected;
   const live = status?.live ?? true;
-  const isOauth = (status?.credentialLabel ?? "").toLowerCase().includes("oauth");
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred);
   const dayLabel = status ? `${status.days} day${status.days === 1 ? "" : "s"}` : "";
   const headline = status
@@ -149,13 +163,6 @@ export function SourceConnect({
             {!live ? (
               <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
                 stub · OAuth soon
-              </span>
-            ) : isOauth ? (
-              <span
-                className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg"
-                title="Paste an OAuth access token — no in-app OAuth redirect yet"
-              >
-                OAuth · paste token
               </span>
             ) : null}
             {connected ? (
@@ -212,9 +219,8 @@ export function SourceConnect({
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
           <p className="text-xs text-muted-fg">
-            Paste your {status?.credentialLabel ?? "credential"}. Stored in your data dir, only reads{" "}
-            {status?.name ?? "this source"}.
-            {isOauth ? " Short-lived OAuth token — paste a fresh one when it expires." : ""}
+            Paste a {status?.credentialLabel ?? "credential"}. Stored in your data dir; used only to
+            read {status?.name ?? "this source"}.
           </p>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">

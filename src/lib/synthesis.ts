@@ -1,6 +1,6 @@
 import { llmComplete, type LlmMessage } from "./llm";
 import type { SessionItem } from "./record";
-import { effectiveMentors, mentorById, type Mentor } from "./mentors";
+import { skillById } from "./skills";
 
 /**
  * The synthesis layer — Loop 9's core. After a session ends we distill the
@@ -27,8 +27,6 @@ export interface LlmConfigLike {
   llmProvider?: string;
   llmKey?: string;
   model?: string;
-  llmModels?: string[];
-  mentors?: Mentor[];
 }
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -39,8 +37,8 @@ function truncate(s: string, n: number): string {
 }
 
 /** Render the conversation as a plain transcript for the synthesis model. */
-export function formatTranscript(messages: LlmMessage[], mentorIdStr: string, mentors?: Mentor[]): string {
-  const other = mentorById(mentorIdStr, mentors ?? undefined).name;
+export function formatTranscript(messages: LlmMessage[], skill: string): string {
+  const other = skillById(skill).name;
   return messages
     .map((m) => `${m.role === "user" ? "You" : other}: ${m.content.trim()}`)
     .join("\n");
@@ -111,8 +109,8 @@ export function synthesisSystem(): string {
   ].join("\n");
 }
 
-export function synthesisUser(transcript: string, mentorName: string, date: string): string {
-  return `Session date: ${date}\nMentor: ${mentorName}\n\nTranscript:\n${transcript}`;
+export function synthesisUser(transcript: string, skill: string, date: string): string {
+  return `Session date: ${date}\nPersona: ${skill}\n\nTranscript:\n${transcript}`;
 }
 
 function stripFence(out: string): string {
@@ -144,7 +142,7 @@ export function parseSynthesisJson(out: string): SessionSynthesis | null {
 
 export interface SynthesizeInput {
   messages: LlmMessage[];
-  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
+  skill: string;
   date: string;
   cfg?: LlmConfigLike | null;
 }
@@ -159,9 +157,7 @@ export interface SynthesizeResult {
  * deterministic heuristic. Either way the caller stores the synthesis (separate
  * from daily data) and the agent reads it — never the transcript. */
 export async function synthesizeSession(input: SynthesizeInput): Promise<SynthesizeResult> {
-  const mentors = effectiveMentors(input.cfg?.mentors);
-  const mentorName = mentorById(input.skill, mentors).name;
-  const transcript = formatTranscript(input.messages, input.skill, mentors);
+  const transcript = formatTranscript(input.messages, input.skill);
   const heur = heuristicSynthesis(input.messages, input.skill);
   const hasKey = Boolean(input.cfg?.llmProvider && input.cfg?.llmKey);
   if (!hasKey) return { synthesis: heur, via: "heuristic", transcript };
@@ -171,9 +167,8 @@ export async function synthesizeSession(input: SynthesizeInput): Promise<Synthes
       provider: input.cfg!.llmProvider!,
       apiKey: input.cfg!.llmKey!,
       model: input.cfg!.model,
-      models: input.cfg!.llmModels,
       system: synthesisSystem(),
-      messages: [{ role: "user", content: synthesisUser(transcript, mentorName, input.date) }],
+      messages: [{ role: "user", content: synthesisUser(transcript, input.skill, input.date) }],
       maxTokens: 600,
     });
     const parsed = parseSynthesisJson(out);
@@ -201,7 +196,7 @@ export async function synthesizeSession(input: SynthesizeInput): Promise<Synthes
 export interface OpenCommitment {
   text: string;
   date: string;
-  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
+  skill: string;
   sessionId: string;
 }
 
@@ -257,12 +252,12 @@ export function continuityBlock(sessions: SessionItem[], limit = 6): string {
  * commitment so continuity holds even without a model. Returns null when there
  * are no prior commitments (caller uses its generic greeting then).
  */
-export function continuityFallbackReply(mentorName: string, sessions: SessionItem[]): string | null {
+export function continuityFallbackReply(skillName: string, sessions: SessionItem[]): string | null {
   const open = openCommitments(sessions);
   if (!open.length) return null;
   const c = open[0];
   return (
     `Before anything else — last session (${c.date}) you committed to: “${c.text}”. How did that go?\n\n` +
-    `Tell me and we'll pick it up from there. (I'm your ${mentorName.toLowerCase()}; add an AI key in Settings for fuller, data-grounded replies.)`
+    `Tell me and we'll pick it up from there. (I'm your ${skillName.toLowerCase()}; add an AI key in Settings for fuller, data-grounded replies.)`
   );
 }

@@ -3,8 +3,8 @@
  * Ships-when proof for Loop 6 · Smart input modes.
  *
  * The Chat box routes one typed line three ways by its prefix — plain text = chat,
- * `>>` = a memo (raw to the inbox, no LLM), `/` = a command — and a mentor chip
- * switches the active mentor. This proves all of it end to end:
+ * `>>` = a memo (raw to the inbox, no LLM), `/` = a command — and a skill chip
+ * switches persona. This proves all of it end to end:
  *
  *   1. the dispatch contract (src/lib/smart-input.ts) — the SAME module the input
  *      box imports — routes `>> slept bad`, `/sync`, and plain text correctly;
@@ -13,10 +13,10 @@
  *   3. `/sync` is wired to a live route that runs its logic, and the fetch →
  *      normalize → merge → rebuild pipeline it drives lands commits in the daily
  *      table the app serves;
- *   4. the mentor chip switches the active mentor — POST /api/chat with
- *      mentor=therapist then coach changes the mentor the server answers as.
+ *   4. the skill chip switches persona — POST /api/chat with skill=therapist then
+ *      coach changes the persona the server answers as.
  *
- * Drives the deployed URL, so it fails if routing, the inbox, /sync, or the mentor
+ * Drives the deployed URL, so it fails if routing, the inbox, /sync, or the skill
  * switch break. Keyless — no AI key required. Run: npm run smart:test  (needs
  * `next build` first).
  */
@@ -107,9 +107,8 @@ async function main() {
   check('parseCommand("/sync torvalds") splits cmd + args',
     (() => { const p = parseCommand("/sync torvalds"); return p.cmd === "sync" && p.args[0] === "torvalds"; })());
   const palette = filterCommands("/s").map((c) => c.cmd);
-  check('palette filters "/s" to the /s… commands', palette.includes("/sync") && palette.includes("/structure"),
+  check('palette filters "/s" to the /s… commands', palette.includes("/sync") && palette.includes("/structure") && palette.includes("/skill"),
     palette.join(" "));
-  check("/mentor command is offered", COMMANDS.some((c) => c.cmd === "/mentor"));
   check("all four commands are offered", COMMANDS.length === 4);
 
   // ---- Seed a record + a synced GitHub source, then boot the built app ----
@@ -186,22 +185,22 @@ async function main() {
     check("/sync route executes its logic (deterministic, structured response)",
       syncRun.status === 400 && /token/i.test(syncBody.error || ""), syncBody.error);
 
-    // ---- 4. The mentor chip switches the active mentor -------------------
-    console.log("\n  switching mentor: mentor → therapist → coach\n");
-    async function askAs(mentor: string) {
+    // ---- 4. The skill chip switches persona ------------------------------
+    console.log("\n  switching persona: mentor → therapist → coach\n");
+    async function askAs(skill: string) {
       const res = await fetch(`${base}/api/chat`, {
         method: "POST",
         headers: auth,
-        body: JSON.stringify({ message: "hey", mentor, history: [] }),
+        body: JSON.stringify({ message: "hey", skill, history: [] }),
       });
       return readChat(res);
     }
     const asTherapist = await askAs("therapist");
-    check("chat answers as the therapist", asTherapist.done?.mentor === "therapist");
-    check("therapist reply is framed by that mentor", /therapist/i.test(asTherapist.text), asTherapist.text.slice(0, 60));
+    check("chat answers as the therapist", asTherapist.done?.skill === "therapist");
+    check("therapist reply is framed by that persona", /therapist/i.test(asTherapist.text), asTherapist.text.slice(0, 60));
     const asCoach = await askAs("coach");
-    check("switching to coach changes who answers", asCoach.done?.mentor === "coach");
-    check("coach reply is framed by that mentor", /coach/i.test(asCoach.text), asCoach.text.slice(0, 60));
+    check("switching to coach changes who answers", asCoach.done?.skill === "coach");
+    check("coach reply is framed by that persona", /coach/i.test(asCoach.text), asCoach.text.slice(0, 60));
   } finally {
     server.kill("SIGKILL");
     fs.rmSync(root, { recursive: true, force: true });
@@ -212,7 +211,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    "\n✓ Smart input ships: `>> slept bad` lands in the inbox raw (no LLM), `/sync` runs its live pipeline into the daily table, and the mentor chip switches the active mentor.\n",
+    "\n✓ Smart input ships: `>> slept bad` lands in the inbox raw (no LLM), `/sync` runs its live pipeline into the daily table, and the skill chip switches persona.\n",
   );
 }
 

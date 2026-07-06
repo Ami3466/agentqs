@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { hashPassword, newSecret } from "@/lib/auth";
 import { configExists, writeConfig, type AppConfig } from "@/lib/config";
 import { setSessionCookie } from "@/lib/session";
-import { isProvider, pickModel } from "@/lib/models";
+import { DEFAULT_MODEL, modelsForProvider } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,9 +18,6 @@ export async function POST(req: Request) {
   const llmProvider = String(body?.llmProvider ?? "");
   const llmKey = String(body?.llmKey ?? "");
   let model = String(body?.model ?? "");
-  let llmModels = Array.isArray(body?.llmModels)
-    ? body.llmModels.filter((m: unknown): m is string => typeof m === "string")
-    : [];
 
   if (username.length < 2) {
     return NextResponse.json({ error: "Username too short." }, { status: 400 });
@@ -32,13 +29,13 @@ export async function POST(req: Request) {
     );
   }
   if (llmProvider) {
-    if (!isProvider(llmProvider)) {
+    const models = modelsForProvider(llmProvider);
+    if (!models.length) {
       return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
     }
-    model = llmModels.includes(model) ? model : pickModel(model, llmModels);
+    if (!models.includes(model)) model = models[0] || DEFAULT_MODEL;
   } else {
     model = "";
-    llmModels = [];
   }
 
   const secret = process.env.SESSION_SECRET || newSecret();
@@ -49,7 +46,6 @@ export async function POST(req: Request) {
     llmProvider,
     llmKey,
     model,
-    llmModels,
     theme: "system",
     createdAt: new Date().toISOString(),
   };

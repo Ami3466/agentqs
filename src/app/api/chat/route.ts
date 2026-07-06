@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/session";
 import type { LlmMessage } from "@/lib/llm";
 import { dbPath, recordDir } from "@/lib/paths";
 import { readSessionsFromRecord } from "@/lib/record";
-import { effectiveMentors, mentorById } from "@/lib/mentors";
+import { skillById } from "@/lib/skills";
 import { continuityBlock, continuityFallbackReply } from "@/lib/synthesis";
 import {
   buildSpark,
@@ -36,7 +36,7 @@ function* chunkText(text: string, size = 42): Generator<string> {
 /**
  * Stream an answer to the browser as newline-delimited JSON frames:
  *   {"t":"delta","v":"…"}  incremental reply text
- *   {"t":"done", grounded, sources, metrics, spark, mentor, continuity, model}
+ *   {"t":"done", grounded, sources, metrics, spark, skill, continuity, model}
  *   {"t":"error","error":"…"}  a mid-stream failure
  * The Chat UI reads tokens as they arrive; the `done` frame carries the grounded
  * badge + the inline sparkline. Auth/validation still return plain JSON errors.
@@ -66,12 +66,12 @@ function ndjson(pump: (send: (frame: unknown) => void) => Promise<void>): Respon
 
 /**
  * Plain-text chat = the mentor agent (Loop 4), streamed (Loop 5). With a key the
- * mentor's system prompt is joined with a compact schema catalog + a continuity
+ * persona's system prompt is joined with a compact schema catalog + a continuity
  * block (synthesis of past sessions, never raw transcripts) and the Vercel AI SDK
  * agent runs: it calls SQL (query_daily) + FTS (search_notes) tools to ground the
  * reply, and the final text streams to the UI token-by-token. With no key it degrades
  * to a deterministic cross-source answer computed straight from the numbers (still
- * streamed), or a mentor note referencing the latest open commitment. Either way the
+ * streamed), or a persona note referencing the latest open commitment. Either way the
  * closing `done` frame carries the grounded sources + a sparkline of a cited metric.
  * `>>` memos and `/` commands never reach here.
  */
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
 
   const body = (await req.json().catch(() => ({}))) as {
     message?: string;
-    mentor?: string;
+    skill?: string;
     history?: LlmMessage[];
   };
   const message = (body.message ?? "").trim();
@@ -90,8 +90,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Say something first." }, { status: 400 });
   }
 
+  const skill = skillById(body.skill);
   const cfg = readConfig();
-  const mentor = mentorById(body.mentor, effectiveMentors(cfg?.mentors));
 
   const history = Array.isArray(body.history)
     ? body.history
@@ -105,7 +105,7 @@ export async function POST(req: Request) {
   // Real numbers from the daily cache — the grounding both paths reason over.
   const grounding = readGrounding();
 
-  // No key yet: honest, mentor-flavoured fallback. But a data question over ≥2
+  // No key yet: honest, persona-flavoured fallback. But a data question over ≥2
   // sources still gets a real, grounded cross-source answer computed from the
   // numbers — no model, no invention. Streamed for a consistent UI.
   if (!cfg?.llmProvider || !cfg?.llmKey) {
@@ -113,12 +113,12 @@ export async function POST(req: Request) {
       // Semantic recall ("find days that felt like this") — the local embedding index
       // answers it with no key. Checked first: it's the most specific intent.
       if (looksLikeRecallQuestion(message)) {
-        const recall = await answerRecall(message, history);
+        const recall = answerRecall(message, history);
         if (recall) {
           for (const chunk of chunkText(recall.text)) send({ t: "delta", v: chunk });
           send({
             t: "done",
-            mentor: mentor.id,
+            skill: skill.id,
             grounded: true,
             sources: recall.sources,
             metrics: [],
@@ -134,7 +134,7 @@ export async function POST(req: Request) {
           for (const chunk of chunkText(answer.text)) send({ t: "delta", v: chunk });
           send({
             t: "done",
-            mentor: mentor.id,
+            skill: skill.id,
             grounded: true,
             sources: answer.sources,
             metrics: answer.metrics,
@@ -144,15 +144,15 @@ export async function POST(req: Request) {
           return;
         }
       }
-      const opener = sessionStart ? continuityFallbackReply(mentor.name, prior) : null;
+      const opener = sessionStart ? continuityFallbackReply(skill.name, prior) : null;
       const text =
         opener ??
-        `I'm your ${mentor.name.toLowerCase()}. Add an AI key in Settings and I'll answer this ` +
+        `I'm your ${skill.name.toLowerCase()}. Add an AI key in Settings and I'll answer this ` +
           `grounded in your real data. Until then, log with \`>>\` and I'll keep your record building.`;
       for (const chunk of chunkText(text)) send({ t: "delta", v: chunk });
       send({
         t: "done",
-        mentor: mentor.id,
+        skill: skill.id,
         grounded: false,
         sources: [],
         metrics: [],
@@ -165,11 +165,11 @@ export async function POST(req: Request) {
   const memory = continuityBlock(prior);
   const dbFile = dbPath();
   const catalog = dailyCatalog(dbFile);
-  const system = [mentor.system, catalog.hint, memory].filter(Boolean).join("\n\n");
+  const system = [skill.system, catalog.hint, memory].filter(Boolean).join("\n\n");
 
   let model;
   try {
-    model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model, cfg.llmModels);
+    model = resolveModel(cfg.llmProvider, cfg.llmKey, cfg.model);
   } catch (e) {
     return NextResponse.json({ error: `Model config failed: ${(e as Error).message}` }, { status: 502 });
   }
@@ -197,7 +197,7 @@ export async function POST(req: Request) {
     const metrics = [...used.metrics].sort();
     send({
       t: "done",
-      mentor: mentor.id,
+      skill: skill.id,
       grounded: used.hits > 0,
       sources,
       metrics,
