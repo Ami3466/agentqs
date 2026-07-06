@@ -93,4 +93,7 @@ export interface SourceView {
   due: boolean; // api + connected + syncable + overdue → auto-sync on open
   syncEndpoint: string | null; // POST target for api auto-sync
   live: boolean; // has a working importer (false = stub / not-yet-live placeholder)
+  automation?: boolean; // a browser-automation recipe (Playwright-driven, no API)
+  automationStatus?: "ok" | "error" | null; // last replay outcome (automation rows)
+  automationError?: string | null; // last replay error, if any
 }

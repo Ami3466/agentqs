@@ -16,6 +16,8 @@ import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { PLUGINS } from "./importers/registry";
 import { resolveCredential } from "./importers/plugin";
 import { FILE_IMPORTERS } from "./importers/files/registry";
+import { listAutomations } from "./automation";
+import type { AutomationRecipe } from "./automation-types";
 import {
   isDue,
   isStale,
@@ -133,6 +135,42 @@ function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FIL
   };
 }
 
+/** Row for a browser-automation recipe (a source with no API). Always shown as a
+ *  set-up import (connected) so it stays editable under Automated imports even if a
+ *  replay fails; the server CAN auto-sync it (headless Playwright), so overdue → due
+ *  and it replays on Data-tab open via its run endpoint. */
+function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRecipe): SourceView {
+  const file = path.join(dir, "daily", `${recipe.id}.csv`);
+  const interval = intervalFor(cfg, recipe.id);
+  const lastSync = cfg?.sourceSyncedAt?.[recipe.id] ?? recipe.lastRun ?? fileMtimeISO(file);
+  let host = recipe.url;
+  try {
+    host = new URL(recipe.url).host;
+  } catch {
+    /* keep raw url */
+  }
+  const detail =
+    recipe.lastStatus === "error"
+      ? `${host} · last run failed`
+      : `${host} · ${hasRows(file) ? "importing" : "no data yet"}`;
+  return {
+    id: recipe.id,
+    name: recipe.name,
+    kind: "api",
+    detail,
+    connected: true, // a configured automation always lives under Automated imports
+    interval,
+    lastSync,
+    stale: false,
+    due: isDue(lastSync, interval), // headless replay can run server-side on open
+    syncEndpoint: `/api/automations/run?id=${encodeURIComponent(recipe.id)}`,
+    live: true,
+    automation: true,
+    automationStatus: recipe.lastStatus ?? null,
+    automationError: recipe.lastError ?? null,
+  };
+}
+
 /** Compose the sources list = real, repeatable integrations only: GitHub +
  *  Tier-1 API plugins + Tier-2 file importers + not-yet-live placeholders. A
  *  one-off dropped CSV is NOT a source — it lands in the inbox and, once
@@ -141,6 +179,8 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   const out: SourceView[] = [githubRow(cfg, dir)];
   for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
   for (const importer of FILE_IMPORTERS) out.push(fileSourceRow(cfg, dir, importer));
+
+  for (const recipe of listAutomations(cfg)) out.push(automationRow(cfg, dir, recipe));
 
   for (const reg of PLACEHOLDERS) {
     out.push({

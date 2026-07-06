@@ -146,6 +146,56 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "automation_list",
+    {
+      title: "List browser automations",
+      description: "Your Playwright-driven imports for sources with no API — recipe + last-run status.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.automations()),
+  );
+
+  server.registerTool(
+    "automation_add",
+    {
+      title: "Create a browser automation",
+      description:
+        "Set up an import for a site with no API: a start URL, optional login, and recorded steps (goto/fill/click/waitForSelector/press/extractTable). `steps` is a JSON array; extractTable scrapes a <table> into the daily timeline.",
+      inputSchema: {
+        name: z.string(),
+        url: z.string(),
+        id: z.string().optional(),
+        credType: z.enum(["userpass", "token", "none"]).optional(),
+        steps: z.array(z.object({ type: z.string(), selector: z.string().optional(), value: z.string().optional() })).optional(),
+        username: z.string().optional(),
+        password: z.string().optional(),
+        token: z.string().optional(),
+      },
+    },
+    async (a) => guard(() => core.automationSave(a as never)),
+  );
+
+  server.registerTool(
+    "automation_run",
+    {
+      title: "Run a browser automation now",
+      description: "Replay a recipe headless: drive the browser, scrape, and land the data in the record (the cron path).",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => guard(() => core.automationRun({ id })),
+  );
+
+  server.registerTool(
+    "automation_remove",
+    {
+      title: "Remove a browser automation",
+      description: "Delete an automation recipe, its secrets, its data, and its schedule.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => guard(() => core.automationRemove(id)),
+  );
+
+  server.registerTool(
     "rebuild",
     {
       title: "Rebuild the cache",

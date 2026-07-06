@@ -33,6 +33,16 @@ import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { structureCsv, sourceName } from "./structure";
 import { structurePending } from "./structure-run";
+import {
+  isAutomation,
+  listPublicAutomations,
+  removeAutomation,
+  saveAutomation,
+  setAutomationCreds,
+  type SaveAutomationInput,
+} from "./automation";
+import { runAutomation, type AutomationRunResult } from "./automation-run";
+import type { AutomationCreds, PublicAutomation } from "./automation-types";
 import { composeReply, type ComposedReply } from "./reply";
 import { listSkills, removeSkill, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
 import { modelsForProvider } from "./models";
@@ -138,20 +148,27 @@ export function setInterval(id: string, interval: string): { id: string; interva
  *  credential + sync time + schedule, and rebuild. The source falls back to the
  *  Connections catalog (not connected). This is the "remove" the Data tab exposes. */
 export function disconnectSource(id: string): { id: string; removed: boolean; dailyRows: number } {
+  const automation = isAutomation(id);
   const known =
-    id === "github" || Boolean(pluginById(id)) || Boolean(fileImporterById(id));
+    automation || id === "github" || Boolean(pluginById(id)) || Boolean(fileImporterById(id));
   if (!known) {
     throw new Error(
       `Unknown source "${id}". Try: github, ${[...PLUGINS.map((p) => p.id), ...FILE_IMPORTERS.map((f) => f.id)].join(", ")}`,
     );
   }
-  const cfg = requireConfig();
   const rDir = recordDir();
   try {
     fs.rmSync(path.join(rDir, "daily", `${id}.csv`), { force: true });
   } catch {
     /* non-fatal — nothing to remove */
   }
+  // Automations carry their own record + secrets — removeAutomation clears them.
+  if (automation) {
+    removeAutomation(id);
+    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    return { id, removed: true, dailyRows };
+  }
+  const cfg = requireConfig();
   if (id === "github") {
     delete cfg.githubToken;
     delete cfg.githubSyncedAt;
@@ -163,6 +180,35 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
   writeConfig(cfg);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   return { id, removed: true, dailyRows };
+}
+
+// ---- automations (browser-driven imports for sources with no API) ---------
+
+/** Every configured automation recipe (redacted — secrets shown as booleans). */
+export function automations(): PublicAutomation[] {
+  return listPublicAutomations(readConfig());
+}
+
+/** Create or update an automation recipe (site + creds + recorded steps). */
+export function automationSave(input: SaveAutomationInput): PublicAutomation {
+  return saveAutomation(input);
+}
+
+/** Set an automation's credentials without touching its steps. */
+export function automationCreds(id: string, creds: AutomationCreds): PublicAutomation {
+  return setAutomationCreds(id, creds);
+}
+
+/** Replay an automation now: drive the browser, scrape, land in the record. This
+ *  is both the "record it once" trial run and the scheduled/on-open cron path. */
+export async function automationRun(opts: { id: string; headed?: boolean }): Promise<AutomationRunResult> {
+  return runAutomation(opts.id, { headed: opts.headed });
+}
+
+/** Remove an automation (drops its recipe, secrets, data, and schedule). */
+export function automationRemove(id: string): { id: string; removed: boolean; dailyRows: number } {
+  if (!isAutomation(id)) throw new Error(`No automation "${id}".`);
+  return disconnectSource(id);
 }
 
 export interface SyncResult {

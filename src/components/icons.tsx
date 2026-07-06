@@ -210,6 +210,12 @@ export const Trash = (p: P) => (
   </svg>
 );
 
+export const Play = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M6 4.5v15a1 1 0 0 0 1.53.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 6 4.5z" />
+  </svg>
+);
+
 export const Bookmark = (p: P) => (
   <svg {...base} {...p}>
     <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />

@@ -180,6 +180,104 @@ source
     }
   });
 
+// ---- automation (browser-driven imports for sources with no API) ----------
+const automation = program
+  .command("automation")
+  .description("browser-driven imports for sources with no API (Playwright)");
+
+automation
+  .command("list")
+  .description("list your automation recipes + last-run status")
+  .action(() => {
+    try {
+      out(core.automations(), (rows: any[]) =>
+        rows.length
+          ? rows
+              .map(
+                (a) =>
+                  `${a.lastStatus === "error" ? "✗" : a.lastStatus === "ok" ? "●" : "○"} ${a.id.padEnd(16)} ${a.name}  ${a.url}`,
+              )
+              .join("\n")
+          : "(no automations — add one with `agentqs automation add`)",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+automation
+  .command("add <name>")
+  .description("create/update an automation: point it at a site with no API")
+  .requiredOption("--url <url>", "start URL (https://…)")
+  .option("--id <id>", "explicit id (default: slug of name)")
+  .option("--cred-type <t>", "userpass | token | none", "none")
+  .option("--username <u>", "login username / email")
+  .option("--password <p>", "login password")
+  .option("--token <t>", "bearer/session token")
+  .option("--steps <json>", "recorded steps as a JSON array")
+  .option("--table <selector>", "shortcut: a single extractTable step on this selector")
+  .action((name: string, opts: any) => {
+    try {
+      let steps: any[] | undefined;
+      if (opts.steps) steps = JSON.parse(opts.steps);
+      else if (opts.table) steps = [{ type: "extractTable", selector: opts.table }];
+      out(
+        core.automationSave({
+          name,
+          url: opts.url,
+          id: opts.id,
+          credType: opts.credType,
+          steps,
+          username: opts.username,
+          password: opts.password,
+          token: opts.token,
+        }),
+        (d) => `Saved automation "${d.id}" (${d.steps.length} steps). Run it: agentqs automation run ${d.id}`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+automation
+  .command("run <id>")
+  .description("replay an automation now (records the import; --headed to watch)")
+  .option("--headed", "open a visible browser (local; e.g. to solve a login)")
+  .action(async (id: string, opts: { headed?: boolean }) => {
+    try {
+      const r = await core.automationRun({ id, headed: opts.headed });
+      out(r, (d) =>
+        d.landed === "daily"
+          ? `Recorded ${d.name}: ${d.rows} cells → ${d.dailyRows} daily rows (${d.metrics.join(", ")}).`
+          : `Recorded ${d.name}: ${d.rows} rows landed raw in the inbox — run \`agentqs structure\`.`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+automation
+  .command("schedule <id> <interval>")
+  .description("set the cron cadence: off | hourly | daily | weekly")
+  .action((id: string, interval: string) => {
+    try {
+      out(core.setInterval(id, interval), (d) => `${d.id} → ${d.interval}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+automation
+  .command("remove <id>")
+  .description("delete an automation (recipe, secrets, data, schedule)")
+  .action((id: string) => {
+    try {
+      out(core.automationRemove(id), (d) => `Removed automation ${d.id}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
 // ---- import (escape hatch) + structure ------------------------------------
 program
   .command("import <file>")

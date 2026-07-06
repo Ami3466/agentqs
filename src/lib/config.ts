@@ -3,6 +3,7 @@ import { configPath, dataDir } from "./paths";
 import type { JournalView } from "./journal";
 import type { Interval } from "./sources";
 import type { Skill } from "./skills";
+import type { AutomationCreds, AutomationRecipe } from "./automation-types";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -24,6 +25,8 @@ export interface AppConfig {
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
+  automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
+  automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.
