@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { hashPassword, newSecret } from "@/lib/auth";
 import { configExists, writeConfig, type AppConfig } from "@/lib/config";
 import { setSessionCookie } from "@/lib/session";
-import { DEFAULT_MODEL, modelsForProvider } from "@/lib/models";
+import { isProvider } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +17,13 @@ export async function POST(req: Request) {
   const password = String(body?.password ?? "");
   const llmProvider = String(body?.llmProvider ?? "");
   const llmKey = String(body?.llmKey ?? "");
+  // The picker's ids are fetched live from the provider (POST /api/models); the
+  // client sends the id it chose plus that live list. We trust and persist them —
+  // never a hardcoded catalog.
   let model = String(body?.model ?? "");
+  let llmModels = Array.isArray(body?.llmModels)
+    ? (body.llmModels as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
 
   if (username.length < 2) {
     return NextResponse.json({ error: "Username too short." }, { status: 400 });
@@ -29,13 +35,13 @@ export async function POST(req: Request) {
     );
   }
   if (llmProvider) {
-    const models = modelsForProvider(llmProvider);
-    if (!models.length) {
+    if (!isProvider(llmProvider)) {
       return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
     }
-    if (!models.includes(model)) model = models[0] || DEFAULT_MODEL;
+    if (!model) model = llmModels[0] || "";
   } else {
     model = "";
+    llmModels = [];
   }
 
   const secret = process.env.SESSION_SECRET || newSecret();
@@ -46,6 +52,7 @@ export async function POST(req: Request) {
     llmProvider,
     llmKey,
     model,
+    llmModels,
     theme: "system",
     createdAt: new Date().toISOString(),
   };

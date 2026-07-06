@@ -7,7 +7,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { openReadonly } from "./db";
 import { semanticSearch } from "./embeddings";
-import { fallbackModel } from "./models";
+import { pickModel } from "./models";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -29,9 +29,16 @@ import type { LlmMessage } from "./llm";
 
 // ---- Provider selection ---------------------------------------------------
 
-/** Resolve a BYO-key provider + model into a Vercel AI SDK LanguageModel. */
-export function resolveModel(provider: string, apiKey: string, model?: string | null): LanguageModel {
-  const id = fallbackModel(provider, model);
+/** Resolve a BYO-key provider + model into a Vercel AI SDK LanguageModel. The id
+ *  is the user's saved pick, else the first live-fetched model — never a literal. */
+export function resolveModel(
+  provider: string,
+  apiKey: string,
+  model?: string | null,
+  models?: string[] | null,
+): LanguageModel {
+  const id = pickModel(model, models);
+  if (!id) throw new Error("No model configured — connect a provider in Settings.");
   switch (provider) {
     case "anthropic":
       return createAnthropic({ apiKey })(id);

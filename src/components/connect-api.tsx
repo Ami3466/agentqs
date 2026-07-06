@@ -48,10 +48,10 @@ const SNIPPETS: Record<string, Snip> = {
   },
   settings: {
     title: "Settings",
-    cli: `agentqs config set model claude-sonnet-4-5`,
+    cli: `agentqs config set model <model-id>`,
     api: (b) => `curl -X POST ${b}/api/settings \\
   -H 'content-type: application/json' \\
-  -d '{"model":"claude-sonnet-4-5"}'`,
+  -d '{"model":"<model-id>"}'`,
   },
 };
 
