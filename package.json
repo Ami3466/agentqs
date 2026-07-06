@@ -22,7 +22,8 @@
     "voice:test": "tsx scripts/voice-memo.ts",
     "channels:test": "tsx scripts/channels.ts",
     "semantic:test": "tsx scripts/embeddings.ts",
-    "agent:test": "tsx scripts/agent-brain.ts"
+    "agent:test": "tsx scripts/agent-brain.ts",
+    "guard:models": "tsx scripts/guard-models.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.8",
