@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Clock, Plug, RefreshCw, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
+import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
@@ -172,6 +173,20 @@ export function SourcesPanel({
     if (s.id === "github") {
       return (
         <GithubConnect
+          key={s.id}
+          version={version}
+          interval={s.interval}
+          due={s.due}
+          savingInterval={saving}
+          removing={removing}
+          onIntervalChange={onIntervalChange}
+          onRemove={onRemove}
+        />
+      );
+    }
+    if (s.id === "whoop") {
+      return (
+        <WhoopConnect
           key={s.id}
           version={version}
           interval={s.interval}

@@ -95,6 +95,8 @@ agentqs import ./export.csv --name mood          # drop any file (CSV structures
 agentqs structure                                # turn pending prose into daily rows (uses your key)
 agentqs sources                                  # list sources + sync state
 agentqs source connect rescuetime <key>          # save an API source's credential
+agentqs whoop connect you@email.com <password>   # WHOOP via the unofficial app login
+agentqs sync whoop                               # pull per-minute HR + HRV + recovery + sleep + strain
 agentqs source interval github daily             # schedule an automated import
 agentqs source remove chrome                     # remove an automated import (data + schedule)
 agentqs sync github                              # run one source now (omit to sync all connected)
@@ -218,9 +220,9 @@ dense per-day series, and merges them into `record/daily/github.csv`. In the app
 the **Data** tab does the same with one click (paste a token → real commits land
 in your record and rebuild into the daily table).
 
-### Tier-1 plugins — RescueTime · Google Calendar · Spotify · WHOOP
+### Tier-1 plugins — RescueTime · Google Calendar · Spotify
 
-The rest of the Tier-1 APIs live behind one shared **plugin** interface
+The single-credential Tier-1 APIs live behind one shared **plugin** interface
 (`src/lib/importers/plugin.ts`): `credential → fetch a window → normalize into a
 wide daily table → merge into record/daily/<id>.csv → rebuild`. Adding a source is
 one file plus a registry entry — no new route, no new UI. They all share the
@@ -242,11 +244,30 @@ npm run import:source -- --source gcal --fixture samples/gcal-events.json \
 | **RescueTime** | API key | `productivity_pulse`, `productive_hours`, `distracting_hours`, `total_hours` |
 | **Google Calendar** | OAuth token | `meetings`, `meeting_hours` |
 | **Spotify** | OAuth token | `tracks`, `minutes` |
-| **WHOOP** *(stub)* | OAuth token | `recovery`, `hrv`, `resting_hr` |
 
-WHOOP is a **stub adapter**: its normalize → merge → rebuild pipeline is real and
-fixture-provable, but its OAuth flow isn't configurable in a single run, so the
-Data tab marks it *not-live* until that lands (a later loop).
+### WHOOP — the unofficial app login (the differentiator)
+
+WHOOP is bespoke (`src/lib/importers/whoop.ts`), **not** the official public API
+(daily summary only). It drives the same reverse-engineered mobile-app auth the
+WHOOP app uses: your **email + password** are exchanged for a bearer token at
+`POST https://api-7.whoop.com/oauth/token`, then it pulls the app's private
+endpoints — `/users/{id}/cycles` (recovery, HRV, resting HR, strain, sleep) and
+`/users/{id}/metrics/heart_rate?step=60` (**per-minute heart rate**).
+
+- The per-cycle metrics roll up into `record/daily/whoop.csv` (`recovery`, `hrv`,
+  `resting_hr`, `strain`, `sleep_hours`, `sleep_perf`, plus `hr_avg`/`hr_max`
+  derived from the minute stream).
+- The **per-minute heart rate** is written verbatim to `record/whoop/hr/<date>.csv`
+  — a granularity no journaling app captures.
+- Email + password are stored in `config.json` (mode `0600`, never committed);
+  tokens are cached and refreshed, and the password is re-used only to re-auth
+  when a refresh token expires, so the scheduled pull never silently dies.
+
+```bash
+agentqs whoop connect you@email.com <password>   # store creds (or the whoop_connect MCP tool)
+agentqs sync whoop                               # auth → cycles + per-minute HR → daily table
+agentqs source interval whoop daily              # scheduled pull
+```
 
 ### Tier-2 file importers — Chrome history · iPhone backup
 

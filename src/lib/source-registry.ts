@@ -4,9 +4,10 @@
  * the record, then layering each source's saved interval + derived last-sync and
  * computing stale/due via the pure helpers in ./sources.
  *
- * GitHub keeps its bespoke row/route (Loop 3); the Tier-1 plugins (RescueTime,
- * Google Calendar, Spotify, WHOOP-stub) are composed generically from the plugin
- * registry so adding a source is one entry, not a new branch here.
+ * GitHub and WHOOP keep bespoke rows/routes (GitHub for its commit sparkline,
+ * WHOOP for its unofficial email+password app login + per-minute stream); the
+ * single-credential Tier-1 plugins (RescueTime, Google Calendar, Spotify) are
+ * composed generically from the plugin registry so adding one is a single entry.
  */
 import fs from "fs";
 import path from "path";
@@ -84,6 +85,32 @@ function githubRow(cfg: AppConfig | null, dir: string): SourceView {
     stale: false,
     due: connected && hasToken && isDue(lastSync, interval),
     syncEndpoint: "/api/import/github",
+    live: true,
+  };
+}
+
+/** WHOOP connects via the unofficial app login (email + password → token), so it
+ *  has its own bespoke row + route like GitHub. Connected once its record file has
+ *  rows; has a credential when the stored email + (password or refresh token) can
+ *  re-auth; DUE (server-side auto-sync) only then. */
+function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
+  const file = path.join(dir, "daily", "whoop.csv");
+  const connected = hasRows(file);
+  const lastSync = cfg?.sourceSyncedAt?.whoop ?? fileMtimeISO(file);
+  const interval = intervalFor(cfg, "whoop");
+  const wc = cfg?.whoopCreds;
+  const hasCred = Boolean(wc?.email && (wc?.password || wc?.refreshToken));
+  return {
+    id: "whoop",
+    name: "WHOOP",
+    kind: "api",
+    detail: "per-minute HR, HRV, recovery, sleep, strain",
+    connected,
+    interval,
+    lastSync,
+    stale: false,
+    due: connected && hasCred && isDue(lastSync, interval),
+    syncEndpoint: "/api/import/whoop",
     live: true,
   };
 }
@@ -176,7 +203,7 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
  *  one-off dropped CSV is NOT a source — it lands in the inbox and, once
  *  structured, shows up in the daily table, never as a fake "connected" feed. */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
-  const out: SourceView[] = [githubRow(cfg, dir)];
+  const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
   for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
   for (const importer of FILE_IMPORTERS) out.push(fileSourceRow(cfg, dir, importer));
 
