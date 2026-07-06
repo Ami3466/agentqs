@@ -37,6 +37,8 @@ const FIXTURES: Record<string, string> = {
   todoist: "samples/todoist-completed.json",
   trakt: "samples/trakt-history.json",
   notion: "samples/notion-search.json",
+  deezer: "samples/deezer-history.json",
+  swarm: "samples/swarm-checkins.json",
 };
 
 // Split-credential sources take "<a>:<b>" in the single credential slot.

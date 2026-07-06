@@ -10,6 +10,8 @@ import { togglPlugin } from "./toggl";
 import { todoistPlugin } from "./todoist";
 import { traktPlugin } from "./trakt";
 import { notionPlugin } from "./notion";
+import { deezerPlugin } from "./deezer";
+import { swarmPlugin } from "./swarm";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
@@ -33,6 +35,8 @@ export const PLUGINS: ImporterPlugin[] = [
   todoistPlugin,
   traktPlugin,
   notionPlugin,
+  deezerPlugin,
+  swarmPlugin,
 ];
 
 export function pluginById(id: string): ImporterPlugin | undefined {

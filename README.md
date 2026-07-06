@@ -3,11 +3,9 @@
 <p align="center">It knows everything about you. It finds your patterns, helps you replicate what works, keeps you on your good habits, and gives you real clarity and awareness over your own life.</p>
 
 <p align="center">
-  <a href="https://flowengine.cloud/deploy/agentqs">
-    <img src="https://flowengine.cloud/button.svg" alt="Deploy on FlowEngine" height="40">
-  </a>
+  <a href="#run-locally"><b>Run locally →</b></a>
   &nbsp;·&nbsp;
-  <a href="#"><b>Read the story →</b></a>
+  <a href="#self-host-with-docker"><b>Self-host with Docker →</b></a>
 </p>
 
 ---
@@ -140,6 +138,10 @@ One daily record, fed from wherever your life happens.
 - **Fitbit** — steps per day (OAuth)
 - **Strava** — activities, distance & moving time (OAuth)
 - **Apple Health** — steps, heart rate, sleep, workouts, energy (on-device export — no API)
+- **Apple Watch** — workouts, heart rate, activity rings (via the Apple Health export — no API)
+- **Health Connect** — the Android health + fitness aggregate (on-device export — no API)
+- **Garmin** — activities, sleep, body battery (record-login automation — no open API)
+- **Withings** — weight, body composition, sleep (record-login automation)
 
 **Focus & work**
 - **RescueTime** — where your hours actually go
@@ -147,14 +149,19 @@ One daily record, fed from wherever your life happens.
 - **Toggl Track** — tracked entries & hours
 - **Todoist** — tasks completed per day
 - **Notion** — pages edited per day (integration token)
+- **Instapaper** — articles saved & read (record-login automation)
 - **Browsing** — what you read (local Chrome/Firefox/Safari history — no API)
 - **Screen Time** — per-app usage from your iPhone (local backup — no API)
 
 **Life**
 - **Google Calendar** — meetings, and how they land on your body
 - **Spotify** — tracks & minutes listened
+- **Deezer** — tracks played per day (OAuth access token)
 - **Last.fm** — scrobbles per day (API key + username)
 - **Trakt** — shows & movies watched
+- **Swarm** — check-ins per day (Foursquare OAuth token)
+- **Mastodon** — posts per day (record-login automation)
+- **Apple Weather** — daily conditions & temperature (record-login automation)
 - **WhatsApp / iMessage** — conversation history
 - **Location** — where you were (OwnTracks live, or Google Timeline)
 
@@ -239,9 +246,11 @@ generic `/api/import/[source]` route and the `SourceConnect` Data-tab row (paste
 credential → sync → sparkline + interval), one CLI, and the MCP `sync` tool:
 
 ```bash
-# RescueTime/Oura/Toggl/Todoist use an API key; the OAuth ones take an access token
+# RescueTime/Oura/Toggl/Todoist use an API key; the OAuth ones (Strava, Spotify,
+# Fitbit, Deezer, Swarm) take an access token
 npm run import:source -- --source rescuetime --credential <key> --rebuild
 npm run import:source -- --source strava --credential <token> --days 30 --rebuild
+npm run import:source -- --source deezer --credential <access_token> --rebuild
 
 # Last.fm and Trakt need two values in the one credential slot ("a:b")
 agentqs source connect lastfm "<api_key>:<username>" && agentqs sync lastfm

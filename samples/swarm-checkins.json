@@ -1,0 +1,14 @@
+{
+  "response": {
+    "checkins": {
+      "count": 5,
+      "items": [
+        { "id": "a1", "createdAt": 1782657000 },
+        { "id": "a2", "createdAt": 1782397800 },
+        { "id": "a3", "createdAt": 1782396000 },
+        { "id": "a4", "createdAt": 1781793000 },
+        { "id": "a5", "createdAt": 1781274600 }
+      ]
+    }
+  }
+}
