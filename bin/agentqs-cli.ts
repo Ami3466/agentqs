@@ -129,6 +129,20 @@ program
     }
   });
 
+// ---- whoop: the unofficial app login (email + password → token) -----------
+const whoop = program.command("whoop").description("WHOOP via the unofficial app login (per-minute HR)");
+
+whoop
+  .command("connect <email> <password>")
+  .description("store your WHOOP email + password (then: agentqs sync whoop)")
+  .action((email: string, password: string) => {
+    try {
+      out(core.whoopConnect(email, password), (d) => `Connected WHOOP as ${d.email}. Run: agentqs sync whoop`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
 // ---- source subcommands: connect / interval / file ------------------------
 const source = program.command("source").description("manage sources (connect, schedule, file import)");
 

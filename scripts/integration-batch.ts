@@ -5,7 +5,7 @@
  *   1. Four+ live sources feed one daily record: GitHub (commits) + the three
  *      new record-contract plugins — RescueTime, Google Calendar, Spotify — each
  *      run through the real fetch → normalize → merge → rebuild pipeline (offline,
- *      against the sample fixtures). WHOOP's stub adapter is exercised too.
+ *      against the sample fixtures). WHOOP rides its unofficial app-login pull.
  *   2. A cross-source question returns a grounded answer computed straight from
  *      the daily numbers (the keyless path), citing ≥2 sources.
  *
@@ -19,6 +19,7 @@ import path from "path";
 import { importPlugin, fixtureFetch } from "../src/lib/importers/plugin";
 import { PLUGINS } from "../src/lib/importers/registry";
 import { writeGithubRecord } from "../src/lib/importers/github";
+import { importWhoop, whoopFixtureFetch } from "../src/lib/importers/whoop";
 import { rebuild } from "../src/lib/record";
 import { readDailySummary } from "../src/lib/daily";
 import { readGrounding, groundedCrossSourceAnswer } from "../src/lib/grounding";
@@ -33,7 +34,6 @@ const FIXTURES: Record<string, string> = {
   rescuetime: "samples/rescuetime-daily.json",
   gcal: "samples/gcal-events.json",
   spotify: "samples/spotify-recent.json",
-  whoop: "samples/whoop-recovery.json",
 };
 
 async function main() {
@@ -43,7 +43,7 @@ async function main() {
   const from = "2026-06-01";
   const to = "2026-06-30";
 
-  console.log("\nSeeding one daily record from 4 live sources + a WHOOP stub…\n");
+  console.log("\nSeeding one daily record from 4 live sources + WHOOP (unofficial)…\n");
 
   // GitHub — its own writer, a dense commits/day series correlated with focus.
   const ghDays = [
@@ -58,7 +58,7 @@ async function main() {
   writeGithubRecord(recordDir, ghDays);
   check("GitHub commits written to record/daily/github.csv", fs.existsSync(path.join(recordDir, "daily", "github.csv")));
 
-  // The three new plugins (+ WHOOP stub) through the real import pipeline.
+  // The three single-credential plugins through the real import pipeline.
   for (const plugin of PLUGINS) {
     const body = JSON.parse(fs.readFileSync(path.resolve(FIXTURES[plugin.id]), "utf8"));
     const summary = await importPlugin(
@@ -72,6 +72,30 @@ async function main() {
       `${summary.daysWithData} days, ${summary.cells} cells, metrics: ${summary.metrics.join("/")}`,
     );
   }
+
+  // WHOOP through the UNOFFICIAL app login (email + password → token), offline.
+  const ws = await importWhoop({
+    creds: { email: "athlete@example.com", password: "secret" },
+    from,
+    to,
+    recordDir,
+    fetchImpl: whoopFixtureFetch({
+      cycles: [
+        { days: ["2026-06-02"], recovery: { score: 71, heartRateVariabilityRmssd: 0.061, restingHeartRate: 51 }, strain: { score: 13.2 }, sleep: { score: 90, qualityDuration: 27_900_000 } },
+        { days: ["2026-06-05"], recovery: { score: 44, heartRateVariabilityRmssd: 0.038, restingHeartRate: 58 }, strain: { score: 8.1 }, sleep: { score: 68, qualityDuration: 20_100_000 } },
+      ],
+      heartRate: [
+        { time: Date.parse("2026-06-05T08:00:00Z"), data: 61 },
+        { time: Date.parse("2026-06-05T08:01:00Z"), data: 64 },
+        { time: Date.parse("2026-06-05T08:02:00Z"), data: 132 },
+      ],
+    }),
+  });
+  check(
+    "WHOOP (unofficial app login) imported → daily/whoop.csv",
+    ws.cells > 0 && ws.metrics.includes("recovery"),
+    `${ws.daysWithData} days, ${ws.cells} cells, ${ws.minutes} min HR, metrics: ${ws.metrics.join("/")}`,
+  );
 
   // Rebuild the SQLite cache from the record (the source of truth).
   const r = rebuild({ recordDir, dbPath: dbFile });
@@ -88,7 +112,7 @@ async function main() {
     const stat = summary.sources.find((s) => s.source === id);
     check(`${id} has rows`, Boolean(stat && stat.rows > 0), stat ? `${stat.rows} rows` : "missing");
   }
-  check("WHOOP stub adapter also landed rows", sourceIds.includes("whoop"));
+  check("WHOOP (unofficial) also landed rows", sourceIds.includes("whoop"));
 
   console.log("\nShips-when 2 — a cross-source question returns a grounded answer");
   const g = readGrounding(dbFile);

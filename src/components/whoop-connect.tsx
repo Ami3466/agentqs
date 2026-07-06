@@ -1,26 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Check,
-  Eye,
-  EyeOff,
-  RefreshCw,
-  sourceIcon,
-  Spinner,
-  Trash,
-} from "@/components/icons";
+import { Check, Eye, EyeOff, RefreshCw, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
+import { Sparkline } from "@/components/sparkline";
 import { Badge, Button, Input, cn } from "@/components/ui";
 import { ago, type Interval } from "@/lib/sources";
 
 /**
- * Generic connect/sync row for a single-credential Tier-1 plugin source
- * (RescueTime · Google Calendar · Spotify). The same shape as GithubConnect, driven by
- * the source's own /api/import/<id> GET/POST: paste a credential → sync → headline
- * number + sparkline of the primary metric, an interval dropdown, and version-
- * driven refresh so a lazy auto-sync updates it. Kept generic so a new source is a
- * registry entry, not a new component.
+ * WHOOP connect/sync row — the differentiator, wired to the UNOFFICIAL app login.
+ * Two fields (email + password), not a single token: they POST to /api/import/whoop
+ * which exchanges them for a bearer token the WHOOP app way, then pulls per-minute
+ * heart rate + HRV + recovery + sleep + strain. Bespoke (like GitHub) because that
+ * two-field auth + the minute-level stream don't fit the single-credential
+ * SourceConnect. Recovery drives the sparkline; the captured minute count is shown.
  */
 
 interface Point {
@@ -28,54 +21,18 @@ interface Point {
   value: number;
 }
 interface Status {
-  id: string;
-  name: string;
-  detail: string;
-  live: boolean;
   connected: boolean;
+  email: string;
   hasCredential: boolean;
-  credentialLabel: string;
-  credentialPlaceholder: string;
-  primaryMetric: string;
-  unit: string;
   syncedAt: string | null;
   days: number;
   latest: number | null;
   average: number | null;
+  minutes: number;
   series: Point[];
 }
 
-/** Dependency-free bar sparkline of the primary metric, accent-coloured. */
-function Spark({ data }: { data: Point[] }) {
-  if (!data.length) return null;
-  const max = Math.max(1, ...data.map((d) => d.value));
-  const w = 4;
-  const gap = 2;
-  const h = 28;
-  return (
-    <div className="scrollbar-thin overflow-x-auto">
-      <svg
-        width={data.length * (w + gap)}
-        height={h}
-        className="text-accent"
-        role="img"
-        aria-label={`${data.length}-day history`}
-      >
-        {data.map((d, i) => {
-          const bh = Math.max(1, Math.round((d.value / max) * h));
-          return (
-            <rect key={d.date} x={i * (w + gap)} y={h - bh} width={w} height={bh} rx={1} fill="currentColor" opacity={d.value ? 0.9 : 0.25}>
-              <title>{`${d.date}: ${d.value}`}</title>
-            </rect>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-export function SourceConnect({
-  id,
+export function WhoopConnect({
   version = 0,
   interval = "off",
   due = false,
@@ -84,7 +41,6 @@ export function SourceConnect({
   onIntervalChange,
   onRemove,
 }: {
-  id: string;
   version?: number;
   interval?: Interval;
   due?: boolean;
@@ -92,37 +48,35 @@ export function SourceConnect({
   removing?: boolean;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
-}) {
+} = {}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
-  const [cred, setCred] = useState("");
-  const [showCred, setShowCred] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
-  // Cadence chosen AS PART OF connecting — defaults to Daily so a newly connected
-  // API source actually auto-syncs (Manual is still selectable here).
   const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
 
   async function loadStatus() {
-    const res = await fetch(`/api/import/${id}`);
+    const res = await fetch("/api/import/whoop");
     if (res.ok) setStatus((await res.json()) as Status);
   }
 
   useEffect(() => {
     void loadStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, id]);
+  }, [version]);
 
-  async function sync() {
+  async function sync(withCreds: boolean) {
     const wasConnected = Boolean(status?.connected);
     setBusy(true);
     setError("");
     setMsg("");
-    const res = await fetch(`/api/import/${id}`, {
+    const res = await fetch("/api/import/whoop", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(cred ? { credential: cred } : {}),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(withCreds ? { email, password } : {}),
     });
     setBusy(false);
     const data = await res.json().catch(() => ({}));
@@ -130,25 +84,19 @@ export function SourceConnect({
       setError(data.error || "Sync failed.");
       return;
     }
-    setCred("");
+    setPassword("");
     setOpen(false);
-    setMsg(`${data.days} day${data.days === 1 ? "" : "s"} of ${data.name} → ${data.dailyRows} daily rows.`);
-    // First-time connect → persist the cadence chosen in the connect form.
+    setMsg(
+      `${data.days} day${data.days === 1 ? "" : "s"} · ${data.minutes.toLocaleString()} minute HR samples → ${data.dailyRows} daily rows.`,
+    );
     if (!wasConnected) onIntervalChange?.(pendingInterval);
     await loadStatus();
     setTimeout(() => setMsg(""), 6000);
   }
 
-  const Icon = sourceIcon(id);
+  const Icon = sourceIcon("whoop");
   const connected = status?.connected;
-  const live = status?.live ?? true;
-  const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred);
-  const dayLabel = status ? `${status.days} day${status.days === 1 ? "" : "s"}` : "";
-  const headline = status
-    ? status.average != null
-      ? `${status.average} ${status.unit || status.primaryMetric} · ${dayLabel}`
-      : dayLabel
-    : "";
+  const canSyncNow = Boolean(status?.hasCredential);
 
   return (
     <div className="p-4">
@@ -158,19 +106,14 @@ export function SourceConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">{status?.name ?? id}</p>
+            <p className="truncate text-sm font-medium text-fg">WHOOP</p>
             <Badge>api</Badge>
-            {!live ? (
-              <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-                stub · OAuth soon
-              </span>
-            ) : null}
             {connected ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
                 <Check width={12} height={12} /> connected
               </span>
             ) : null}
-            {live && connected && interval !== "off" ? (
+            {connected && interval !== "off" ? (
               <span
                 className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-fg"
                 title={due ? "Overdue — auto-syncs when the Data tab opens" : "Scheduled auto-sync"}
@@ -181,11 +124,13 @@ export function SourceConnect({
             ) : null}
           </div>
           <p className="truncate text-xs text-muted-fg">
-            {connected ? `${headline} · synced ${ago(status?.syncedAt ?? null)}` : status?.detail ?? ""}
+            {connected
+              ? `${status?.days} days · ${status?.minutes?.toLocaleString() ?? 0} min HR · synced ${ago(status?.syncedAt ?? null)}`
+              : "per-minute HR, HRV, recovery, sleep, strain — unofficial app login"}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {live && connected && onIntervalChange ? (
+          {connected && onIntervalChange ? (
             <div className="flex items-center gap-1.5">
               {savingInterval ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
               <IntervalSelect value={interval} onChange={onIntervalChange} disabled={savingInterval} />
@@ -193,7 +138,7 @@ export function SourceConnect({
           ) : null}
           {connected ? (
             <>
-              <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
+              <Button size="sm" variant="secondary" onClick={() => void sync(false)} disabled={busy}>
                 {busy ? <Spinner width={14} height={14} /> : null}
                 {busy ? "Syncing…" : "Sync"}
               </Button>
@@ -214,7 +159,7 @@ export function SourceConnect({
             <Button
               size="sm"
               variant="primary"
-              onClick={() => (canSyncNow ? void sync() : setOpen((v) => !v))}
+              onClick={() => (canSyncNow ? void sync(false) : setOpen((v) => !v))}
               disabled={busy}
             >
               {busy ? <Spinner width={14} height={14} /> : null}
@@ -226,38 +171,56 @@ export function SourceConnect({
 
       {connected && status?.series.length ? (
         <div className="mt-3 pl-12">
-          <Spark data={status.series} />
+          <Sparkline
+            points={status.series}
+            variant="bar"
+            ariaLabel={`${status.series.length}-day recovery history`}
+            title={(p) => `${p.date}: ${p.value}% recovery`}
+          />
         </div>
       ) : null}
 
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
           <p className="text-xs text-muted-fg">
-            Paste a {status?.credentialLabel ?? "credential"}. Stored in your data dir; used only to
-            read {status?.name ?? "this source"}.
+            Your WHOOP email + password. Exchanged for a token the app way (no official API);
+            stored in your data dir, used only to read your data. Re-used only to re-auth when the
+            token expires.
           </p>
+          <Input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@email.com"
+            autoComplete="off"
+          />
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Input
-                type={showCred ? "text" : "password"}
-                value={cred}
-                onChange={(e) => setCred(e.target.value)}
-                placeholder={status?.credentialPlaceholder ?? "credential"}
+                type={showPw ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="WHOOP password"
                 autoComplete="off"
                 className="pr-10 font-mono"
               />
               <button
                 type="button"
-                onClick={() => setShowCred((v) => !v)}
+                onClick={() => setShowPw((v) => !v)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
-                aria-label={showCred ? "Hide credential" : "Show credential"}
+                aria-label={showPw ? "Hide password" : "Show password"}
               >
-                {showCred ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
+                {showPw ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
               </button>
             </div>
-            <Button size="md" variant="primary" onClick={sync} disabled={busy || !cred}>
+            <Button
+              size="md"
+              variant="primary"
+              onClick={() => void sync(true)}
+              disabled={busy || !email || !password}
+            >
               {busy ? <Spinner width={16} height={16} /> : null}
-              {busy ? "Syncing…" : "Connect & sync"}
+              {busy ? "Connecting…" : "Connect & sync"}
             </Button>
           </div>
           <div className="flex items-center gap-2">

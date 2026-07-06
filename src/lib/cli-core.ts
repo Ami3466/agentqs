@@ -27,7 +27,8 @@ import { readJournal } from "./journal";
 import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken } from "./importers/github";
-import { importPlugin, resolveCredential, windowDays } from "./importers/plugin";
+import { importWhoop, whoopFixtureFetch, whoopHrDir, type WhoopCreds } from "./importers/whoop";
+import { importPlugin, resolveCredential, windowDays, type FetchLike } from "./importers/plugin";
 import { pluginById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
@@ -131,6 +132,19 @@ export function connectSource(id: string, credential: string): { id: string; sav
   return { id, saved: true };
 }
 
+/** Connect WHOOP via the unofficial app login — stores email + password (config
+ *  0600, never committed); tokens are minted + rotated on the first sync. Two
+ *  fields, so it's separate from the single-credential connectSource. */
+export function whoopConnect(email: string, password: string): { email: string; saved: boolean } {
+  if (!email?.trim() || !password?.trim()) {
+    throw new Error("WHOOP needs both an email and a password.");
+  }
+  const cfg = requireConfig();
+  cfg.whoopCreds = { ...(cfg.whoopCreds ?? {}), email: email.trim(), password: password.trim() };
+  writeConfig(cfg);
+  return { email: email.trim(), saved: true };
+}
+
 /** Set a source's sync cadence — this is "set up an automated import". `off`,
  *  `hourly`, `daily`, `weekly`. API sources auto-sync when due; manual sources
  *  badge stale when overdue. */
@@ -150,7 +164,11 @@ export function setInterval(id: string, interval: string): { id: string; interva
 export function disconnectSource(id: string): { id: string; removed: boolean; dailyRows: number } {
   const automation = isAutomation(id);
   const known =
-    automation || id === "github" || Boolean(pluginById(id)) || Boolean(fileImporterById(id));
+    automation ||
+    id === "github" ||
+    id === "whoop" ||
+    Boolean(pluginById(id)) ||
+    Boolean(fileImporterById(id));
   if (!known) {
     throw new Error(
       `Unknown source "${id}". Try: github, ${[...PLUGINS.map((p) => p.id), ...FILE_IMPORTERS.map((f) => f.id)].join(", ")}`,
@@ -172,6 +190,14 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
   if (id === "github") {
     delete cfg.githubToken;
     delete cfg.githubSyncedAt;
+  } else if (id === "whoop") {
+    delete cfg.whoopCreds;
+    if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt.whoop;
+    try {
+      fs.rmSync(whoopHrDir(rDir), { recursive: true, force: true }); // per-minute HR files
+    } catch {
+      /* non-fatal */
+    }
   } else {
     if (cfg.sourceCreds) delete cfg.sourceCreds[id];
     if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
@@ -250,9 +276,34 @@ export async function syncSource(opts: {
     };
   }
 
+  if (opts.id === "whoop") {
+    let fetchImpl: FetchLike | undefined;
+    let creds: WhoopCreds | undefined = cfg?.whoopCreds;
+    if (opts.fixture) {
+      const data = JSON.parse(fs.readFileSync(opts.fixture, "utf8"));
+      fetchImpl = whoopFixtureFetch(data);
+      if (!creds?.email) creds = { email: "fixture@whoop", password: "x" };
+    }
+    if (!fetchImpl && !(creds?.email && (creds.password || creds.refreshToken))) {
+      throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
+    }
+    const s = await importWhoop({ creds: creds!, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    const c2 = readConfig();
+    if (c2) {
+      c2.whoopCreds = s.creds;
+      c2.sourceSyncedAt = { ...(c2.sourceSyncedAt ?? {}), whoop: now };
+      writeConfig(c2);
+    }
+    return {
+      id: "whoop", name: "WHOOP", from: win.from, to: win.to,
+      days: s.daysWithData, metrics: s.metrics, cells: s.cells, dailyRows, syncedAt: now,
+    };
+  }
+
   const plugin = pluginById(opts.id);
   if (!plugin) {
-    throw new Error(`Unknown API source "${opts.id}". Try: github, ${PLUGINS.map((p) => p.id).join(", ")}`);
+    throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const credential = resolveCredential(plugin, opts.credential, cfg);
   const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
@@ -275,12 +326,14 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
   const synced: SyncResult[] = [];
   const skipped: { id: string; reason: string }[] = [];
   const cfg = readConfig();
-  const candidates = ["github", ...PLUGINS.filter((p) => p.live).map((p) => p.id)];
+  const candidates = ["github", "whoop", ...PLUGINS.filter((p) => p.live).map((p) => p.id)];
   for (const id of candidates) {
     const hasCred =
       id === "github"
         ? Boolean(resolveGithubToken())
-        : Boolean(resolveCredential(pluginById(id)!, undefined, cfg));
+        : id === "whoop"
+          ? Boolean(cfg?.whoopCreds?.email && (cfg.whoopCreds.password || cfg.whoopCreds.refreshToken))
+          : Boolean(resolveCredential(pluginById(id)!, undefined, cfg));
     if (!hasCred) {
       skipped.push({ id, reason: "no credential" });
       continue;

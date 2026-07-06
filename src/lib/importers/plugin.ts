@@ -3,9 +3,9 @@ import { mergeDailyCsv, type DailyMergeResult } from "../record";
 import { recordDir } from "../paths";
 
 /**
- * Record-contract importer plugins — the shared interface every Tier-1 API source
- * lives behind (RescueTime, Google Calendar, Spotify, WHOOP). Same shape GitHub
- * follows, generalized:
+ * Record-contract importer plugins — the shared interface the single-credential
+ * Tier-1 API sources live behind (RescueTime, Google Calendar, Spotify). Same
+ * shape GitHub follows, generalized (WHOOP is bespoke — unofficial app login):
  *
  *   credential → fetch a window → normalize into a wide daily table
  *   ({header:[date, ...metrics], rows}) → merge into record/daily/<id>.csv → rebuild.
@@ -40,7 +40,7 @@ export interface ImporterPlugin {
   id: string; // source stem → record/daily/<id>.csv
   name: string; // display name
   detail: string; // one-line description for the Data tab
-  /** api sources are auto-syncable; a stub adapter (WHOOP, no in-run OAuth) is `false`. */
+  /** api sources are auto-syncable; a not-yet-wired adapter would be `false`. */
   live: boolean;
   /** Whether a credential is required to sync (all Tier-1 APIs need one). */
   requiresCredential: boolean;

@@ -4,6 +4,7 @@ import type { JournalView } from "./journal";
 import type { Interval } from "./sources";
 import type { Skill } from "./skills";
 import type { AutomationCreds, AutomationRecipe } from "./automation-types";
+import type { WhoopCreds } from "./importers/whoop";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -27,6 +28,7 @@ export interface AppConfig {
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
+  whoopCreds?: WhoopCreds; // WHOOP unofficial app login: email + password + cached/rotated tokens
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.

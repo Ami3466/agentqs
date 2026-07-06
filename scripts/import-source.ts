@@ -2,8 +2,10 @@
 /**
  * agentqs import:source — pull a Tier-1 plugin source into the record.
  *
- * One CLI for every record-contract plugin (RescueTime · Google Calendar ·
- * Spotify · WHOOP). Flow: credential → fetch → normalize → merge
+ * One CLI for every single-credential record-contract plugin (RescueTime ·
+ * Google Calendar · Spotify). WHOOP uses the unofficial app login (two fields +
+ * a per-minute stream), so it has its own path: `agentqs whoop connect` then
+ * `agentqs sync whoop`. Flow: credential → fetch → normalize → merge
  * record/daily/<source>.csv → optionally rebuild the SQLite cache.
  *
  *   tsx scripts/import-source.ts --source rescuetime --credential <key> --rebuild
@@ -14,7 +16,7 @@
  * Credential precedence: --credential → <SOURCE>_TOKEN/KEY env → saved config.
  *
  * Flags:
- *   --source <id>     rescuetime | gcal | spotify | whoop   (required)
+ *   --source <id>     rescuetime | gcal | spotify   (required)
  *   --credential <c>  API key / OAuth access token
  *   --days <n>        trailing window length in days (default: 90)
  *   --from <date>     window start YYYY-MM-DD (overrides --days)

@@ -74,7 +74,7 @@ export async function startMcpServer(): Promise<void> {
     "sync",
     {
       title: "Sync a source now",
-      description: "Run an API source (github, rescuetime, gcal, spotify, whoop). Omit source to sync all connected ones.",
+      description: "Run an API source (github, whoop, rescuetime, gcal, spotify). Omit source to sync all connected ones.",
       inputSchema: {
         source: z.string().optional(),
         credential: z.string().optional(),
@@ -123,6 +123,17 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { source: z.string(), credential: z.string() },
     },
     async ({ source, credential }) => guard(() => core.connectSource(source, credential)),
+  );
+
+  server.registerTool(
+    "whoop_connect",
+    {
+      title: "Connect WHOOP (unofficial app login)",
+      description:
+        "Store your WHOOP email + password to pull per-minute HR + HRV + recovery + sleep + strain. Then `sync whoop`.",
+      inputSchema: { email: z.string(), password: z.string() },
+    },
+    async ({ email, password }) => guard(() => core.whoopConnect(email, password)),
   );
 
   server.registerTool(
