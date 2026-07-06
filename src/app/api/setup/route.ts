@@ -2,11 +2,15 @@ import { NextResponse } from "next/server";
 import { hashPassword, newSecret } from "@/lib/auth";
 import { configExists, writeConfig, type AppConfig } from "@/lib/config";
 import { setSessionCookie } from "@/lib/session";
-import { DEFAULT_MODEL, modelsForProvider } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * First-run signup: username + password, nothing else. The AI provider, key and
+ * model are added later in Settings (or from the CLI) — signup stays a two-field
+ * wall so a new instance is live in seconds.
+ */
 export async function POST(req: Request) {
   if (configExists()) {
     return NextResponse.json({ error: "Already set up." }, { status: 409 });
@@ -15,9 +19,6 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const username = String(body?.username ?? "").trim();
   const password = String(body?.password ?? "");
-  const llmProvider = String(body?.llmProvider ?? "");
-  const llmKey = String(body?.llmKey ?? "");
-  let model = String(body?.model ?? "");
 
   if (username.length < 2) {
     return NextResponse.json({ error: "Username too short." }, { status: 400 });
@@ -28,24 +29,15 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  if (llmProvider) {
-    const models = modelsForProvider(llmProvider);
-    if (!models.length) {
-      return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
-    }
-    if (!models.includes(model)) model = models[0] || DEFAULT_MODEL;
-  } else {
-    model = "";
-  }
 
   const secret = process.env.SESSION_SECRET || newSecret();
   const cfg: AppConfig = {
     username,
     passwordHash: hashPassword(password),
     sessionSecret: secret,
-    llmProvider,
-    llmKey,
-    model,
+    llmProvider: "",
+    llmKey: "",
+    model: "",
     theme: "system",
     createdAt: new Date().toISOString(),
   };

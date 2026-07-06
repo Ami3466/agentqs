@@ -7,6 +7,7 @@ import { recordDir } from "@/lib/paths";
 import { parseCsv, rebuild } from "@/lib/record";
 import { pluginById } from "@/lib/importers/registry";
 import { importPlugin, resolveCredential, windowDays, type ImporterPlugin } from "@/lib/importers/plugin";
+import { wipeDemoOnImport } from "@/lib/demo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -90,6 +91,8 @@ export async function POST(req: Request, { params }: { params: { source: string 
   }
 
   const { from, to } = windowDays(body.days && body.days > 0 ? body.days : 90);
+
+  wipeDemoOnImport(); // first real import clears the generic demo record
 
   let summary;
   try {

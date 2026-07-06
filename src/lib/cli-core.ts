@@ -46,7 +46,7 @@ import { runAutomation, type AutomationRunResult } from "./automation-run";
 import type { AutomationCreds, PublicAutomation } from "./automation-types";
 import { composeReply, type ComposedReply } from "./reply";
 import { listSkills, removeSkill, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
-import { modelsForProvider } from "./models";
+import { isProvider } from "./models";
 import type { Skill } from "./skills";
 import type { LlmMessage } from "./llm";
 
@@ -479,17 +479,16 @@ export function configSet(key: string, value: string): { key: string; value: str
   const cfg = requireConfig();
   switch (key as ConfigKey) {
     case "provider": {
-      if (value && !modelsForProvider(value).length) throw new Error(`Unknown provider "${value}".`);
+      if (value && !isProvider(value)) throw new Error(`Unknown provider "${value}".`);
       cfg.llmProvider = value;
       if (!value) cfg.model = "";
-      else if (!modelsForProvider(value).includes(cfg.model)) cfg.model = modelsForProvider(value)[0] ?? "";
       break;
     }
     case "model": {
-      const models = modelsForProvider(cfg.llmProvider);
       if (!cfg.llmProvider) throw new Error("Set a provider first: agentqs config set provider anthropic");
-      if (!models.includes(value)) throw new Error(`"${value}" isn't a ${cfg.llmProvider} model. Try: ${models.join(", ")}`);
-      cfg.model = value;
+      // Model ids are live — accept any id the provider serves (see Settings → AI provider).
+      if (!value.trim()) throw new Error("Give a model id (see Settings → AI provider for the live list).");
+      cfg.model = value.trim();
       break;
     }
     case "key":

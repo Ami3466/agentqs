@@ -29,6 +29,8 @@ export interface AppConfig {
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
   whoopCreds?: WhoopCreds; // WHOOP unofficial app login: email + password + cached/rotated tokens
+  apiKey?: string; // bearer token for the HTTP API over the wire (generated in Connect)
+  demoSeeded?: boolean; // generic demo data is loaded; auto-wiped on the first real import
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.

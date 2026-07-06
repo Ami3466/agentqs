@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, Inbox, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
+import { Check, ChevronDown, Inbox, Plus, Send, Sparkles, Spinner, Terminal } from "@/components/icons";
 import { Sparkline } from "@/components/sparkline";
 import { VoiceSession } from "@/components/voice-session";
 import { Card, cn } from "@/components/ui";
@@ -52,7 +52,7 @@ const SKILL_KEY = "agentqs.skill";
 
 export function Chat() {
   const router = useRouter();
-  const [skill, setSkill] = useState(DEFAULT_SKILL);
+  const [skill, setSkill] = useState(""); // no mentor chosen by default
   // Built-ins + custom mentors (added from the CLI / MCP / API). Falls back to the
   // built-in list until /api/skills responds, so the chip renders instantly.
   const [skills, setSkills] = useState<Skill[]>(SKILLS);
@@ -72,6 +72,7 @@ export function Chat() {
 
   const mode = modeOf(input);
   const resolve = (id: string): Skill => skills.find((s) => s.id === id) ?? skills[0] ?? SKILLS[0];
+  const chosen = skill !== "" && skills.some((s) => s.id === skill);
   const activeSkill = resolve(skill);
 
   const filtered = useMemo(() => filterCommands(input), [input]);
@@ -281,6 +282,9 @@ export function Chat() {
 
   async function sendChat(raw: string) {
     const text = raw.trim();
+    // No mentor picked yet → fall to the first and remember it, so the reply has a voice.
+    const useSkill = chosen ? skill : skills[0]?.id ?? DEFAULT_SKILL;
+    if (!chosen) chooseSkill(useSkill);
     const history = messages
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.text }));
@@ -291,14 +295,14 @@ export function Chat() {
 
     // Drop in an empty assistant bubble the stream fills token-by-token.
     const aid = nid();
-    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", skill, streaming: true }]);
+    setMessages((prev) => [...prev, { id: aid, role: "assistant", text: "", skill: useSkill, streaming: true }]);
     setStreamingId(aid);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, skill, history }),
+        body: JSON.stringify({ message: text, skill: useSkill, history }),
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
@@ -413,7 +417,7 @@ export function Chat() {
       ? "Memo — saved to your inbox, no reply"
       : mode === "command"
         ? "Command — /sync · /structure · /new · /skill"
-        : `Message your ${activeSkill.name.toLowerCase()}…  ( >> memo · / commands )`;
+        : `Message your ${chosen ? activeSkill.name.toLowerCase() : "mentor"}…  ( >> memo · / commands )`;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
@@ -540,22 +544,22 @@ export function Chat() {
                   : "border-input focus-within:border-ring/60",
             )}
           >
-            {/* skill chip */}
-            <div className="relative" ref={skillRef}>
+            {/* mentor chip */}
+            <div className="relative" ref={skillRef} id="tour-mentor">
               <button
                 type="button"
                 onClick={() => setSkillOpen((v) => !v)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-muted"
-                title="Switch persona"
+                title="Choose your mentor"
               >
-                <Sparkles width={14} height={14} className="text-accent" />
-                {activeSkill.name}
+                <span className={cn("h-1.5 w-1.5 rounded-full", chosen ? "bg-fg" : "bg-muted-fg/40")} />
+                {chosen ? activeSkill.name : "Choose mentor"}
                 <ChevronDown width={13} height={13} className={cn("transition-transform", skillOpen && "rotate-180")} />
               </button>
               {skillOpen ? (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-card shadow-xl">
                   <p className="border-b border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-                    Persona
+                    Mentor
                   </p>
                   {skills.map((s) => (
                     <button
@@ -564,7 +568,7 @@ export function Chat() {
                       onClick={() => chooseSkill(s.id)}
                       className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
                     >
-                      <span className="mt-0.5 w-4 shrink-0 text-accent">
+                      <span className="mt-0.5 w-4 shrink-0 text-fg">
                         {s.id === skill ? <Check width={14} height={14} /> : null}
                       </span>
                       <span className="min-w-0">
@@ -573,6 +577,16 @@ export function Chat() {
                       </span>
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSkillOpen(false);
+                      router.push("/settings");
+                    }}
+                    className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-sm text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+                  >
+                    <Plus width={14} height={14} /> Add a mentor · manage in Settings
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -615,8 +629,8 @@ export function Chat() {
             ) : (
               <>
                 <b className="font-medium text-fg">Enter</b> to send · <code className="font-mono">&gt;&gt;</code>{" "}
-                memo · <code className="font-mono">/</code> commands · persona:{" "}
-                <b className="font-medium text-fg">{activeSkill.name}</b>
+                memo · <code className="font-mono">/</code> commands · mentor:{" "}
+                <b className="font-medium text-fg">{chosen ? activeSkill.name : "none"}</b>
               </>
             )}
           </p>
