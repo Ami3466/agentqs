@@ -643,5 +643,3 @@ agentqs is source-available under the
 share it — for any noncommercial purpose. You may **not** sell it, offer it as a
 paid product or service, or use it commercially. For a commercial license, open
 an issue.
-
-Full build plan in [PLAN.md](PLAN.md).
