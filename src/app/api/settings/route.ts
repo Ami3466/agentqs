@@ -32,13 +32,16 @@ function keepOrSet(incoming: unknown, prev: string | undefined): string | undefi
   return prev;
 }
 
-/** Coerce untrusted per-channel reply prefs (mode / skill / model override). */
+/** Coerce untrusted per-channel reply prefs (mode / skill / model override).
+ *  Merges over the stored map: a channel present in the payload is replaced whole
+ *  (so the form can clear a skill), a channel absent keeps its stored prefs — a
+ *  partial API/CLI update can't silently flip a log-only channel back to AI. */
 function sanitizeChannelReplies(
   input: unknown,
   prev: Record<string, ChannelReplyPrefs> | undefined,
 ): Record<string, ChannelReplyPrefs> | undefined {
   if (!input || typeof input !== "object") return prev;
-  const out: Record<string, ChannelReplyPrefs> = {};
+  const out: Record<string, ChannelReplyPrefs> = { ...(prev ?? {}) };
   for (const [channel, raw] of Object.entries(input as Record<string, unknown>)) {
     if (!raw || typeof raw !== "object" || !/^[a-z0-9-]{1,30}$/.test(channel)) continue;
     const v = raw as Record<string, unknown>;

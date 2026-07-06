@@ -29,6 +29,7 @@ export function JournalSearch() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [ran, setRan] = useState("");
+  const [disabled, setDisabled] = useState(false); // embeddings turned off in Settings
 
   async function run() {
     const query = q.trim();
@@ -48,6 +49,7 @@ export function JournalSearch() {
       } else {
         setHits(Array.isArray(data.hits) ? (data.hits as Hit[]) : []);
         setRan(query);
+        setDisabled(Boolean(data.disabled));
       }
     } catch {
       setErr("Could not reach search.");
@@ -132,7 +134,9 @@ export function JournalSearch() {
             ))}
           </div>
         ) : (
-          <p className="mt-2 px-1 text-xs text-muted-fg">No matches.</p>
+          <p className="mt-2 px-1 text-xs text-muted-fg">
+            {disabled ? "Semantic search is turned off in Settings — re-enable it to search by meaning." : "No matches."}
+          </p>
         )
       ) : null}
     </div>

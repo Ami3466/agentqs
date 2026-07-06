@@ -43,10 +43,13 @@ export async function POST(req: Request) {
     { text, source: body.source || "memo", kind: body.kind, meta: body.meta },
     { recordDir: recordDir() },
   );
-  rebuild({ recordDir: recordDir() });
+  // Auto-structure first: when it merges, structurePending rebuilds the cache
+  // itself — rebuilding here too would run the whole derivation twice per capture.
   const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
+  if (!auto || auto.structured === 0) rebuild({ recordDir: recordDir() });
 
-  const pending = readRecord(recordDir()).inbox.filter((i) => i.status === "pending").length;
+  const pending =
+    auto?.pending ?? readRecord(recordDir()).inbox.filter((i) => i.status === "pending").length;
   return NextResponse.json({
     ok: true,
     id: item.id,

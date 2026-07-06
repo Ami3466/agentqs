@@ -293,7 +293,10 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     embedding: {
       mode: emb?.mode === "api" ? "api" : "local",
       enabled: embeddingEnabled(cfg),
-      autoIndex: autoIndexEnabled(cfg),
+      // The RAW stored flag, not autoIndexEnabled() — the settings form round-trips
+      // this value, and the derived (enabled && autoIndex) would persist a false
+      // the user never chose after toggling embeddings off and back on.
+      autoIndex: emb?.autoIndex !== false,
       model: emb?.model || "",
       hasKey: Boolean(linkedApiKey(cfg, emb?.providerId, emb?.apiKey)),
       providerId: emb?.providerId || "",

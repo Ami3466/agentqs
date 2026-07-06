@@ -11,7 +11,7 @@ import { findSimilarImages, photoContext } from "./photos";
 import { fallbackModel, type ResolvedLlm } from "./models";
 import { appendInboxItem, rebuild } from "./record";
 import { recordDir } from "./paths";
-import { structurePending } from "./structure-run";
+import { autoStructureNewItem, structurePending } from "./structure-run";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -227,9 +227,12 @@ export function mentorTools(dbFile: string, used: Used) {
       const t = text.trim();
       if (!t) return { error: "Empty memo." };
       const rDir = recordDir();
-      appendInboxItem({ text: t, source: "chat" }, { recordDir: rDir });
-      rebuild({ recordDir: rDir });
-      return { saved: true };
+      const item = appendInboxItem({ text: t, source: "chat" }, { recordDir: rDir });
+      // Parity with `//` memos: auto-structure when the Settings toggle is on
+      // (structurePending rebuilds when it merges — rebuild only otherwise).
+      const auto = await autoStructureNewItem(item.id);
+      if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
+      return { saved: true, structured: (auto?.structured ?? 0) > 0 };
     },
   });
 

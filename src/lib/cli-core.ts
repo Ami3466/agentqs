@@ -34,6 +34,7 @@ import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, structurePending } from "./structure-run";
+import { wipeDemoOnImport } from "./demo";
 import {
   isAutomation,
   listPublicAutomations,
@@ -424,6 +425,9 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
   }
   if (text == null || text.trim() === "") throw new Error("Nothing to import — pass a file or --text.");
 
+  // A real import clears the demo record BEFORE merging, so real rows never land
+  // in demo CSVs that a later wipe would delete (structurePending wipes for prose).
+  wipeDemoOnImport();
   const rDir = recordDir();
   const item = appendInboxItem(
     { text, source: "drop", kind: "file", meta: hint ? { filename: hint } : null },
@@ -436,7 +440,16 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
     const source = sourceName(hint, "import");
     const merge = mergeDailyCsv(rDir, source, { header: structured.header, rows: structured.rows });
     updateInboxItems(
-      [{ id: item.id, status: "structured", meta: { filename: hint, via: "csv", source, cells: merge.cells } }],
+      [{
+        id: item.id,
+        status: "structured",
+        // Same meta shape as structurePending — `applied` lets the Log's Reject
+        // revert this import's cells, exactly like a GUI-structured drop.
+        meta: {
+          filename: hint, via: "csv", source, cells: merge.cells,
+          metrics: merge.metrics, structuredAt: new Date().toISOString(), applied: merge.applied,
+        },
+      }],
       { recordDir: rDir },
     );
     const dailyRows = rebuild({ recordDir: rDir }).daily;
@@ -448,11 +461,11 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
     };
   }
 
-  rebuild({ recordDir: rDir });
-
   // Auto-structure (Settings): prose skips the pending queue via the LLM route.
+  // Runs before the rebuild — structurePending rebuilds itself when it merges.
   const auto = await autoStructureNewItem(item.id);
   const autoHit = auto?.results.find((r) => r.id === item.id && r.status === "structured");
+  if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
   if (auto && autoHit) {
     return {
       inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source: autoHit.source,
