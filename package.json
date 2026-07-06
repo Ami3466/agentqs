@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node .next/standalone/server.js",
+    "start": "next start",
     "lint": "next lint",
     "cli": "tsx bin/agentqs-cli.ts",
     "mcp": "tsx bin/agentqs-cli.ts serve --mcp",
