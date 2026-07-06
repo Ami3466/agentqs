@@ -10,7 +10,6 @@ import {
   blobToVector,
   cosine,
   embed,
-  embedBatch,
   vectorToBlob,
 } from "./embed";
 
@@ -41,11 +40,6 @@ interface VecDb {
   vec: boolean; // did the sqlite-vec extension load?
 }
 
-/** Warn at most once per process that the sqlite-vec extension didn't load, so a
- *  silent degrade to the JS fallback can't hide on an exotic host. We still fall back
- *  (the feature keeps working, a hair slower), but the reason is now on stderr. */
-let vecLoadWarned = false;
-
 /** Open a vec-index connection, loading the sqlite-vec extension when available.
  *  Uses the default rollback journal (not WAL) so a build leaves no -wal/-shm
  *  sidecars to rename around. */
@@ -56,17 +50,8 @@ function openVec(file: string): VecDb {
     sqliteVec.load(db);
     db.prepare("SELECT vec_version()").get();
     vec = true;
-  } catch (e) {
-    // Fall back to JS cosine over the stored BLOBs, but never silently. Surface WHY
-    // the loadable extension failed so a degraded backend is diagnosable, not invisible.
-    vec = false;
-    if (!vecLoadWarned) {
-      vecLoadWarned = true;
-      console.warn(
-        `[embeddings] sqlite-vec extension failed to load. Falling back to the slower ` +
-          `JS-cosine backend. Reason: ${(e as Error).message}`,
-      );
-    }
+  } catch {
+    vec = false; // fall back to JS cosine over the stored BLOBs
   }
   return { db, vec };
 }
@@ -139,9 +124,7 @@ export interface BuildResult {
  * over the target so a crash mid-build can't leave a half-written index. Stamps the
  * model id + record hash so `ensureIndex` can tell when it's stale.
  */
-export async function buildIndex(
-  opts: { recordDir?: string; vecFile?: string } = {},
-): Promise<BuildResult> {
+export function buildIndex(opts: { recordDir?: string; vecFile?: string } = {}): BuildResult {
   const rDir = opts.recordDir ?? recordDirFor();
   const target = opts.vecFile ?? vecPath();
   // Unique temp name so two concurrent first-run builds can't clobber each other.
@@ -150,10 +133,6 @@ export async function buildIndex(
 
   const items = collectItems(rDir);
   const hash = recordHash(rDir);
-
-  // Embed everything up front (async, real model) — a better-sqlite3 transaction must
-  // run synchronously, so all vectors are computed BEFORE the write below.
-  const vectors = await embedBatch(items.map((it) => it.text));
 
   const { db, vec } = openVec(tmp);
   try {
@@ -168,7 +147,7 @@ export async function buildIndex(
 
     const insertAll = db.transaction((rows: IndexItem[]) => {
       rows.forEach((it, i) => {
-        const blob = vectorToBlob(vectors[i]);
+        const blob = vectorToBlob(embed(it.text));
         insItem.run(i, it.ref, it.kind, it.date, it.text, blob);
         insVec?.run(BigInt(i), blob);
       });
@@ -239,9 +218,7 @@ export function indexStatus(opts: { recordDir?: string; vecFile?: string } = {})
 
 /** Build the index on first use and whenever the record/model changes. This is the
  *  "default-on, background-index on first run" behaviour — callers just call it. */
-export async function ensureIndex(
-  opts: { recordDir?: string; vecFile?: string } = {},
-): Promise<BuildResult | null> {
+export function ensureIndex(opts: { recordDir?: string; vecFile?: string } = {}): BuildResult | null {
   const status = indexStatus(opts);
   if (status.built && !status.stale) return null;
   return buildIndex(opts);
@@ -276,17 +253,17 @@ export interface SearchOptions {
  * key — the local model + sqlite-vec do all the work. Returns [] when the record has
  * no embeddable text yet.
  */
-export async function semanticSearch(query: string, opts: SearchOptions = {}): Promise<SemanticHit[]> {
+export function semanticSearch(query: string, opts: SearchOptions = {}): SemanticHit[] {
   const q = query.trim();
   if (!q) return [];
   const file = opts.vecFile ?? vecPath();
   const limit = Math.max(1, Math.min(opts.limit ?? 5, 25));
   const minScore = opts.minScore ?? 0.05;
 
-  if (opts.ensure !== false) await ensureIndex({ recordDir: opts.recordDir, vecFile: file });
+  if (opts.ensure !== false) ensureIndex({ recordDir: opts.recordDir, vecFile: file });
   if (!fs.existsSync(file)) return [];
 
-  const qvec = await embed(q);
+  const qvec = embed(q);
   const isZero = qvec.every((x) => x === 0);
   if (isZero) return [];
 
@@ -411,13 +388,13 @@ function niceDate(iso: string): string {
  * local index — no AI key. Returns null when there's nothing embeddable yet or no
  * match cleared the bar, so the caller can fall through to its other paths.
  */
-export async function answerRecall(
+export function answerRecall(
   message: string,
   history?: { role: string; content: string }[],
   opts: SearchOptions = {},
-): Promise<RecallAnswer | null> {
+): RecallAnswer | null {
   const query = recallQueryText(message, history);
-  const hits = await semanticSearch(query, { ...opts, limit: opts.limit ?? 5 });
+  const hits = semanticSearch(query, { ...opts, limit: opts.limit ?? 5 });
   if (!hits.length) return null;
 
   const kinds = new Set(hits.map((h) => (h.kind === "session" ? "sessions" : "memos")));

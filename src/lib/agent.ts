@@ -7,7 +7,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { openReadonly } from "./db";
 import { semanticSearch } from "./embeddings";
-import { pickModel } from "./models";
+import { fallbackModel } from "./models";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -21,24 +21,17 @@ import type { LlmMessage } from "./llm";
  *   - search_notes — FTS5 keyword search over memos + past sessions (qualitative
  *                    context, never the daily numbers).
  *
- * The mentor (mentor / therapist / coach / custom) is the system prompt; a compact
- * schema catalog tells the model what's queryable so it can decide the SQL itself. Every
+ * The persona (mentor / therapist / coach) is the system prompt; a compact schema
+ * catalog tells the model what's queryable so it can decide the SQL itself. Every
  * tool run is against the read-only SQLite cache — the model can read the record
  * but never mutate it. Server-only (fs + sqlite + native providers).
  */
 
 // ---- Provider selection ---------------------------------------------------
 
-/** Resolve a BYO-key provider + model into a Vercel AI SDK LanguageModel. The id
- *  is the user's saved pick, else the first live-fetched model — never a literal. */
-export function resolveModel(
-  provider: string,
-  apiKey: string,
-  model?: string | null,
-  models?: string[] | null,
-): LanguageModel {
-  const id = pickModel(model, models);
-  if (!id) throw new Error("No model configured — connect a provider in Settings.");
+/** Resolve a BYO-key provider + model into a Vercel AI SDK LanguageModel. */
+export function resolveModel(provider: string, apiKey: string, model?: string | null): LanguageModel {
+  const id = fallbackModel(provider, model);
   switch (provider) {
     case "anthropic":
       return createAnthropic({ apiKey })(id);
@@ -158,7 +151,7 @@ export function mentorTools(dbFile: string, used: Used) {
     execute: async ({ query, limit }) => {
       try {
         const vecFile = path.join(path.dirname(dbFile), "agentqs-vec.db");
-        const hits = await semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
+        const hits = semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
         used.hits += hits.length;
         for (const h of hits) used.sources.add(h.kind === "session" ? "sessions" : "memos");
         return { days: hits.map((h) => ({ date: h.date, snippet: h.snippet, score: h.score })) };
@@ -230,7 +223,7 @@ export interface RunMentorOptions {
 }
 
 /**
- * Run the mentor agent: hand the model the mentor prompt + schema catalog as the system
+ * Run the mentor agent: hand the model the persona + schema catalog as the system
  * prompt and let it call query_daily / search_notes to ground its answer in real
  * numbers, iterating until it has enough to reply. Returns the final text plus what
  * the run actually touched (for the grounded badge).

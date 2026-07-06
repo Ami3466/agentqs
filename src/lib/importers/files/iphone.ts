@@ -141,9 +141,7 @@ function iphoneDefaultPaths(): string[] {
 export const iphoneImporter: FileImporter = {
   id: "iphone",
   name: "iPhone backup",
-  detail: "backup snapshot · files & domains (calls/iMessage extraction coming)",
-  connectHint:
-    "Unencrypted Finder/iTunes backup. Point --path at the backup dir or MobileSync/Backup.",
+  detail: "backup snapshot · local file, stub (agentqs import:file --source iphone)",
   live: false, // stub: snapshot read is real; per-domain extraction not yet wired
   primaryMetric: "files_backed_up",
   unit: "files",

@@ -13,8 +13,6 @@
 
 export type SourceKind = "api" | "manual";
 export type Interval = "off" | "hourly" | "daily" | "weekly";
-/** How a not-yet-connected source is connected from the Data tab row. */
-export type ConnectVia = "api" | "cli" | "upload";
 
 /** Interval options for the per-source dropdown. `off` = no schedule. */
 export const INTERVALS: { value: Interval; label: string }[] = [
@@ -95,8 +93,4 @@ export interface SourceView {
   due: boolean; // api + connected + syncable + overdue → auto-sync on open
   syncEndpoint: string | null; // POST target for api auto-sync
   live: boolean; // has a working importer (false = stub / not-yet-live placeholder)
-  connectVia: ConnectVia; // how the row lets you connect when not connected
-  importCmd?: string | null; // cli: exact `agentqs import:file …` command to run
-  uploadAccept?: string | null; // upload: file-input accept for the export
-  connectHint?: string | null; // one-line how-to shown under the control
 }

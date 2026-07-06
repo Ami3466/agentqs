@@ -3,10 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Eye, EyeOff, Moon, Person, Plus, RefreshCw, Spinner, Sun, Trash, X } from "@/components/icons";
-import { Button, Card, Field, Input, Select, Textarea, cn } from "@/components/ui";
-import { PROVIDERS } from "@/lib/models";
-import { isBuiltinMentor, type Mentor } from "@/lib/mentors";
+import { Check, Eye, EyeOff, Moon, Spinner, Sparkles, Sun } from "@/components/icons";
+import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
+import {
+  DEFAULT_MODEL,
+  PROVIDERS,
+  modelsForProvider,
+} from "@/lib/models";
+import { SKILLS } from "@/lib/skills";
 import type { PublicConfig } from "@/lib/config";
 
 interface EmbedStatus {
@@ -45,12 +49,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [username, setUsername] = useState(config.username);
   const [password, setPassword] = useState("");
   const [provider, setProvider] = useState(config.llmProvider || "");
-  const [model, setModel] = useState(config.model || "");
-  const [models, setModels] = useState<string[]>(config.llmModels || []);
+  const [model, setModel] = useState(config.model || DEFAULT_MODEL);
   const [llmKey, setLlmKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [loadMsg, setLoadMsg] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -59,34 +60,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
 
-  async function loadModels() {
-    setError("");
-    setLoadMsg("Connecting…");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, key: llmKey }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        setModels(data.models);
-        setModel(data.models[0] ?? "");
-        setLoadMsg(`Loaded ${data.models.length} models`);
-      } else {
-        setModels([]);
-        setModel("");
-        setLoadMsg(data.error || "Could not load models.");
-      }
-    } catch {
-      setModels([]);
-      setModel("");
-      setLoadMsg("Could not reach the provider.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const providerModels = modelsForProvider(provider);
 
   // Local semantic index status (default-on, no key) for the Semantic search section.
   useEffect(() => {
@@ -128,11 +102,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     setError("");
     setSaved(false);
 
-    const body: Record<string, unknown> = {
+    const body: Record<string, string> = {
       username: username.trim(),
       llmProvider: provider,
       model,
-      llmModels: models,
       theme,
     };
     if (password) body.password = password;
@@ -158,8 +131,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   }
 
   return (
-    <div className="max-w-2xl space-y-5">
-    <form onSubmit={save} className="space-y-5">
+    <form onSubmit={save} className="max-w-2xl space-y-5">
       {/* Profile */}
       <Section title="Profile" desc="How you sign in to this instance.">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -191,103 +163,80 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       {/* AI provider */}
       <Section
         title="AI provider"
-        desc="Bring your own key — Claude, OpenAI or Gemini. Never trains on your data."
+        desc="Bring your own key. Claude, OpenAI or Gemini — your data never trains anyone's model."
       >
         <div className="space-y-4">
-          <Field label="Provider" htmlFor="provider">
-            <Select
-              id="provider"
-              value={provider}
-              onChange={(e) => {
-                const next = e.target.value;
-                setProvider(next);
-                setLlmKey("");
-                setLoadMsg("");
-                if (next === config.llmProvider) {
-                  setModels(config.llmModels || []);
-                  setModel(config.model || "");
-                } else {
-                  setModels([]);
-                  setModel("");
-                }
-              }}
-            >
-              <option value="">Not set</option>
-              {PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          {provider ? (
-            <Field
-              label="API key"
-              htmlFor="llmKey"
-              hint={
-                config.hasLlmKey
-                  ? `A key is saved (${config.hasLlmKey}). Paste a new one and reconnect to replace it.`
-                  : "Stored locally in your data dir. Never sent anywhere but your provider."
-              }
-            >
-              <div className="relative">
-                <Input
-                  id="llmKey"
-                  type={showKey ? "text" : "password"}
-                  value={llmKey}
-                  onChange={(e) => setLlmKey(e.target.value)}
-                  placeholder={PROVIDERS.find((p) => p.id === provider)?.keyHint || "sk-…"}
-                  autoComplete="off"
-                  className="pr-10 font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
-                  aria-label={showKey ? "Hide key" : "Show key"}
-                >
-                  {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
-                </button>
-              </div>
-            </Field>
-          ) : null}
-
-          {provider ? (
-            <div className="flex items-center gap-3">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void loadModels()}
-                disabled={!llmKey || loading}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Provider" htmlFor="provider">
+              <Select
+                id="provider"
+                value={provider}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setProvider(next);
+                  const models = modelsForProvider(next);
+                  if (models.length && !models.includes(model)) setModel(models[0]);
+                }}
               >
-                {loading ? <Spinner width={14} height={14} /> : null}
-                {loading ? "Connecting…" : "Connect & load models"}
-              </Button>
-              {loadMsg ? <span className="text-xs text-muted-fg">{loadMsg}</span> : null}
-            </div>
-          ) : null}
-
-          {provider ? (
+                <option value="">Not set</option>
+                {PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
             <Field label="Model" htmlFor="model">
               <Select
                 id="model"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                disabled={!models.length}
+                disabled={!providerModels.length}
               >
-                {models.length ? (
-                  models.map((m) => (
+                {providerModels.length ? (
+                  providerModels.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
                   ))
                 ) : (
-                  <option value="">Connect a key to load models</option>
+                  <option value="">Pick a provider first</option>
                 )}
               </Select>
             </Field>
-          ) : null}
+          </div>
+
+          <Field
+            label="API key"
+            htmlFor="llmKey"
+            hint={
+              config.hasLlmKey
+                ? `A key is saved (${config.hasLlmKey}). Enter a new one to replace it.`
+                : "Stored locally in your data dir. Never sent anywhere but your provider."
+            }
+          >
+            <div className="relative">
+              <Input
+                id="llmKey"
+                type={showKey ? "text" : "password"}
+                value={llmKey}
+                onChange={(e) => setLlmKey(e.target.value)}
+                placeholder={
+                  PROVIDERS.find((p) => p.id === provider)?.keyHint || "sk-…"
+                }
+                autoComplete="off"
+                className="pr-10 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
+                aria-label={showKey ? "Hide key" : "Show key"}
+              >
+                {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
+              </button>
+            </div>
+          </Field>
         </div>
       </Section>
 
@@ -334,7 +283,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       {/* Semantic search (embeddings) */}
       <Section
         title="Semantic search"
-        desc="Find days that felt like this — a local model, no key, no cost. On by default."
+        desc="Find days that felt like this. Embeddings run on a local model — no key, no cost, private. On by default."
       >
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex items-center gap-2 text-sm">
@@ -352,26 +301,51 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 : "Checking…"}
             </span>
             {embed?.stale && embed.built ? (
-              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">
+              <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
                 out of date
               </span>
             ) : null}
           </div>
           <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing}>
-            {reindexing ? <Spinner width={14} height={14} /> : <RefreshCw width={14} height={14} />}
+            {reindexing ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
             {reindexing ? "Reindexing…" : "Reindex now"}
           </Button>
         </div>
         <p className="mt-3 text-xs text-muted-fg">
-          Model <code className="font-mono">{embed?.modelId || "all-MiniLM-L6-v2"}</code>
+          Model <code className="font-mono">{embed?.modelId || "agentqs-local-hash-v1"}</code>
           {embed?.backend ? (
             <>
               {" "}
               · store <code className="font-mono">{embed.backend}</code>
             </>
           ) : null}
-          . Keyword search (FTS5) stays on alongside it.
+          . Keyword search (FTS5) stays always-on and free alongside it.
         </p>
+      </Section>
+
+      {/* Personas / skills */}
+      <Section
+        title="Personas"
+        desc="The voices your mentor can take. Switch mid-chat with the skill chip or /skill."
+      >
+        <div className="space-y-2">
+          {SKILLS.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
+            >
+              <span className="mt-0.5 text-accent">
+                <Sparkles width={15} height={15} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-fg">
+                  {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
+                </p>
+                <p className="text-xs text-muted-fg">{s.blurb}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </Section>
 
       {/* Save bar */}
@@ -390,225 +364,5 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         ) : null}
       </div>
     </form>
-
-      {/* Mentors — persisted independently via /api/mentors, not the Save bar above */}
-      <MentorsEditor initial={config.mentors} />
-    </div>
-  );
-}
-
-// ---- Mentors editor -------------------------------------------------------
-
-const preview = (s: string) => (s.length > 130 ? `${s.slice(0, 129).trimEnd()}…` : s);
-
-/**
- * Add / edit / delete the mentors the chat can wear. Built-ins arrive as editable
- * rows; every change persists to config.json via /api/mentors on its own (this
- * section is independent of the page's Save button) so it survives a reload and
- * shows up in the chat chip immediately.
- */
-function MentorsEditor({ initial }: { initial: Mentor[] }) {
-  const [mentors, setMentors] = useState<Mentor[]>(initial);
-  const [editing, setEditing] = useState<string | null>(null); // a mentor id, "new", or null
-  const [name, setName] = useState("");
-  const [blurb, setBlurb] = useState("");
-  const [system, setSystem] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [confirmId, setConfirmId] = useState<string | null>(null);
-
-  function openNew() {
-    setEditing("new");
-    setName("");
-    setBlurb("");
-    setSystem("");
-    setError("");
-    setConfirmId(null);
-  }
-  function openEdit(m: Mentor) {
-    setEditing(m.id);
-    setName(m.name);
-    setBlurb(m.blurb);
-    setSystem(m.system);
-    setError("");
-    setConfirmId(null);
-  }
-
-  async function save() {
-    if (!name.trim()) return setError("Give the mentor a name.");
-    if (!system.trim()) return setError("Add a system prompt — it's what drives the reply.");
-    setBusy(true);
-    setError("");
-    try {
-      const creating = editing === "new";
-      const res = await fetch("/api/mentors", {
-        method: creating ? "POST" : "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          creating ? { name, blurb, system } : { id: editing, name, blurb, system },
-        ),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !Array.isArray(data.mentors)) {
-        setError(data.error || "Could not save the mentor.");
-        return;
-      }
-      setMentors(data.mentors);
-      setEditing(null);
-    } catch {
-      setError("Could not reach the server.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(id: string) {
-    setBusy(true);
-    setError("");
-    try {
-      const res = await fetch("/api/mentors", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !Array.isArray(data.mentors)) {
-        setError(data.error || "Could not delete the mentor.");
-        return;
-      }
-      setMentors(data.mentors);
-      setConfirmId(null);
-      if (editing === id) setEditing(null);
-    } catch {
-      setError("Could not reach the server.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const editorCard = (
-    <div className="rounded-lg border border-border bg-muted/40 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-sm font-medium text-fg">{editing === "new" ? "New mentor" : "Edit mentor"}</p>
-        <button
-          type="button"
-          onClick={() => setEditing(null)}
-          className="rounded p-1 text-muted-fg hover:text-fg"
-          aria-label="Close editor"
-        >
-          <X width={16} height={16} />
-        </button>
-      </div>
-      <div className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Name" htmlFor="m-name">
-            <Input id="m-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Stoic" maxLength={40} />
-          </Field>
-          <Field label="One-line blurb" htmlFor="m-blurb">
-            <Input
-              id="m-blurb"
-              value={blurb}
-              onChange={(e) => setBlurb(e.target.value)}
-              placeholder="Calm, principled, cuts to what you control"
-              maxLength={120}
-            />
-          </Field>
-        </div>
-        <Field label="System prompt" htmlFor="m-system" hint="The mentor's voice, handed to the model.">
-          <Textarea
-            id="m-system"
-            rows={5}
-            value={system}
-            onChange={(e) => setSystem(e.target.value)}
-            placeholder="You are a Stoic mentor. Ground the reply in the user's real record, separate what they control from what they don't, and end on one action within their control."
-          />
-        </Field>
-        <div className="flex items-center gap-2">
-          <Button type="button" variant="primary" size="sm" onClick={() => void save()} disabled={busy}>
-            {busy ? <Spinner width={14} height={14} /> : null}
-            {editing === "new" ? "Add mentor" : "Save mentor"}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(null)} disabled={busy}>
-            Cancel
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-
-  return (
-    <Section
-      title="Mentors"
-      desc="Switch mid-chat with the chip or /mentor. Add your own or edit the built-ins."
-    >
-      <div className="space-y-2">
-        {mentors.map((m) =>
-          editing === m.id ? (
-            <div key={m.id}>{editorCard}</div>
-          ) : (
-            <div
-              key={m.id}
-              className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
-            >
-              <span className="mt-0.5 text-accent">
-                <Person width={15} height={15} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="flex items-center gap-2 text-sm font-medium text-fg">
-                  {m.name}
-                  {isBuiltinMentor(m.id) ? (
-                    <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-                      built-in
-                    </span>
-                  ) : null}
-                </p>
-                {m.blurb ? <p className="text-xs text-muted-fg">{m.blurb}</p> : null}
-                <p className="mt-1 text-xs text-muted-fg/80">{preview(m.system)}</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {confirmId === m.id ? (
-                  <>
-                    <Button type="button" size="sm" variant="danger" onClick={() => void remove(m.id)} disabled={busy}>
-                      {busy ? <Spinner width={14} height={14} /> : null} Delete
-                    </Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmId(null)}>
-                      Keep
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => openEdit(m)} disabled={busy}>
-                      Edit
-                    </Button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setConfirmId(m.id);
-                        setError("");
-                      }}
-                      disabled={busy}
-                      className="rounded-lg p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-fg disabled:opacity-50"
-                      aria-label={`Delete ${m.name}`}
-                    >
-                      <Trash width={15} height={15} />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          ),
-        )}
-      </div>
-
-      {editing === "new" ? (
-        <div className="mt-2">{editorCard}</div>
-      ) : editing === null ? (
-        <Button type="button" size="sm" className="mt-3" onClick={openNew}>
-          <Plus width={14} height={14} /> Add mentor
-        </Button>
-      ) : null}
-
-      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
-    </Section>
   );
 }

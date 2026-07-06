@@ -6,7 +6,7 @@
  * they haven't. One helper, one fetch, provider chosen by id.
  */
 
-import { pickModel } from "./models";
+import { fallbackModel } from "./models";
 
 export interface LlmMessage {
   role: "user" | "assistant";
@@ -17,7 +17,6 @@ export interface LlmRequest {
   provider: string;
   apiKey: string;
   model?: string;
-  models?: string[]; // the live-fetched list; first is used when `model` is unset
   system: string;
   messages: LlmMessage[];
   maxTokens?: number;
@@ -47,8 +46,7 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
 
 /** Run one completion. Returns the assistant's text; throws on transport/API error. */
 export async function llmComplete(req: LlmRequest): Promise<string> {
-  const model = pickModel(req.model, req.models);
-  if (!model) throw new Error("No model configured — connect a provider in Settings.");
+  const model = fallbackModel(req.provider, req.model);
   const maxTokens = req.maxTokens ?? 1024;
 
   if (req.provider === "anthropic") {

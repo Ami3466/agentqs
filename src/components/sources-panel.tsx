@@ -1,16 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { AlertTriangle, Check, Clock, Spinner, Terminal, Upload } from "@/components/icons";
-import { brandIcon } from "@/components/brand-icons";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, Clock, Spinner } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { SourceConnect } from "@/components/source-connect";
-import { CopyBlock } from "@/components/copy-block";
 import { IntervalSelect } from "@/components/interval-select";
-import { Badge, Button, cn } from "@/components/ui";
-import { uploadFilesToInbox } from "@/lib/inbox-upload";
+import { Badge, cn } from "@/components/ui";
 import { ago, type Interval, type SourceView } from "@/lib/sources";
-import { markTourStep } from "@/lib/tour";
 
 /**
  * The Data-tab sources list + sync engine (Loop 10). Single fetcher/persister of
@@ -132,7 +128,6 @@ export function SourcesPanel({
               source={s}
               saving={savingId === s.id}
               onIntervalChange={(i) => changeInterval(s.id, i)}
-              onChanged={onChanged}
             />
           ),
         )}
@@ -141,170 +136,61 @@ export function SourcesPanel({
   );
 }
 
-/** Generic (non-GitHub) manual source row. Connected sources get an interval
- *  dropdown (overdue → stale badge). Not-yet-connected sources are never a dead
- *  end: a `cli` source (browser history, chat.db, Apple Health, OwnTracks) reveals
- *  the exact `agentqs import:file` command; an `upload` source (WhatsApp/Notion/
- *  Takeout/Slack/Telegram export) reveals a real upload + drag-drop into the inbox. */
+/** Generic (non-GitHub) source row: manual sources discovered in the record and
+ *  not-yet-live integrations. Connected sources get an interval dropdown; overdue
+ *  manual sources get a stale badge. */
 function SourceRow({
   source,
   saving,
   onIntervalChange,
-  onChanged,
 }: {
   source: SourceView;
   saving: boolean;
   onIntervalChange: (i: Interval) => void;
-  onChanged: () => void;
 }) {
-  const { id, name, kind, detail, connected, lastSync, stale, interval, connectVia } = source;
-  const Icon = brandIcon(id);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [flash, setFlash] = useState("");
-  const [drag, setDrag] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  async function upload(files: FileList | File[]) {
-    if (!Array.from(files).length) return;
-    setBusy(true);
-    setFlash("");
-    try {
-      const { added, skipped } = await uploadFilesToInbox(files, id);
-      if (added) {
-        setFlash(`${added} file${added === 1 ? "" : "s"} added to the inbox — hit Structure to turn it into daily rows.`);
-        onChanged();
-        markTourStep("source"); // ping the tour; it re-confirms once the source has rows
-      } else if (skipped.length) {
-        setFlash(`Skipped ${skipped[0]}.`);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onDrop(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    setDrag(false);
-    if (e.dataTransfer?.files?.length) void upload(e.dataTransfer.files);
-  }
-
+  const { name, kind, detail, connected, lastSync, stale, interval } = source;
   return (
-    <div className="p-4">
-      <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
-          <Icon width={18} height={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">{name}</p>
-            <Badge>{kind}</Badge>
-            {stale ? (
-              <span
-                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-fg"
-                title={`No fresh data within its ${interval} interval — refresh this source.`}
-              >
-                <AlertTriangle width={11} height={11} /> stale
-              </span>
-            ) : connected ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
-                <Check width={12} height={12} /> connected
-              </span>
-            ) : null}
-          </div>
-          <p className="truncate text-xs text-muted-fg">
-            {connected ? (
-              <span className="inline-flex items-center gap-1">
-                <Clock width={11} height={11} /> updated {ago(lastSync)}
-              </span>
-            ) : (
-              detail
-            )}
-          </p>
+    <div className="flex items-center gap-3 p-4">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-sm font-semibold uppercase text-muted-fg">
+        {name.charAt(0)}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-medium text-fg">{name}</p>
+          <Badge>{kind}</Badge>
+          {stale ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-medium text-warning"
+              title={`No fresh data within its ${interval} interval — refresh this source.`}
+            >
+              <AlertTriangle width={11} height={11} /> stale
+            </span>
+          ) : connected ? (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
+              <Check width={12} height={12} /> connected
+            </span>
+          ) : null}
         </div>
-        <div className="shrink-0">
+        <p className="truncate text-xs text-muted-fg">
           {connected ? (
-            <div className="flex items-center gap-1.5">
-              {saving ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
-              <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />
-            </div>
+            <span className="inline-flex items-center gap-1">
+              <Clock width={11} height={11} /> updated {ago(lastSync)}
+            </span>
           ) : (
-            <Button
-              size="sm"
-              variant={open ? "secondary" : "primary"}
-              onClick={() => setOpen((v) => !v)}
-            >
-              {connectVia === "upload" ? <Upload width={14} height={14} /> : <Terminal width={14} height={14} />}
-              {connectVia === "upload" ? "Import" : "Setup"}
-            </Button>
+            detail
           )}
-        </div>
+        </p>
       </div>
-
-      {open && !connected ? (
-        <div className="mt-3 space-y-2 pl-12">
-          {source.connectHint ? <p className="text-xs text-muted-fg">{source.connectHint}</p> : null}
-
-          {connectVia === "cli" && source.importCmd ? (
-            <>
-              <CopyBlock label="Run locally" code={source.importCmd} />
-              <p className="text-[11px] text-muted-fg">
-                Reads a local file, so it runs from the CLI; rows appear here after it syncs.
-              </p>
-            </>
-          ) : null}
-
-          {connectVia === "upload" ? (
-            <div
-              onDragEnter={(e) => {
-                e.preventDefault();
-                setDrag(true);
-              }}
-              onDragOver={(e) => e.preventDefault()}
-              onDragLeave={(e) => {
-                e.preventDefault();
-                setDrag(false);
-              }}
-              onDrop={onDrop}
-              className={cn(
-                "flex flex-col items-center gap-1.5 rounded-lg border border-dashed px-3 py-5 text-center text-xs transition-colors",
-                drag ? "border-accent bg-accent/10 text-accent" : "border-border text-muted-fg",
-              )}
-            >
-              <Upload width={18} height={18} className="opacity-70" />
-              <p>
-                Drop your export here or{" "}
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  className="font-medium text-fg underline underline-offset-2 hover:text-accent"
-                >
-                  choose a file
-                </button>
-                .
-              </p>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept={source.uploadAccept ?? undefined}
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files) void upload(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-            </div>
-          ) : null}
-
-          {busy ? (
-            <p className="inline-flex items-center gap-1 text-xs text-muted-fg">
-              <Spinner width={12} height={12} /> Uploading…
-            </p>
-          ) : null}
-          {flash ? <p className="text-xs text-accent">{flash}</p> : null}
-        </div>
-      ) : null}
+      <div className="shrink-0">
+        {connected ? (
+          <div className="flex items-center gap-1.5">
+            {saving ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
+            <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />
+          </div>
+        ) : (
+          <span className="text-xs text-muted-fg">not connected</span>
+        )}
+      </div>
     </div>
   );
 }

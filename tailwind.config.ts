@@ -27,6 +27,10 @@ const config: Config = {
           DEFAULT: "rgb(var(--destructive) / <alpha-value>)",
           fg: "rgb(var(--destructive-fg) / <alpha-value>)",
         },
+        warning: {
+          DEFAULT: "rgb(var(--warning) / <alpha-value>)",
+          fg: "rgb(var(--warning-fg) / <alpha-value>)",
+        },
       },
       borderColor: {
         DEFAULT: "rgb(var(--border) / <alpha-value>)",
