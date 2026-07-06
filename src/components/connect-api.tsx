@@ -46,7 +46,7 @@ function snippetsFor(model: string): Record<string, Snip> {
     },
     data: {
       title: "Data",
-      cli: `agentqs sync --source github`,
+      cli: `agentqs sync --source github --login torvalds`,
       api: (b) => `curl -X POST ${b}/api/import/github \\
   -H 'content-type: application/json' \\
   -d '{"login":"torvalds"}'`,
