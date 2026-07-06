@@ -7,7 +7,7 @@ import { Button, Field, Input } from "@/components/ui";
 
 export function LoginForm() {
   const router = useRouter();
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -19,12 +19,12 @@ export function LoginForm() {
     const res = await fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: username.trim(), password }),
+      body: JSON.stringify({ username: email.trim().toLowerCase(), password }),
     });
     setBusy(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError(data.error || "Invalid username or password.");
+      setError(data.error || "Invalid email or password.");
       return;
     }
     router.push("/");
@@ -33,12 +33,14 @@ export function LoginForm() {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Field label="Username" htmlFor="username">
+      <Field label="Email" htmlFor="email">
         <Input
-          id="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="username"
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          autoComplete="email"
           autoFocus
         />
       </Field>

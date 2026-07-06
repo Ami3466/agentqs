@@ -5,7 +5,7 @@
  * — clean CSV maps straight to columns (free, no LLM); prose goes through the
  * model to the same wide shape (paid, only here). Server-only (fs + provider).
  */
-import { readConfig } from "./config";
+import { activeLlm, readConfig } from "./config";
 import { recordDir } from "./paths";
 import { mergeDailyCsv, readRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
 import { llmComplete } from "./llm";
@@ -68,7 +68,8 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
   }
 
   const cfg = readConfig();
-  const hasLlm = Boolean(cfg?.llmProvider && cfg?.llmKey);
+  const llm = activeLlm(cfg);
+  const hasLlm = Boolean(llm);
 
   const results: StructureItemResult[] = [];
   const patches: Array<{ id: string; status: string; meta: unknown }> = [];
@@ -92,9 +93,7 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
       let out = "";
       try {
         out = await llmComplete({
-          provider: cfg!.llmProvider,
-          apiKey: cfg!.llmKey,
-          model: cfg!.model,
+          llm: llm!,
           system: proseExtractionSystem(),
           messages: [{ role: "user", content: proseExtractionUser(item.text, captureDate) }],
           maxTokens: 700,

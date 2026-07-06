@@ -12,12 +12,25 @@ import {
 } from "@tanstack/react-table";
 import type { JournalData, JournalDay, JournalView } from "@/lib/journal";
 import { Button, cn } from "./ui";
-import { Bookmark, Check, GripVertical, Plus, Sliders, Trash, X } from "./icons";
+import { Bookmark, GripVertical, Plus, X } from "./icons";
 
 interface ColMeta {
   source?: string;
   numeric?: boolean;
+  custom?: boolean;
 }
+
+/** Prefix for a user-defined column that maps to a `source.metric` key which may
+ *  not have landed yet. Stored in columnOrder (survives the views API), so custom
+ *  columns persist with the rest of the layout — no config.ts change needed. */
+const CUSTOM_PREFIX = "custom:";
+/** Reserved view id holding the live Log layout, auto-saved so add/remove/reorder
+ *  of columns persist across reloads without an explicit "Save view". Hidden from
+ *  the named-views tabs. */
+const LOG_LAYOUT_ID = "__log_layout__";
+
+const isCustom = (id: string) => id.startsWith(CUSTOM_PREFIX);
+const underlyingKey = (id: string) => id.slice(CUSTOM_PREFIX.length);
 
 function uid(): string {
   try {
@@ -25,6 +38,36 @@ function uid(): string {
   } catch {
     return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   }
+}
+
+/** Keep date first, drop ids that are neither a live metric nor a custom column,
+ *  then append any metric not yet in the order. */
+function reconcileOrder(
+  order: string[],
+  defaultOrder: string[],
+  metricKeys: Set<string>,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of order) {
+    if (id === "date" || metricKeys.has(id) || isCustom(id)) {
+      if (!seen.has(id)) {
+        out.push(id);
+        seen.add(id);
+      }
+    }
+  }
+  if (!seen.has("date")) {
+    out.unshift("date");
+    seen.add("date");
+  }
+  for (const id of defaultOrder) {
+    if (!seen.has(id)) {
+      out.push(id);
+      seen.add(id);
+    }
+  }
+  return out;
 }
 
 /** Close-on-outside-click + Escape, matching the Connect/API popover. */
@@ -55,28 +98,65 @@ export function JournalTable({
   views: JournalView[];
   onViewsChange: (next: JournalView[]) => void;
 }) {
+  const metricKeys = useMemo(() => new Set(data.metrics.map((m) => m.key)), [data.metrics]);
   const defaultOrder = useMemo(
     () => ["date", ...data.metrics.map((m) => m.key)],
     [data.metrics],
   );
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
-  const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(defaultOrder);
-  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+  // Hydrate initial layout from the reserved working view (once, no flash).
+  const initial = useMemo(() => {
+    const wv = views.find((v) => v.id === LOG_LAYOUT_ID);
+    if (!wv) return { order: defaultOrder, visibility: {}, sizing: {} };
+    return {
+      order: reconcileOrder(wv.columnOrder, defaultOrder, metricKeys),
+      visibility: wv.columnVisibility ?? {},
+      sizing: wv.columnSizing ?? {},
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(initial.visibility);
+  const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(initial.order);
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(initial.sizing);
   const [activeView, setActiveView] = useState<string | null>(null);
 
-  // Keep the order in sync if the underlying metric set changes (new source synced).
+  // Custom columns are just the prefixed ids living in the order.
+  const customIds = useMemo(() => columnOrder.filter(isCustom), [columnOrder]);
+
+  // Keep the order valid if the underlying metric set changes (new source synced).
   useEffect(() => {
     setColumnOrder((prev) => {
-      if (!prev.length) return defaultOrder;
-      const valid = new Set(defaultOrder);
-      const kept = prev.filter((id) => valid.has(id));
-      for (const id of defaultOrder) if (!kept.includes(id)) kept.push(id);
-      return kept.length === prev.length && kept.every((id, i) => id === prev[i])
-        ? prev
-        : kept;
+      const next = reconcileOrder(prev.length ? prev : defaultOrder, defaultOrder, metricKeys);
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next;
     });
-  }, [defaultOrder]);
+  }, [defaultOrder, metricKeys]);
+
+  // ---- auto-persist the working layout (debounced) --------------------------
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+  const onViewsChangeRef = useRef(onViewsChange);
+  onViewsChangeRef.current = onViewsChange;
+  const skipPersist = useRef(true); // don't persist the initial mount
+
+  useEffect(() => {
+    if (skipPersist.current) {
+      skipPersist.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      const working: JournalView = {
+        id: LOG_LAYOUT_ID,
+        name: "Log layout",
+        columnOrder,
+        columnVisibility: columnVisibility as Record<string, boolean>,
+        columnSizing,
+      };
+      const rest = viewsRef.current.filter((v) => v.id !== LOG_LAYOUT_ID);
+      onViewsChangeRef.current([...rest, working]);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [columnOrder, columnVisibility, columnSizing]);
 
   const columns = useMemo<ColumnDef<JournalDay>[]>(() => {
     const cols: ColumnDef<JournalDay>[] = [
@@ -111,8 +191,27 @@ export function JournalTable({
         },
       });
     }
+    for (const id of customIds) {
+      const key = underlyingKey(id);
+      const dot = key.indexOf(".");
+      const source = dot > 0 ? key.slice(0, dot) : "custom";
+      const metric = dot > 0 ? key.slice(dot + 1) : key;
+      cols.push({
+        id,
+        header: metric,
+        accessorFn: (d) => d.values[key]?.text ?? "",
+        size: 120,
+        minSize: 70,
+        meta: { source, custom: true } as ColMeta,
+        cell: (ctx) => {
+          const v = ctx.row.original.values[key];
+          if (!v) return <span className="text-muted-fg/40">—</span>;
+          return <span className="text-fg">{v.num != null ? v.num : v.text}</span>;
+        },
+      });
+    }
     return cols;
-  }, [data.metrics]);
+  }, [data.metrics, customIds]);
 
   const table = useReactTable({
     data: data.days,
@@ -149,12 +248,49 @@ export function JournalTable({
     setActiveView(null);
   };
 
-  // ---- views ----
+  // ---- add / remove a column ----
+  const addMetric = (key: string) => {
+    setColumnVisibility((prev) => ({ ...prev, [key]: true }));
+    setActiveView(null);
+  };
+
+  const addCustom = (raw: string) => {
+    const key = raw.trim();
+    if (!key) return;
+    if (metricKeys.has(key)) {
+      addMetric(key);
+      return;
+    }
+    const id = CUSTOM_PREFIX + key;
+    setColumnOrder((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setColumnVisibility((prev) => ({ ...prev, [id]: true }));
+    setActiveView(null);
+  };
+
+  const removeColumn = (id: string) => {
+    if (isCustom(id)) {
+      setColumnOrder((prev) => prev.filter((x) => x !== id));
+      setColumnSizing((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setColumnVisibility((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    } else {
+      setColumnVisibility((prev) => ({ ...prev, [id]: false }));
+    }
+    setActiveView(null);
+  };
+
+  // ---- named views ----
+  const namedViews = useMemo(() => views.filter((v) => v.id !== LOG_LAYOUT_ID), [views]);
+
   const applyView = (v: JournalView) => {
-    const valid = new Set(defaultOrder);
-    const order = ["date", ...v.columnOrder.filter((id) => id !== "date" && valid.has(id))];
-    for (const id of defaultOrder) if (!order.includes(id)) order.push(id);
-    setColumnOrder(order);
+    setColumnOrder(reconcileOrder(v.columnOrder, defaultOrder, metricKeys));
     setColumnVisibility(v.columnVisibility);
     setColumnSizing(v.columnSizing);
     setActiveView(v.id);
@@ -168,12 +304,12 @@ export function JournalTable({
       columnVisibility: table.getState().columnVisibility as Record<string, boolean>,
       columnSizing: table.getState().columnSizing,
     };
-    onViewsChange([...views, view]);
+    onViewsChange([...viewsRef.current, view]);
     setActiveView(view.id);
   };
 
   const deleteView = (id: string) => {
-    onViewsChange(views.filter((v) => v.id !== id));
+    onViewsChange(viewsRef.current.filter((v) => v.id !== id));
     if (activeView === id) setActiveView(null);
   };
 
@@ -185,17 +321,22 @@ export function JournalTable({
   };
 
   // popovers
-  const [colsOpen, setColsOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [name, setName] = useState("");
-  const colsRef = useDismiss(colsOpen, () => setColsOpen(false));
+  const [custom, setCustom] = useState("");
+  const addRef = useDismiss(addOpen, () => {
+    setAddOpen(false);
+    setCustom("");
+  });
   const saveRef = useDismiss(saveOpen, () => {
     setSaveOpen(false);
     setName("");
   });
 
-  const hideable = table.getAllLeafColumns().filter((c) => c.getCanHide());
-  const hiddenCount = hideable.filter((c) => !c.getIsVisible()).length;
+  // metric series that exist but are currently hidden → available to add back
+  const hiddenMetrics = data.metrics.filter((m) => columnVisibility[m.key] === false);
+  const shownCount = table.getVisibleLeafColumns().length - 1; // minus the date column
 
   return (
     <div>
@@ -214,7 +355,7 @@ export function JournalTable({
           >
             All columns
           </button>
-          {views.map((v) => (
+          {namedViews.map((v) => (
             <span
               key={v.id}
               className={cn(
@@ -245,83 +386,55 @@ export function JournalTable({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          {/* columns show/hide */}
-          <div className="relative" ref={colsRef}>
+          {/* add a column */}
+          <div className="relative" ref={addRef}>
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => setColsOpen((o) => !o)}
-              className={cn(colsOpen && "bg-muted")}
+              onClick={() => setAddOpen((o) => !o)}
+              className={cn(addOpen && "bg-muted")}
             >
-              <Sliders width={15} height={15} />
-              Columns
-              {hiddenCount > 0 ? (
-                <span className="rounded-full bg-accent/15 px-1.5 text-[11px] font-semibold text-accent">
-                  {hideable.length - hiddenCount}/{hideable.length}
-                </span>
-              ) : null}
+              <Plus width={15} height={15} />
+              Add column
             </Button>
-            {colsOpen ? (
+            {addOpen ? (
               <div className="absolute right-0 z-50 mt-2 w-64 rounded-xl border border-border bg-card p-2 shadow-xl">
-                <div className="flex items-center justify-between px-1.5 pb-1.5">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-                    Show columns
-                  </span>
-                  <div className="flex gap-2 text-[11px]">
-                    <button
-                      type="button"
-                      className="text-muted-fg hover:text-fg"
-                      onClick={() =>
-                        setColumnVisibility(
-                          Object.fromEntries(hideable.map((c) => [c.id, false])),
-                        )
-                      }
-                    >
-                      Hide all
-                    </button>
-                    <button
-                      type="button"
-                      className="text-accent hover:opacity-80"
-                      onClick={() => setColumnVisibility({})}
-                    >
-                      Show all
-                    </button>
-                  </div>
-                </div>
-                <div className="scrollbar-thin max-h-72 overflow-y-auto">
-                  {hideable.map((c) => {
-                    const meta = c.columnDef.meta as ColMeta | undefined;
-                    return (
-                      <label
-                        key={c.id}
-                        className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 hover:bg-muted"
+                {hiddenMetrics.length ? (
+                  <div className="scrollbar-thin max-h-60 overflow-y-auto">
+                    {hiddenMetrics.map((m) => (
+                      <button
+                        key={m.key}
+                        type="button"
+                        onClick={() => addMetric(m.key)}
+                        className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left hover:bg-muted"
                       >
-                        <span
-                          className={cn(
-                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                            c.getIsVisible()
-                              ? "border-accent bg-accent text-accent-fg"
-                              : "border-input bg-bg",
-                          )}
-                        >
-                          {c.getIsVisible() ? <Check width={12} height={12} /> : null}
-                        </span>
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={c.getIsVisible()}
-                          onChange={c.getToggleVisibilityHandler()}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-sm text-fg">
-                          {c.columnDef.header as string}
-                        </span>
-                        {meta?.source ? (
-                          <span className="shrink-0 text-[10px] text-muted-fg">{meta.source}</span>
-                        ) : null}
-                      </label>
-                    );
-                  })}
-                </div>
+                        <Plus width={13} height={13} className="shrink-0 text-muted-fg" />
+                        <span className="min-w-0 flex-1 truncate text-sm text-fg">{m.metric}</span>
+                        <span className="shrink-0 text-[10px] text-muted-fg">{m.source}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="px-1.5 py-1.5 text-xs text-muted-fg">All series shown.</p>
+                )}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addCustom(custom);
+                    setCustom("");
+                  }}
+                  className="mt-1 flex gap-1.5 border-t border-border pt-2"
+                >
+                  <input
+                    value={custom}
+                    onChange={(e) => setCustom(e.target.value)}
+                    placeholder="source.metric"
+                    className="h-8 w-full rounded-lg border border-input bg-bg px-2.5 text-sm text-fg placeholder:text-muted-fg/70 focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  />
+                  <Button type="submit" size="sm" variant="primary" disabled={!custom.trim()}>
+                    Add
+                  </Button>
+                </form>
               </div>
             ) : null}
           </div>
@@ -329,14 +442,11 @@ export function JournalTable({
           {/* save view */}
           <div className="relative" ref={saveRef}>
             <Button size="sm" variant="secondary" onClick={() => setSaveOpen((o) => !o)}>
-              <Plus width={15} height={15} />
+              <Bookmark width={15} height={15} />
               Save view
             </Button>
             {saveOpen ? (
               <div className="absolute right-0 z-50 mt-2 w-64 rounded-xl border border-border bg-card p-3 shadow-xl">
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-                  Save current layout
-                </p>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -351,16 +461,13 @@ export function JournalTable({
                     autoFocus
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Sleep"
+                    placeholder="View name"
                     className="h-8 w-full rounded-lg border border-input bg-bg px-2.5 text-sm text-fg placeholder:text-muted-fg/70 focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                   />
                   <Button type="submit" size="sm" variant="primary" disabled={!name.trim()}>
                     Save
                   </Button>
                 </form>
-                <p className="mt-2 text-[11px] text-muted-fg">
-                  Captures which columns are shown, their order and widths.
-                </p>
               </div>
             ) : null}
           </div>
@@ -391,7 +498,7 @@ export function JournalTable({
                       }}
                       onDrop={() => dropOn(header.column.id)}
                       className={cn(
-                        "relative select-none border-b border-border bg-muted/50 px-3 py-2 align-bottom",
+                        "group relative select-none border-b border-border bg-muted/50 px-3 py-2 align-bottom",
                         overId === header.column.id && "bg-accent/10",
                         dragId === header.column.id && "opacity-50",
                       )}
@@ -425,6 +532,16 @@ export function JournalTable({
                             </span>
                           ) : null}
                         </span>
+                        {!isDate ? (
+                          <button
+                            type="button"
+                            title="Remove column"
+                            onClick={() => removeColumn(header.column.id)}
+                            className="-mr-1 shrink-0 rounded p-0.5 text-muted-fg/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                          >
+                            <X width={12} height={12} />
+                          </button>
+                        ) : null}
                       </div>
                       {header.column.getCanResize() ? (
                         <span
@@ -467,14 +584,12 @@ export function JournalTable({
 
       {!data.days.length ? (
         <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-10 text-center text-sm text-muted-fg">
-          No days yet. Connect a source or structure an inbox item to fill the table.
+          No data yet.
         </div>
       ) : (
         <p className="mt-2.5 text-[11px] text-muted-fg">
-          {data.totalDays} day{data.totalDays === 1 ? "" : "s"} · {data.metrics.length} metric
-          {data.metrics.length === 1 ? "" : "s"} · drag{" "}
-          <GripVertical width={11} height={11} className="inline align-[-1px] text-muted-fg" /> to
-          reorder, drag a column edge to resize, then <b className="font-medium text-fg">Save view</b>.
+          {data.totalDays} day{data.totalDays === 1 ? "" : "s"} · {shownCount} column
+          {shownCount === 1 ? "" : "s"}
         </p>
       )}
     </div>

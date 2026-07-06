@@ -12,10 +12,7 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Settings"
-        subtitle="Your profile, AI provider, data location and appearance."
-      />
+      <PageHeader title="Settings" />
       <SettingsForm config={pub} />
     </div>
   );

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { readConfig } from "@/lib/config";
+import { effectiveProviders, readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import { appendInboxItem, readRecord, rebuild } from "@/lib/record";
 import { describeStt, transcribeMemo, type SttEnv } from "@/lib/voice";
@@ -12,12 +12,12 @@ export const dynamic = "force-dynamic";
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB (also OpenAI Whisper's file cap)
 
 /** Build the STT environment from process.env + config. An OpenAI key from either
- *  a dedicated env var or the saved LLM key (when the provider is OpenAI) enables
- *  the cloud Whisper fallback; WHISPER_BIN enables local transcription. */
+ *  a dedicated env var or an added OpenAI provider account enables the cloud Whisper
+ *  fallback; WHISPER_BIN enables local transcription. */
 function sttEnv(): SttEnv {
   const cfg = readConfig();
-  const openaiKey =
-    process.env.OPENAI_API_KEY || (cfg?.llmProvider === "openai" ? cfg.llmKey : "") || "";
+  const openaiAcct = effectiveProviders(cfg).find((p) => p.type === "openai" && p.apiKey);
+  const openaiKey = process.env.OPENAI_API_KEY || openaiAcct?.apiKey || "";
   return {
     whisperBin: process.env.WHISPER_BIN || "",
     whisperArgs: process.env.WHISPER_ARGS || "",

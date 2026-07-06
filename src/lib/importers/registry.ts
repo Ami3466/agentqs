@@ -12,6 +12,8 @@ import { traktPlugin } from "./trakt";
 import { notionPlugin } from "./notion";
 import { deezerPlugin } from "./deezer";
 import { swarmPlugin } from "./swarm";
+import { mastodonPlugin } from "./mastodon";
+import { withingsPlugin } from "./withings";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
@@ -37,6 +39,8 @@ export const PLUGINS: ImporterPlugin[] = [
   notionPlugin,
   deezerPlugin,
   swarmPlugin,
+  mastodonPlugin,
+  withingsPlugin,
 ];
 
 export function pluginById(id: string): ImporterPlugin | undefined {

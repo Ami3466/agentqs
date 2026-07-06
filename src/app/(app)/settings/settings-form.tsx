@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
 import { Check, Eye, EyeOff, Moon, Plus, RefreshCw, Spinner, Sparkles, Sun, Trash } from "@/components/icons";
 import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
-import { PROVIDERS } from "@/lib/models";
+import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
 import type { PublicConfig } from "@/lib/config";
 
@@ -18,15 +18,23 @@ interface EmbedStatus {
   modelId: string;
 }
 
-function Section({
-  title,
-  desc,
-  children,
-}: {
-  title: string;
-  desc?: string;
-  children: React.ReactNode;
-}) {
+/** One editable provider account row in the list. */
+interface ProviderRow {
+  id: string;
+  type: string;
+  label: string;
+  baseUrl: string;
+  hasKey: string; // masked existing key
+  key: string; // new key (blank = keep existing)
+  models: string[]; // live list loaded from /api/models
+  loading: boolean;
+  err: string;
+}
+
+let rid = 0;
+const newId = (type: string) => `${type}-${Date.now().toString(36)}-${(rid++).toString(36)}`;
+
+function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
     <Card className="p-5 sm:p-6">
       <div className="mb-4">
@@ -44,15 +52,32 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
 
   const [username, setUsername] = useState(config.username);
   const [password, setPassword] = useState("");
-  const [provider, setProvider] = useState(config.llmProvider || "");
-  const [model, setModel] = useState(config.model || "");
-  const [llmKey, setLlmKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
 
-  // Live model list — fetched from the provider's /models, never hardcoded.
-  const [models, setModels] = useState<string[]>(config.model ? [config.model] : []);
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [modelsErr, setModelsErr] = useState("");
+  // Providers LIST — add many; each is label + key + base over a known type.
+  const [providers, setProviders] = useState<ProviderRow[]>(
+    config.providers.map((p) => ({
+      id: p.id,
+      type: p.type,
+      label: p.label,
+      baseUrl: p.baseUrl,
+      hasKey: p.hasKey,
+      key: "",
+      models: [],
+      loading: false,
+      err: "",
+    })),
+  );
+  const [sel, setSel] = useState(config.selectedModel);
+
+  // Embedding / Voice / Channels
+  const [embMode, setEmbMode] = useState<"local" | "api">(config.embedding.mode);
+  const [embModel, setEmbModel] = useState(config.embedding.model);
+  const [embKey, setEmbKey] = useState("");
+  const [voiceProvider, setVoiceProvider] = useState(config.voice.provider);
+  const [voiceKey, setVoiceKey] = useState("");
+  const [voiceAgent, setVoiceAgent] = useState(config.voice.agentId);
+  const [tgToken, setTgToken] = useState("");
+  const [slackToken, setSlackToken] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -61,37 +86,54 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
 
-  // Mentors = built-ins + any custom ones added here or from the CLI / MCP / API.
+  // Skills = built-ins + any added here or from the CLI / MCP / API.
   const [skills, setSkills] = useState<(Skill & { builtin: boolean })[]>(
     SKILLS.map((s) => ({ ...s, builtin: true })),
   );
   const [newName, setNewName] = useState("");
   const [newSystem, setNewSystem] = useState("");
-  const [addingMentor, setAddingMentor] = useState(false);
-  const [mentorErr, setMentorErr] = useState("");
+  const [addingSkill, setAddingSkill] = useState(false);
+  const [skillErr, setSkillErr] = useState("");
 
-  async function loadModels() {
-    if (!provider) return;
-    setLoadingModels(true);
-    setModelsErr("");
+  function patchRow(id: string, up: Partial<ProviderRow>) {
+    setProviders((rows) => rows.map((r) => (r.id === id ? { ...r, ...up } : r)));
+  }
+
+  function addProvider() {
+    const type = "anthropic";
+    setProviders((rows) => [
+      ...rows,
+      { id: newId(type), type, label: "", baseUrl: defaultBaseFor(type), hasKey: "", key: "", models: [], loading: false, err: "" },
+    ]);
+  }
+
+  function removeProvider(id: string) {
+    setProviders((rows) => rows.filter((r) => r.id !== id));
+    setSel((s) => (s?.providerId === id ? null : s));
+  }
+
+  /** Load a provider's live model list from its own /models endpoint. */
+  async function loadModels(row: ProviderRow) {
+    patchRow(row.id, { loading: true, err: "" });
+    const body = row.key
+      ? { type: row.type, key: row.key, base: row.baseUrl }
+      : row.hasKey
+        ? { providerId: row.id }
+        : { type: row.type, key: "", base: row.baseUrl };
     try {
       const res = await fetch("/api/models", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ provider, ...(llmKey ? { key: llmKey } : {}) }),
+        body: JSON.stringify(body),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setModelsErr(d.error || "Could not load models.");
+        patchRow(row.id, { loading: false, err: d.error || "Could not load models." });
         return;
       }
-      const list = Array.isArray(d.models) ? (d.models as string[]) : [];
-      setModels(list);
-      if (list.length && !list.includes(model)) setModel(list[0]);
+      patchRow(row.id, { loading: false, models: Array.isArray(d.models) ? d.models : [] });
     } catch {
-      setModelsErr("Could not reach the provider.");
-    } finally {
-      setLoadingModels(false);
+      patchRow(row.id, { loading: false, err: "Could not reach the provider." });
     }
   }
 
@@ -100,13 +142,13 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     if (d && Array.isArray(d.skills)) setSkills(d.skills);
   }
 
-  async function addMentor() {
-    setMentorErr("");
+  async function addSkill() {
+    setSkillErr("");
     if (newName.trim().length < 2 || newSystem.trim().length < 10) {
-      setMentorErr("Give a name and a system prompt (10+ chars).");
+      setSkillErr("Give a name and a system prompt (10+ chars).");
       return;
     }
-    setAddingMentor(true);
+    setAddingSkill(true);
     try {
       const res = await fetch("/api/skills", {
         method: "POST",
@@ -115,36 +157,31 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMentorErr(d.error || "Could not add mentor.");
+        setSkillErr(d.error || "Could not add skill.");
         return;
       }
       setNewName("");
       setNewSystem("");
       await refreshSkills();
     } finally {
-      setAddingMentor(false);
+      setAddingSkill(false);
     }
   }
 
-  async function removeMentor(id: string) {
+  async function removeSkill(id: string) {
     await fetch(`/api/skills?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
     await refreshSkills();
   }
 
-  // Local semantic index status (default-on, no key) for the Semantic search section.
   useEffect(() => {
     let alive = true;
     fetch("/api/embeddings")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (alive && d) setEmbed(d as EmbedStatus);
-      })
+      .then((d) => alive && d && setEmbed(d as EmbedStatus))
       .catch(() => {});
     fetch("/api/skills")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (alive && d && Array.isArray(d.skills)) setSkills(d.skills);
-      })
+      .then((d) => alive && d && Array.isArray(d.skills) && setSkills(d.skills))
       .catch(() => {});
     return () => {
       alive = false;
@@ -177,14 +214,25 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     setError("");
     setSaved(false);
 
-    const body: Record<string, string> = {
+    const body: Record<string, unknown> = {
       username: username.trim(),
-      llmProvider: provider,
-      model,
       theme,
+      providers: providers.map((p) => ({
+        id: p.id,
+        type: p.type,
+        label: p.label.trim(),
+        apiKey: p.key, // blank = keep stored
+        baseUrl: p.baseUrl.trim(),
+      })),
+      selectedModel: sel ?? null,
+      embedding: { mode: embMode, model: embModel, ...(embKey ? { apiKey: embKey } : {}) },
+      voice: { provider: voiceProvider, agentId: voiceAgent, ...(voiceKey ? { apiKey: voiceKey } : {}) },
+      channels: {
+        ...(tgToken ? { telegramBotToken: tgToken } : {}),
+        ...(slackToken ? { slackBotToken: slackToken } : {}),
+      },
     };
     if (password) body.password = password;
-    if (llmKey) body.llmKey = llmKey;
 
     const res = await fetch("/api/settings", {
       method: "POST",
@@ -200,29 +248,27 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     }
     setSaved(true);
     setPassword("");
-    setLlmKey("");
+    setEmbKey("");
+    setVoiceKey("");
+    setTgToken("");
+    setSlackToken("");
     setTimeout(() => setSaved(false), 2000);
     router.refresh();
   }
 
+  // A provider account is a valid model source once it has a key (saved or typed).
+  const keyedProviders = providers.filter((p) => p.hasKey || p.key);
+  const selRow = providers.find((p) => p.id === sel?.providerId);
+
   return (
     <form onSubmit={save} className="max-w-2xl space-y-5">
       {/* Profile */}
-      <Section title="Profile" desc="How you sign in to this instance.">
+      <Section title="Profile">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Username" htmlFor="username">
-            <Input
-              id="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-            />
+          <Field label="Email" htmlFor="username">
+            <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
           </Field>
-          <Field
-            label="New password"
-            htmlFor="password"
-            hint="Leave blank to keep your current password."
-          >
+          <Field label="New password" htmlFor="password">
             <Input
               id="password"
               type="password"
@@ -235,123 +281,147 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
-      {/* AI provider */}
-      <Section
-        title="AI provider"
-        desc="Bring your own key. Claude, OpenAI or Gemini — your data never trains anyone's model."
-      >
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Provider" htmlFor="provider">
-              <Select
-                id="provider"
-                value={provider}
-                onChange={(e) => {
-                  setProvider(e.target.value);
-                  setModels([]);
-                  setModel("");
-                  setModelsErr("");
-                }}
-              >
-                <option value="">Not set</option>
-                {PROVIDERS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field
-              label="Model"
-              htmlFor="model"
-              hint={
-                modelsErr
-                  ? modelsErr
-                  : models.length
-                    ? undefined
-                    : "Load the live list from your provider."
-              }
-            >
-              <div className="flex gap-2">
-                <Select
-                  id="model"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  disabled={!models.length}
-                  className="flex-1"
-                >
-                  {models.length ? (
-                    models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="">{provider ? "Load models →" : "Pick a provider first"}</option>
-                  )}
-                </Select>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => void loadModels()}
-                  disabled={!provider || loadingModels}
-                  title="Fetch this provider's live models"
-                >
-                  {loadingModels ? <Spinner width={14} height={14} /> : <RefreshCw width={14} height={14} />}
-                </Button>
-              </div>
-            </Field>
-          </div>
-
-          <Field
-            label="API key"
-            htmlFor="llmKey"
-            hint={
-              config.hasLlmKey
-                ? `A key is saved (${config.hasLlmKey}). Enter a new one to replace it.`
-                : "Stored locally in your data dir. Never sent anywhere but your provider."
-            }
-          >
-            <div className="relative">
-              <Input
-                id="llmKey"
-                type={showKey ? "text" : "password"}
-                value={llmKey}
-                onChange={(e) => setLlmKey(e.target.value)}
-                placeholder={
-                  PROVIDERS.find((p) => p.id === provider)?.keyHint || "sk-…"
-                }
-                autoComplete="off"
-                className="pr-10 font-mono"
+      {/* AI providers list */}
+      <Section title="AI providers">
+        <div className="space-y-3">
+          {providers.length === 0 ? (
+            <p className="text-sm text-muted-fg">No providers added.</p>
+          ) : (
+            providers.map((row) => (
+              <ProviderCard
+                key={row.id}
+                row={row}
+                onChange={(up) => patchRow(row.id, up)}
+                onLoad={() => void loadModels(row)}
+                onRemove={() => removeProvider(row.id)}
               />
-              <button
-                type="button"
-                onClick={() => setShowKey((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
-                aria-label={showKey ? "Hide key" : "Show key"}
-              >
-                {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
-              </button>
-            </div>
+            ))
+          )}
+          <Button type="button" size="sm" onClick={addProvider}>
+            <Plus width={14} height={14} /> Add provider
+          </Button>
+        </div>
+
+        {/* Default chat model */}
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <Field label="Default model — provider">
+            <Select
+              value={sel?.providerId ?? ""}
+              onChange={(e) => setSel(e.target.value ? { providerId: e.target.value, model: "" } : null)}
+            >
+              <option value="">None</option>
+              {keyedProviders.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label || providerTypeOf(p.type)?.label || p.type}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Default model — id">
+            <Select
+              value={sel?.model ?? ""}
+              disabled={!selRow}
+              onChange={(e) => sel && setSel({ providerId: sel.providerId, model: e.target.value })}
+            >
+              {selRow?.models.length ? (
+                selRow.models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))
+              ) : (
+                <option value={sel?.model ?? ""}>{sel?.model || "Load models on the provider"}</option>
+              )}
+            </Select>
           </Field>
         </div>
       </Section>
 
+      {/* Embedding model */}
+      <Section title="Embedding model">
+        <div className="grid max-w-xs grid-cols-2 gap-2">
+          {(["local", "api"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setEmbMode(m)}
+              className={cn(
+                "rounded-lg border px-3 py-2 text-sm font-medium capitalize transition-colors",
+                embMode === m ? "border-accent bg-accent/10 text-fg" : "border-border bg-card text-muted-fg hover:bg-muted",
+              )}
+            >
+              {m === "local" ? "Local" : "API"}
+            </button>
+          ))}
+        </div>
+        {embMode === "local" ? (
+          <p className="mt-3 text-xs text-muted-fg">
+            all-MiniLM, on-device. No key, no network. Stored in <code className="font-mono">{config.dataDir}</code>.
+          </p>
+        ) : (
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <Field label="Model">
+              <Input value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="text-embedding-3-small" />
+            </Field>
+            <Field label="API key" hint={config.embedding.hasKey ? "A key is saved. Enter a new one to replace it." : undefined}>
+              <Input type="password" value={embKey} onChange={(e) => setEmbKey(e.target.value)} placeholder="key" className="font-mono" />
+            </Field>
+          </div>
+        )}
+      </Section>
+
+      {/* Voice model */}
+      <Section title="Voice model">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Provider">
+            <Select value={voiceProvider} onChange={(e) => setVoiceProvider(e.target.value as typeof voiceProvider)}>
+              <option value="">None</option>
+              <option value="elevenlabs">ElevenLabs</option>
+              <option value="google-live">Google Live</option>
+            </Select>
+          </Field>
+          {voiceProvider ? (
+            <Field label="API key" hint={config.voice.hasKey ? "A key is saved. Enter a new one to replace it." : undefined}>
+              <Input type="password" value={voiceKey} onChange={(e) => setVoiceKey(e.target.value)} placeholder="key" className="font-mono" />
+            </Field>
+          ) : null}
+          {voiceProvider === "elevenlabs" ? (
+            <Field label="Agent id">
+              <Input value={voiceAgent} onChange={(e) => setVoiceAgent(e.target.value)} placeholder="agent_…" className="font-mono" />
+            </Field>
+          ) : null}
+        </div>
+      </Section>
+
+      {/* Channels */}
+      <Section title="Channels">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Telegram bot token" hint={config.channels.telegram ? "Linked. Enter a new token to replace it." : undefined}>
+            <Input type="password" value={tgToken} onChange={(e) => setTgToken(e.target.value)} placeholder="123456:ABC…" className="font-mono" />
+          </Field>
+          <Field label="Slack bot token" hint={config.channels.slack ? "Linked. Enter a new token to replace it." : undefined}>
+            <Input type="password" value={slackToken} onChange={(e) => setSlackToken(e.target.value)} placeholder="xoxb-…" className="font-mono" />
+          </Field>
+        </div>
+        <p className="mt-3 text-xs text-muted-fg">
+          Webhook path <code className="font-mono">/api/channels/telegram</code> · <code className="font-mono">/api/channels/slack</code>.
+        </p>
+      </Section>
+
       {/* Data */}
-      <Section title="Data" desc="Where agentqs stores your config, record and cache.">
+      <Section title="Data">
         <Field label="Data directory">
           <div className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[13px] text-fg">
             {config.dataDir}
           </div>
         </Field>
         <p className="mt-2 text-xs text-muted-fg">
-          Set with the <code className="font-mono">AGENTQS_DATA_DIR</code> env
-          var (a restart applies it).
+          Set with <code className="font-mono">AGENTQS_DATA_DIR</code> (a restart applies it).
         </p>
       </Section>
 
       {/* Appearance */}
-      <Section title="Appearance" desc="Applies instantly and persists on this device.">
+      <Section title="Appearance">
         <div className="grid max-w-xs grid-cols-2 gap-2">
           {(["light", "dark"] as const).map((t) => {
             const active = theme === t;
@@ -363,9 +433,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 onClick={() => setTheme(t)}
                 className={cn(
                   "flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium capitalize transition-colors",
-                  active
-                    ? "border-accent bg-accent/10 text-fg"
-                    : "border-border bg-card text-muted-fg hover:bg-muted hover:text-fg",
+                  active ? "border-accent bg-accent/10 text-fg" : "border-border bg-card text-muted-fg hover:bg-muted hover:text-fg",
                 )}
               >
                 <Icon width={16} height={16} />
@@ -378,29 +446,19 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       </Section>
 
       {/* Semantic search (embeddings) */}
-      <Section
-        title="Semantic search"
-        desc="Find days that felt like this. Embeddings run on a local model — no key, no cost, private. On by default."
-      >
+      <Section title="Semantic search">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex items-center gap-2 text-sm">
-            <span
-              className={cn(
-                "inline-flex h-2 w-2 rounded-full",
-                embed?.built ? "bg-accent" : "bg-muted-fg/50",
-              )}
-            />
+            <span className={cn("inline-flex h-2 w-2 rounded-full", embed?.built ? "bg-accent" : "bg-muted-fg/50")} />
             <span className="text-fg">
               {embed
                 ? embed.built
                   ? `${embed.count} ${embed.count === 1 ? "entry" : "entries"} indexed`
-                  : "Not indexed yet — runs on your first search"
+                  : "Not indexed yet"
                 : "Checking…"}
             </span>
             {embed?.stale && embed.built ? (
-              <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
-                out of date
-              </span>
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">out of date</span>
             ) : null}
           </div>
           <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing}>
@@ -408,45 +466,24 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
             {reindexing ? "Reindexing…" : "Reindex now"}
           </Button>
         </div>
-        <p className="mt-3 text-xs text-muted-fg">
-          Model <code className="font-mono">{embed?.modelId || "agentqs-local-hash-v1"}</code>
-          {embed?.backend ? (
-            <>
-              {" "}
-              · store <code className="font-mono">{embed.backend}</code>
-            </>
-          ) : null}
-          . Keyword search (FTS5) stays always-on and free alongside it.
-        </p>
       </Section>
 
-      {/* Mentors */}
-      <Section
-        title="Mentors"
-        desc="The voices your chat can take. Pick one from the mentor chip mid-conversation."
-      >
+      {/* Skills */}
+      <Section title="Skills">
         <div className="space-y-2">
           {skills.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5"
-            >
+            <div key={s.id} className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
               <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-fg/50" aria-hidden />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-fg">
                   {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
-                  {s.builtin ? null : (
-                    <span className="ml-2 rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-fg">
-                      custom
-                    </span>
-                  )}
                 </p>
                 <p className="text-xs text-muted-fg">{s.blurb}</p>
               </div>
               {s.builtin ? null : (
                 <button
                   type="button"
-                  onClick={() => void removeMentor(s.id)}
+                  onClick={() => void removeSkill(s.id)}
                   className="shrink-0 rounded p-1 text-muted-fg hover:text-destructive"
                   aria-label={`Remove ${s.name}`}
                 >
@@ -457,33 +494,23 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
           ))}
         </div>
 
-        {/* Add a mentor */}
         <div className="mt-4 space-y-2 rounded-lg border border-border p-3">
-          <Input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Mentor name — e.g. Stoic"
-          />
+          <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name" />
           <textarea
             value={newSystem}
             onChange={(e) => setNewSystem(e.target.value)}
             rows={3}
-            placeholder="System prompt — how this mentor should think and reply."
+            placeholder="System prompt"
             className="w-full resize-y rounded-lg border border-border bg-card px-3 py-2 text-sm text-fg outline-none placeholder:text-muted-fg/70 focus:border-ring/60"
           />
           <div className="flex items-center gap-3">
-            <Button type="button" size="sm" onClick={() => void addMentor()} disabled={addingMentor}>
-              {addingMentor ? <Spinner width={14} height={14} /> : <Plus width={14} height={14} />}
-              Add mentor
+            <Button type="button" size="sm" onClick={() => void addSkill()} disabled={addingSkill}>
+              {addingSkill ? <Spinner width={14} height={14} /> : <Plus width={14} height={14} />}
+              Add skill
             </Button>
-            {mentorErr ? <span className="text-xs text-destructive">{mentorErr}</span> : null}
+            {skillErr ? <span className="text-xs text-destructive">{skillErr}</span> : null}
           </div>
         </div>
-
-        <p className="mt-3 text-xs text-muted-fg">
-          Or from the terminal:{" "}
-          <code className="font-mono">agentqs skill add &quot;Stoic&quot; --system &quot;…&quot;</code>
-        </p>
       </Section>
 
       {/* Save bar */}
@@ -497,10 +524,86 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
             <Check width={16} height={16} /> Saved
           </span>
         ) : null}
-        {error ? (
-          <span className="text-sm text-destructive">{error}</span>
-        ) : null}
+        {error ? <span className="text-sm text-destructive">{error}</span> : null}
       </div>
     </form>
+  );
+}
+
+/** One provider account: type + label + key + base, with a live model loader. */
+function ProviderCard({
+  row,
+  onChange,
+  onLoad,
+  onRemove,
+}: {
+  row: ProviderRow;
+  onChange: (up: Partial<ProviderRow>) => void;
+  onLoad: () => void;
+  onRemove: () => void;
+}) {
+  const [showKey, setShowKey] = useState(false);
+  const t = providerTypeOf(row.type);
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <div className="flex items-center gap-2">
+        <Select
+          value={row.type}
+          onChange={(e) => {
+            const type = e.target.value;
+            onChange({ type, baseUrl: row.baseUrl && row.baseUrl !== defaultBaseFor(row.type) ? row.baseUrl : defaultBaseFor(type), models: [] });
+          }}
+          className="w-40"
+        >
+          {PROVIDER_TYPES.map((p) => (
+            <option key={p.type} value={p.type}>
+              {p.label}
+            </option>
+          ))}
+        </Select>
+        <Input value={row.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Label" className="flex-1" />
+        <button
+          type="button"
+          onClick={onRemove}
+          className="shrink-0 rounded p-1.5 text-muted-fg hover:text-destructive"
+          aria-label="Remove provider"
+        >
+          <Trash width={15} height={15} />
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="relative">
+          <Input
+            type={showKey ? "text" : "password"}
+            value={row.key}
+            onChange={(e) => onChange({ key: e.target.value })}
+            placeholder={row.hasKey ? row.hasKey : t?.keyHint || "key"}
+            autoComplete="off"
+            className="pr-10 font-mono"
+          />
+          <button
+            type="button"
+            onClick={() => setShowKey((v) => !v)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
+            aria-label={showKey ? "Hide key" : "Show key"}
+          >
+            {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
+          </button>
+        </div>
+        <Input value={row.baseUrl} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="Base URL" className="font-mono" />
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Button type="button" size="sm" onClick={onLoad} disabled={row.loading}>
+          {row.loading ? <Spinner width={14} height={14} /> : <RefreshCw width={14} height={14} />}
+          Load models
+        </Button>
+        {row.models.length ? (
+          <span className="text-xs text-muted-fg">{row.models.length} models</span>
+        ) : null}
+        {row.err ? <span className="text-xs text-destructive">{row.err}</span> : null}
+      </div>
+    </div>
   );
 }

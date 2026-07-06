@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
-import { appendSession, readSessionsFromRecord, rebuild } from "@/lib/record";
+import { appendSession, readSessionsFromRecord, rebuild, removeSessionFromRecord } from "@/lib/record";
 import { resolveSkill } from "@/lib/skills-store";
 import type { LlmMessage } from "@/lib/llm";
 import {
@@ -115,4 +115,23 @@ export async function POST(req: Request) {
   rebuild({ recordDir: rDir });
 
   return NextResponse.json({ ok: true, via, session: toView(item) });
+}
+
+/** Delete a session from the record by id, then rebuild so it leaves the timeline. */
+export async function DELETE(req: Request) {
+  if (!getCurrentUser()) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const { searchParams } = new URL(req.url);
+  const id = (searchParams.get("id") || "").trim();
+  if (!id) {
+    return NextResponse.json({ error: "Which session? Pass ?id=…" }, { status: 400 });
+  }
+  const rDir = recordDir();
+  const removed = removeSessionFromRecord(id, { recordDir: rDir });
+  if (!removed) {
+    return NextResponse.json({ error: "No such session." }, { status: 404 });
+  }
+  rebuild({ recordDir: rDir });
+  return NextResponse.json({ ok: true, id });
 }

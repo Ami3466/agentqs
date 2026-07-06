@@ -43,22 +43,16 @@ interface Registered {
 }
 
 /**
- * Roster of integrations that don't (yet) have a live in-app importer, shown as
- * real connectable sources — never faked as connected. Two honest wire-up paths:
- *   • file       — you export the data (Apple Health / Watch, Android Health
- *                  Connect) and import the file via the CLI / local daemon.
- *   • automation — no ready API, so the record-login + scrape wizard drives the
- *                  site headlessly (Garmin, Withings, Instapaper, Mastodon, Apple
- *                  Weather). Wiring one up moves it to Automated imports for real.
+ * Roster integrations that have no live single-credential in-app importer yet,
+ * shown as real connectable sources — never faked as connected. Wiring one up runs
+ * the record-login + scrape wizard, which moves it to Automated imports for real.
+ * (The rest of the roster — Oura, Fitbit, Strava, Withings, Mastodon, … — are live
+ * API plugins in ./importers/registry; GitHub + WHOOP are bespoke rows.)
  */
 const PLACEHOLDERS: Registered[] = [
-  { id: "apple-health", name: "Apple Health", kind: "manual", detail: "steps, HR, sleep, workouts", live: false, setup: "file" },
-  { id: "apple-watch", name: "Apple Watch", kind: "manual", detail: "workouts, heart rate, activity rings", live: false, setup: "file" },
-  { id: "health-connect", name: "Health Connect", kind: "manual", detail: "Android health + fitness aggregate", live: false, setup: "file" },
+  { id: "health-connect", name: "Health Connect", kind: "manual", detail: "Android health + fitness aggregate", live: false, setup: "automation" },
   { id: "garmin", name: "Garmin", kind: "manual", detail: "activities, sleep, body battery", live: false, setup: "automation", setupUrl: "https://connect.garmin.com/signin" },
-  { id: "withings", name: "Withings", kind: "manual", detail: "weight, body composition, sleep", live: false, setup: "automation", setupUrl: "https://account.withings.com/connectionwou/account_login" },
   { id: "instapaper", name: "Instapaper", kind: "manual", detail: "articles saved + read", live: false, setup: "automation", setupUrl: "https://www.instapaper.com/user/login" },
-  { id: "mastodon", name: "Mastodon", kind: "manual", detail: "posts per day", live: false, setup: "automation" },
   { id: "apple-weather", name: "Apple Weather", kind: "manual", detail: "daily conditions + temperature", live: false, setup: "automation", setupUrl: "https://weather.apple.com" },
 ];
 
@@ -224,7 +218,13 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
   for (const plugin of PLUGINS) out.push(pluginRow(cfg, dir, plugin));
-  for (const importer of FILE_IMPORTERS) out.push(fileSourceRow(cfg, dir, importer));
+  // Tier-2 file importers (Chrome, iPhone) are local-only and off the API roster —
+  // surface one only once it actually holds data, so the Connections catalog stays
+  // the API roster while imported file data is still manageable under Automated.
+  for (const importer of FILE_IMPORTERS) {
+    const row = fileSourceRow(cfg, dir, importer);
+    if (row.connected) out.push(row);
+  }
 
   for (const recipe of listAutomations(cfg)) out.push(automationRow(cfg, dir, recipe));
 

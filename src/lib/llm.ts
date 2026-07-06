@@ -6,7 +6,7 @@
  * they haven't. One helper, one fetch, provider chosen by id.
  */
 
-import { fallbackModel } from "./models";
+import { fallbackModel, type ResolvedLlm } from "./models";
 
 export interface LlmMessage {
   role: "user" | "assistant";
@@ -14,9 +14,7 @@ export interface LlmMessage {
 }
 
 export interface LlmRequest {
-  provider: string;
-  apiKey: string;
-  model?: string;
+  llm: ResolvedLlm; // protocol + key + base + model to call
   system: string;
   messages: LlmMessage[];
   maxTokens?: number;
@@ -44,15 +42,19 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
   return json;
 }
 
-/** Run one completion. Returns the assistant's text; throws on transport/API error. */
+/** Run one completion. Returns the assistant's text; throws on transport/API error.
+ *  Honours each provider's base URL so OpenAI-compatible endpoints (OpenRouter /
+ *  Groq / custom) work through the same path as OpenAI. */
 export async function llmComplete(req: LlmRequest): Promise<string> {
-  const model = fallbackModel(req.provider, req.model);
+  const { llm } = req;
+  const model = fallbackModel(llm.type, llm.model);
   const maxTokens = req.maxTokens ?? 1024;
+  const base = (llm.baseUrl || "").replace(/\/$/, "");
 
-  if (req.provider === "anthropic") {
+  if (llm.protocol === "anthropic") {
     const data = await post(
-      "https://api.anthropic.com/v1/messages",
-      { "x-api-key": req.apiKey, "anthropic-version": "2023-06-01" },
+      `${base}/messages`,
+      { "x-api-key": llm.apiKey, "anthropic-version": "2023-06-01" },
       { model, max_tokens: maxTokens, system: req.system, messages: req.messages },
       req.signal,
     );
@@ -60,23 +62,9 @@ export async function llmComplete(req: LlmRequest): Promise<string> {
     return parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("").trim();
   }
 
-  if (req.provider === "openai") {
+  if (llm.protocol === "google") {
     const data = await post(
-      "https://api.openai.com/v1/chat/completions",
-      { authorization: `Bearer ${req.apiKey}` },
-      {
-        model,
-        max_tokens: maxTokens,
-        messages: [{ role: "system", content: req.system }, ...req.messages],
-      },
-      req.signal,
-    );
-    return String(data?.choices?.[0]?.message?.content ?? "").trim();
-  }
-
-  if (req.provider === "google") {
-    const data = await post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(req.apiKey)}`,
+      `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(llm.apiKey)}`,
       {},
       {
         systemInstruction: { parts: [{ text: req.system }] },
@@ -92,5 +80,16 @@ export async function llmComplete(req: LlmRequest): Promise<string> {
     return parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("").trim();
   }
 
-  throw new Error(`Unknown provider "${req.provider}".`);
+  // openai-compatible (openai / openrouter / groq / custom)
+  const data = await post(
+    `${base}/chat/completions`,
+    { authorization: `Bearer ${llm.apiKey}` },
+    {
+      model,
+      max_tokens: maxTokens,
+      messages: [{ role: "system", content: req.system }, ...req.messages],
+    },
+    req.signal,
+  );
+  return String(data?.choices?.[0]?.message?.content ?? "").trim();
 }

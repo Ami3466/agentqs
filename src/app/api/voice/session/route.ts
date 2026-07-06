@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { readConfig } from "@/lib/config";
 import { describeSession, elevenLabsSignedUrl, type SessionEnv } from "@/lib/voice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** The in-chat live voice session is ElevenLabs Conversational AI — config-gated
- *  behind ELEVENLABS_API_KEY + ELEVENLABS_AGENT_ID. */
+/** The in-chat live voice session is ElevenLabs Conversational AI — configured from
+ *  the Settings voice picker, falling back to ELEVENLABS_API_KEY + ELEVENLABS_AGENT_ID. */
 function sessionEnv(): SessionEnv {
+  const v = readConfig()?.voice;
+  const key = v?.provider === "elevenlabs" ? v.apiKey : "";
   return {
-    elevenLabsKey: process.env.ELEVENLABS_API_KEY || "",
-    elevenLabsAgentId: process.env.ELEVENLABS_AGENT_ID || "",
+    elevenLabsKey: key || process.env.ELEVENLABS_API_KEY || "",
+    elevenLabsAgentId: v?.agentId || process.env.ELEVENLABS_AGENT_ID || "",
   };
 }
 

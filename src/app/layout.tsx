@@ -4,8 +4,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 
 export const metadata: Metadata = {
   title: "agentqs",
-  description:
-    "A journal that builds itself — your AI mentor grounded in your own data.",
+  description: "A journal that builds itself — one private record, one agent that reasons over it.",
 };
 
 export const viewport: Viewport = {

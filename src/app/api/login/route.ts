@@ -13,13 +13,13 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => null);
-  const username = String(body?.username ?? "").trim();
+  const username = String(body?.username ?? "").trim().toLowerCase();
   const password = String(body?.password ?? "");
 
   const ok = username === cfg.username && verifyPassword(password, cfg.passwordHash);
   if (!ok) {
     return NextResponse.json(
-      { error: "Invalid username or password." },
+      { error: "Invalid email or password." },
       { status: 401 },
     );
   }

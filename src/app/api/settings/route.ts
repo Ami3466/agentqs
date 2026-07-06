@@ -1,11 +1,27 @@
 import { NextResponse } from "next/server";
 import { hashPassword } from "@/lib/auth";
-import { readConfig, sessionSecretFor, writeConfig } from "@/lib/config";
+import { publicConfig, readConfig, sanitizeProviders, sessionSecretFor, writeConfig } from "@/lib/config";
 import { getCurrentUser, setSessionCookie } from "@/lib/session";
-import { isProvider } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Public config for the client — the providers list (masked) + the selected model,
+ *  so the chat model chip can list what's available. */
+export async function GET() {
+  if (!getCurrentUser()) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const cfg = readConfig();
+  if (!cfg) return NextResponse.json({ error: "No config." }, { status: 400 });
+  return NextResponse.json(publicConfig(cfg));
+}
+
+/** Blank incoming secret = keep the stored one (the client only ever holds a mask). */
+function keepOrSet(incoming: unknown, prev: string | undefined): string | undefined {
+  if (typeof incoming === "string" && incoming.trim()) return incoming;
+  return prev;
+}
 
 export async function POST(req: Request) {
   const user = getCurrentUser();
@@ -23,38 +39,73 @@ export async function POST(req: Request) {
   if (typeof body.username === "string") {
     const username = body.username.trim();
     if (username.length < 2) {
-      return NextResponse.json(
-        { error: "Username too short." },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "Username too short." }, { status: 400 });
     }
     cfg.username = username;
   }
   if (typeof body.password === "string" && body.password) {
     if (body.password.length < 6) {
-      return NextResponse.json(
-        { error: "Password must be at least 6 characters." },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "Password must be at least 6 characters." }, { status: 400 });
     }
     cfg.passwordHash = hashPassword(body.password);
   }
 
-  // AI provider
-  if (typeof body.llmProvider === "string") {
-    const provider = body.llmProvider;
-    if (provider && !isProvider(provider)) {
-      return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
+  // AI providers LIST. The client sends the whole list; a blank apiKey on a row
+  // means "keep the stored key" (it never held the raw one). Saving a list retires
+  // the legacy single-provider fields.
+  if (Array.isArray(body.providers)) {
+    const incoming = sanitizeProviders(body.providers);
+    const prevById = new Map((cfg.providers ?? []).map((p) => [p.id, p]));
+    cfg.providers = incoming.map((p) => ({
+      ...p,
+      apiKey: p.apiKey || prevById.get(p.id)?.apiKey || "",
+    }));
+    cfg.llmProvider = "";
+    cfg.llmKey = "";
+    cfg.model = "";
+  }
+
+  // Selected chat model (provider account + live model id). null clears it.
+  if ("selectedModel" in body) {
+    const s = body.selectedModel;
+    if (s && typeof s === "object" && typeof s.providerId === "string" && typeof s.model === "string") {
+      cfg.selectedModel = { providerId: s.providerId, model: s.model };
+    } else {
+      cfg.selectedModel = undefined;
     }
-    cfg.llmProvider = provider;
-    if (!provider) cfg.model = "";
   }
-  // Model is a live id fetched from the provider — trust any non-empty string.
-  if (typeof body.model === "string" && cfg.llmProvider) {
-    cfg.model = body.model.trim();
+
+  // Embedding model
+  if (body.embedding && typeof body.embedding === "object") {
+    const e = body.embedding;
+    cfg.embedding = {
+      mode: e.mode === "api" ? "api" : "local",
+      model: typeof e.model === "string" ? e.model.trim() : cfg.embedding?.model,
+      providerId: typeof e.providerId === "string" ? e.providerId : cfg.embedding?.providerId,
+      apiKey: keepOrSet(e.apiKey, cfg.embedding?.apiKey),
+    };
   }
-  if (typeof body.llmKey === "string" && body.llmKey) {
-    cfg.llmKey = body.llmKey;
+
+  // Voice model
+  if (body.voice && typeof body.voice === "object") {
+    const v = body.voice;
+    const provider = v.provider === "elevenlabs" || v.provider === "google-live" ? v.provider : "";
+    cfg.voice = {
+      provider,
+      apiKey: keepOrSet(v.apiKey, cfg.voice?.apiKey),
+      agentId: typeof v.agentId === "string" ? v.agentId.trim() : cfg.voice?.agentId,
+    };
+  }
+
+  // Channels (Telegram + Slack)
+  if (body.channels && typeof body.channels === "object") {
+    const c = body.channels;
+    cfg.channels = {
+      telegramBotToken: keepOrSet(c.telegramBotToken, cfg.channels?.telegramBotToken),
+      telegramWebhookSecret: keepOrSet(c.telegramWebhookSecret, cfg.channels?.telegramWebhookSecret),
+      slackBotToken: keepOrSet(c.slackBotToken, cfg.channels?.slackBotToken),
+      slackSigningSecret: keepOrSet(c.slackSigningSecret, cfg.channels?.slackSigningSecret),
+    };
   }
 
   // Appearance (persisted server-side too; client localStorage drives paint)

@@ -287,7 +287,7 @@ function Panel({
         <div className="min-w-0">
           <p className="text-sm font-semibold text-fg">Voice memo</p>
           <p className="truncate text-[11px] text-muted-fg">
-            {cap?.ready ? cap.label : "Transcribes into your inbox"}
+            {cap?.ready ? cap.label : "Transcribes into the inbox"}
           </p>
         </div>
       </div>

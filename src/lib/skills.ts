@@ -21,7 +21,7 @@ export const SKILLS: Skill[] = [
   {
     id: "mentor",
     name: "Mentor",
-    blurb: "Direct, spots your patterns, holds you accountable",
+    blurb: "Direct, spots patterns, holds you accountable",
     system:
       `${GROUNDING} Right now you are the MENTOR: sharp, honest, a little demanding. ` +
       "Name the pattern, connect it to what their data shows, and end on the single next move that matters.",

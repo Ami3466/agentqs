@@ -7,27 +7,33 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * First-run signup: username + password, nothing else. The AI provider, key and
- * model are added later in Settings (or from the CLI) — signup stays a two-field
- * wall so a new instance is live in seconds.
+ * First-run signup: email + password + confirm, nothing else. The email is stored
+ * in the config `username` field (username = email). The AI provider, key and model
+ * are added later in Settings or from the CLI.
  */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function POST(req: Request) {
   if (configExists()) {
     return NextResponse.json({ error: "Already set up." }, { status: 409 });
   }
 
   const body = await req.json().catch(() => null);
-  const username = String(body?.username ?? "").trim();
+  const username = String(body?.username ?? "").trim().toLowerCase();
   const password = String(body?.password ?? "");
+  const confirm = String(body?.confirm ?? "");
 
-  if (username.length < 2) {
-    return NextResponse.json({ error: "Username too short." }, { status: 400 });
+  if (!EMAIL_RE.test(username)) {
+    return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
   }
   if (password.length < 6) {
     return NextResponse.json(
       { error: "Password must be at least 6 characters." },
       { status: 400 },
     );
+  }
+  if (password !== confirm) {
+    return NextResponse.json({ error: "Passwords don't match." }, { status: 400 });
   }
 
   const secret = process.env.SESSION_SECRET || newSecret();
