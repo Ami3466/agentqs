@@ -14,7 +14,6 @@ export interface AppConfig {
   llmProvider: string; // "" | anthropic | openai | google
   llmKey: string;
   model: string;
-  llmModels?: string[]; // ids fetched live from the provider (the picker's list)
   theme: string; // light | dark | system
   createdAt: string;
   githubToken?: string; // GitHub PAT for the commits importer (optional)
@@ -88,7 +87,6 @@ export interface PublicConfig {
   llmProvider: string;
   hasLlmKey: string; // masked tail, or ""
   model: string;
-  llmModels: string[]; // the live-fetched picker list, re-hydrates Settings
   theme: string;
   dataDir: string;
   createdAt: string;
@@ -101,7 +99,6 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     llmProvider: cfg.llmProvider,
     hasLlmKey: key ? `••••••••${key.slice(-4)}` : "",
     model: cfg.model,
-    llmModels: cfg.llmModels || [],
     theme: cfg.theme,
     dataDir: dataDir(),
     createdAt: cfg.createdAt,

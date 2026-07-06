@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
 import { Check, Eye, EyeOff, Moon, Spinner, Sparkles, Sun } from "@/components/icons";
 import { Button, Card, Field, Input, Select, cn } from "@/components/ui";
-import { PROVIDERS } from "@/lib/models";
+import {
+  DEFAULT_MODEL,
+  PROVIDERS,
+  modelsForProvider,
+} from "@/lib/models";
 import { SKILLS } from "@/lib/skills";
 import type { PublicConfig } from "@/lib/config";
 
@@ -45,12 +49,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [username, setUsername] = useState(config.username);
   const [password, setPassword] = useState("");
   const [provider, setProvider] = useState(config.llmProvider || "");
-  const [model, setModel] = useState(config.model || "");
-  const [models, setModels] = useState<string[]>(config.llmModels || []);
+  const [model, setModel] = useState(config.model || DEFAULT_MODEL);
   const [llmKey, setLlmKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [loadMsg, setLoadMsg] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -59,34 +60,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
 
-  async function loadModels() {
-    setError("");
-    setLoadMsg("Connecting…");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, key: llmKey }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        setModels(data.models);
-        setModel(data.models[0] ?? "");
-        setLoadMsg(`Loaded ${data.models.length} models`);
-      } else {
-        setModels([]);
-        setModel("");
-        setLoadMsg(data.error || "Could not load models.");
-      }
-    } catch {
-      setModels([]);
-      setModel("");
-      setLoadMsg("Could not reach the provider.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const providerModels = modelsForProvider(provider);
 
   // Local semantic index status (default-on, no key) for the Semantic search section.
   useEffect(() => {
@@ -128,11 +102,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     setError("");
     setSaved(false);
 
-    const body: Record<string, unknown> = {
+    const body: Record<string, string> = {
       username: username.trim(),
       llmProvider: provider,
       model,
-      llmModels: models,
       theme,
     };
     if (password) body.password = password;
@@ -193,100 +166,77 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         desc="Bring your own key. Claude, OpenAI or Gemini — your data never trains anyone's model."
       >
         <div className="space-y-4">
-          <Field label="Provider" htmlFor="provider">
-            <Select
-              id="provider"
-              value={provider}
-              onChange={(e) => {
-                const next = e.target.value;
-                setProvider(next);
-                setLlmKey("");
-                setLoadMsg("");
-                if (next === config.llmProvider) {
-                  setModels(config.llmModels || []);
-                  setModel(config.model || "");
-                } else {
-                  setModels([]);
-                  setModel("");
-                }
-              }}
-            >
-              <option value="">Not set</option>
-              {PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          {provider ? (
-            <Field
-              label="API key"
-              htmlFor="llmKey"
-              hint={
-                config.hasLlmKey
-                  ? `A key is saved (${config.hasLlmKey}). Paste a new one and reconnect to replace it.`
-                  : "Stored locally in your data dir. Never sent anywhere but your provider."
-              }
-            >
-              <div className="relative">
-                <Input
-                  id="llmKey"
-                  type={showKey ? "text" : "password"}
-                  value={llmKey}
-                  onChange={(e) => setLlmKey(e.target.value)}
-                  placeholder={PROVIDERS.find((p) => p.id === provider)?.keyHint || "sk-…"}
-                  autoComplete="off"
-                  className="pr-10 font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
-                  aria-label={showKey ? "Hide key" : "Show key"}
-                >
-                  {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
-                </button>
-              </div>
-            </Field>
-          ) : null}
-
-          {provider ? (
-            <div className="flex items-center gap-3">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void loadModels()}
-                disabled={!llmKey || loading}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Provider" htmlFor="provider">
+              <Select
+                id="provider"
+                value={provider}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setProvider(next);
+                  const models = modelsForProvider(next);
+                  if (models.length && !models.includes(model)) setModel(models[0]);
+                }}
               >
-                {loading ? <Spinner width={14} height={14} /> : null}
-                {loading ? "Connecting…" : "Connect & load models"}
-              </Button>
-              {loadMsg ? <span className="text-xs text-muted-fg">{loadMsg}</span> : null}
-            </div>
-          ) : null}
-
-          {provider ? (
+                <option value="">Not set</option>
+                {PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
             <Field label="Model" htmlFor="model">
               <Select
                 id="model"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                disabled={!models.length}
+                disabled={!providerModels.length}
               >
-                {models.length ? (
-                  models.map((m) => (
+                {providerModels.length ? (
+                  providerModels.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
                   ))
                 ) : (
-                  <option value="">Connect a key to load models</option>
+                  <option value="">Pick a provider first</option>
                 )}
               </Select>
             </Field>
-          ) : null}
+          </div>
+
+          <Field
+            label="API key"
+            htmlFor="llmKey"
+            hint={
+              config.hasLlmKey
+                ? `A key is saved (${config.hasLlmKey}). Enter a new one to replace it.`
+                : "Stored locally in your data dir. Never sent anywhere but your provider."
+            }
+          >
+            <div className="relative">
+              <Input
+                id="llmKey"
+                type={showKey ? "text" : "password"}
+                value={llmKey}
+                onChange={(e) => setLlmKey(e.target.value)}
+                placeholder={
+                  PROVIDERS.find((p) => p.id === provider)?.keyHint || "sk-…"
+                }
+                autoComplete="off"
+                className="pr-10 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-fg hover:text-fg"
+                aria-label={showKey ? "Hide key" : "Show key"}
+              >
+                {showKey ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
+              </button>
+            </div>
+          </Field>
         </div>
       </Section>
 
