@@ -41,7 +41,7 @@ export interface JournalSession {
   id: string;
   date: string;
   startedAt: string;
-  skill: string; // mentor | therapist | coach | ...
+  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
   title: string | null;
   summary: string | null;
   insights: string[];

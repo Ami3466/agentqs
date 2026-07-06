@@ -41,7 +41,7 @@ export interface SessionItem {
   date: string | null;
   startedAt: string;
   endedAt: string | null;
-  skill: string;
+  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
   title: string | null;
   summary: string | null;
   transcript: string | null;
@@ -315,7 +315,7 @@ export function appendInboxItem(
 }
 
 export interface AppendSessionInput {
-  skill: string;
+  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
   startedAt?: string;
   endedAt?: string | null;
   date?: string | null;

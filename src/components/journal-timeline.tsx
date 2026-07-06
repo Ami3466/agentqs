@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { Card } from "./ui";
 import { MessageSquare, Person } from "./icons";
 import { cn } from "./ui";
+import { mentorById, type Mentor } from "@/lib/mentors";
 import type { JournalData, JournalDay, MetricColumn } from "@/lib/journal";
 
 /** Parse a YYYY-MM-DD as a *local* date (no TZ drift) for display. */
@@ -25,18 +26,14 @@ function relativeLabel(iso: string): string | null {
   return null;
 }
 
-const MENTOR_TINT: Record<string, string> = {
-  mentor: "text-accent",
-  therapist: "text-accent",
-  coach: "text-accent",
-};
-
 function DayCard({
   day,
   metricsByKey,
+  mentors,
 }: {
   day: JournalDay;
   metricsByKey: Map<string, MetricColumn>;
+  mentors: Mentor[];
 }) {
   const dt = localDate(day.date);
   const rel = relativeLabel(day.date);
@@ -98,12 +95,12 @@ function DayCard({
         {day.sessions.map((s) => (
           <div key={s.id} className="rounded-lg border border-border bg-muted/40 p-3">
             <div className="flex items-center gap-2">
-              <Person width={14} height={14} className={MENTOR_TINT[s.skill] ?? "text-accent"} />
+              <Person width={14} height={14} className="text-accent" />
               <span className="text-sm font-medium text-fg">
                 {s.title ?? "Session"}
               </span>
               <span className="rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-                {s.skill}
+                {mentorById(s.skill, mentors).name}
               </span>
             </div>
             {s.summary ? <p className="mt-1.5 text-sm text-muted-fg">{s.summary}</p> : null}
@@ -146,7 +143,7 @@ function DayCard({
   );
 }
 
-export function JournalTimeline({ data }: { data: JournalData }) {
+export function JournalTimeline({ data, mentors }: { data: JournalData; mentors: Mentor[] }) {
   const metricsByKey = useMemo(
     () => new Map(data.metrics.map((m) => [m.key, m])),
     [data.metrics],
@@ -167,7 +164,7 @@ export function JournalTimeline({ data }: { data: JournalData }) {
   return (
     <div className="space-y-3">
       {data.days.map((day) => (
-        <DayCard key={day.date} day={day} metricsByKey={metricsByKey} />
+        <DayCard key={day.date} day={day} metricsByKey={metricsByKey} mentors={mentors} />
       ))}
     </div>
   );

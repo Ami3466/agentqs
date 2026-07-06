@@ -144,7 +144,7 @@ export function parseSynthesisJson(out: string): SessionSynthesis | null {
 
 export interface SynthesizeInput {
   messages: LlmMessage[];
-  skill: string;
+  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
   date: string;
   cfg?: LlmConfigLike | null;
 }
@@ -201,7 +201,7 @@ export async function synthesizeSession(input: SynthesizeInput): Promise<Synthes
 export interface OpenCommitment {
   text: string;
   date: string;
-  skill: string;
+  skill: string; // internal column: the mentor id (resolve to a display name via mentorById)
   sessionId: string;
 }
 

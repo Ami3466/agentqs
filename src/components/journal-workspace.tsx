@@ -7,6 +7,7 @@ import { JournalSearch } from "./journal-search";
 import { DailyLog } from "./daily-log";
 import { cn } from "./ui";
 import { Spinner } from "./icons";
+import { BUILTIN_MENTORS, type Mentor } from "@/lib/mentors";
 import type { JournalData, JournalView } from "@/lib/journal";
 
 type Mode = "timeline" | "table";
@@ -20,6 +21,7 @@ const MODE_KEY = "agentqs_journal_mode";
 export function JournalWorkspace() {
   const [data, setData] = useState<JournalData | null>(null);
   const [views, setViews] = useState<JournalView[]>([]);
+  const [mentors, setMentors] = useState<Mentor[]>(BUILTIN_MENTORS);
   const [mode, setMode] = useState<Mode>("timeline");
   const [loading, setLoading] = useState(true);
 
@@ -39,15 +41,19 @@ export function JournalWorkspace() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [d, v] = await Promise.all([
+      const [d, v, m] = await Promise.all([
         fetch("/api/journal").then((r) => (r.ok ? (r.json() as Promise<JournalData>) : null)),
         fetch("/api/journal/views")
           .then((r) => (r.ok ? (r.json() as Promise<{ views: JournalView[] }>) : { views: [] }))
           .catch(() => ({ views: [] as JournalView[] })),
+        fetch("/api/mentors")
+          .then((r) => (r.ok ? (r.json() as Promise<{ mentors: Mentor[] }>) : { mentors: [] }))
+          .catch(() => ({ mentors: [] as Mentor[] })),
       ]);
       if (!alive) return;
       setData(d);
       setViews(v?.views ?? []);
+      if (Array.isArray(m?.mentors) && m.mentors.length) setMentors(m.mentors);
       setLoading(false);
     })();
     return () => {
@@ -111,7 +117,7 @@ export function JournalWorkspace() {
           <Spinner width={16} height={16} /> Loading your record…
         </div>
       ) : mode === "timeline" ? (
-        <JournalTimeline data={data} />
+        <JournalTimeline data={data} mentors={mentors} />
       ) : (
         <JournalTable data={data} views={views} onViewsChange={persistViews} />
       )}
