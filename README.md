@@ -94,6 +94,7 @@ agentqs structure                                # turn pending prose into daily
 agentqs sources                                  # list sources + sync state
 agentqs source connect rescuetime <key>          # save an API source's credential
 agentqs source interval github daily             # schedule an automated import
+agentqs source remove chrome                     # remove an automated import (data + schedule)
 agentqs sync github                              # run one source now (omit to sync all connected)
 agentqs source file chrome                        # import a local-disk source (Chrome/iPhone)
 agentqs skill add "Stoic" --system "…"           # add a mentor — answers everywhere

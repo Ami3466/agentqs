@@ -3,6 +3,7 @@ import { readConfig, writeConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { buildSources } from "@/lib/source-registry";
+import { disconnectSource } from "@/lib/cli-core";
 import { isValidInterval } from "@/lib/sources";
 
 export const runtime = "nodejs";
@@ -39,4 +40,23 @@ export async function POST(req: Request) {
   writeConfig(cfg);
 
   return NextResponse.json({ ok: true, sources: buildSources(cfg, recordDir()) });
+}
+
+/** Remove an automated import — drop its data, credential, and schedule. Returns
+ *  the fresh list, with the source now back in the Connections catalog. */
+export async function DELETE(req: Request) {
+  if (!getCurrentUser()) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const body = (await req.json().catch(() => ({}))) as { id?: unknown };
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id) {
+    return NextResponse.json({ error: "Missing source id." }, { status: 400 });
+  }
+  try {
+    disconnectSource(id);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+  return NextResponse.json({ ok: true, sources: buildSources(readConfig(), recordDir()) });
 }

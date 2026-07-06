@@ -134,6 +134,37 @@ export function setInterval(id: string, interval: string): { id: string; interva
   return { id, interval };
 }
 
+/** Remove an automated import: drop the source's daily/<id>.csv, forget its
+ *  credential + sync time + schedule, and rebuild. The source falls back to the
+ *  Connections catalog (not connected). This is the "remove" the Data tab exposes. */
+export function disconnectSource(id: string): { id: string; removed: boolean; dailyRows: number } {
+  const known =
+    id === "github" || Boolean(pluginById(id)) || Boolean(fileImporterById(id));
+  if (!known) {
+    throw new Error(
+      `Unknown source "${id}". Try: github, ${[...PLUGINS.map((p) => p.id), ...FILE_IMPORTERS.map((f) => f.id)].join(", ")}`,
+    );
+  }
+  const cfg = requireConfig();
+  const rDir = recordDir();
+  try {
+    fs.rmSync(path.join(rDir, "daily", `${id}.csv`), { force: true });
+  } catch {
+    /* non-fatal — nothing to remove */
+  }
+  if (id === "github") {
+    delete cfg.githubToken;
+    delete cfg.githubSyncedAt;
+  } else {
+    if (cfg.sourceCreds) delete cfg.sourceCreds[id];
+    if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
+  }
+  if (cfg.sourceIntervals) delete cfg.sourceIntervals[id];
+  writeConfig(cfg);
+  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  return { id, removed: true, dailyRows };
+}
+
 export interface SyncResult {
   id: string;
   name: string;

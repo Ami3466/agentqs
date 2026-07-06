@@ -1,20 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Clock, Plug, Spinner } from "@/components/icons";
+import { AlertTriangle, Check, Clock, Plug, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { SourceConnect } from "@/components/source-connect";
 import { IntervalSelect } from "@/components/interval-select";
-import { Badge, cn } from "@/components/ui";
+import { Badge, Button, cn } from "@/components/ui";
 import { ago, type Interval, type SourceView } from "@/lib/sources";
 
+type Tab = "connections" | "automated";
+
 /**
- * The Data-tab sources list + sync engine (Loop 10). Single fetcher/persister of
- * /api/sources: renders every source (GitHub via the rich GithubConnect row, the
- * rest via a generic row), owns the per-source interval dropdowns, and runs
- * lazy-sync-on-open — on mount it POSTs every DUE api source's endpoint, then
- * bumps the shared `version` so the daily preview refetches. Manual sources that
- * fall behind their interval show a stale badge (they can't auto-sync).
+ * The Data-tab Sources card (Loop 10 + two-tab redesign). One fetcher/persister of
+ * /api/sources, split into two tabs under the dropzone:
+ *   • Connections     — browse + connect every available integration (the catalog
+ *                        of what you *can* wire up). A source lives here until it
+ *                        has data.
+ *   • Automated imports — the ones you've set up: status, last sync, interval
+ *                        (editable) + Remove. A source lands here once connected.
+ * No source is ever shown as a fake "connected" row — the split is derived from the
+ * real record (`connected`). Also owns lazy-sync-on-open: on mount it POSTs every
+ * DUE api source, then bumps the shared `version` so the daily preview refetches.
  */
 export function SourcesPanel({
   version,
@@ -24,7 +30,9 @@ export function SourcesPanel({
   onChanged: () => void;
 }) {
   const [sources, setSources] = useState<SourceView[] | null>(null);
+  const [tab, setTab] = useState<Tab>("connections");
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
   const ranAuto = useRef(false);
@@ -70,6 +78,14 @@ export function SourcesPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
 
+  // Once real data exists, land on Automated imports so the user sees their feeds.
+  const settled = useRef(false);
+  useEffect(() => {
+    if (settled.current || !sources) return;
+    settled.current = true;
+    if (sources.some((s) => s.connected)) setTab("automated");
+  }, [sources]);
+
   async function changeInterval(id: string, interval: Interval) {
     setSavingId(id);
     try {
@@ -87,11 +103,76 @@ export function SourcesPanel({
     }
   }
 
-  const github = sources?.find((s) => s.id === "github");
-  const others = (sources ?? []).filter((s) => s.id !== "github");
-  // api plugin sources get the rich connect/sync row; the rest (manual drops,
-  // not-yet-live placeholders) get the generic row.
-  const isPluginRow = (s: SourceView) => s.kind === "api" && s.id !== "github";
+  async function removeSource(id: string) {
+    setRemovingId(id);
+    try {
+      const res = await fetch("/api/sources", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { sources: SourceView[] };
+        setSources(data.sources);
+        onChanged(); // its rows leave the daily table too
+      }
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  const connected = (sources ?? []).filter((s) => s.connected);
+  const available = (sources ?? []).filter((s) => !s.connected);
+  const list = tab === "automated" ? connected : available;
+  // In the Automated tab, connected rows can be edited (interval) + removed.
+  const withRemove = tab === "automated";
+
+  function row(s: SourceView) {
+    const saving = savingId === s.id;
+    const removing = removingId === s.id;
+    const onRemove = withRemove ? () => void removeSource(s.id) : undefined;
+    const onIntervalChange = (i: Interval) => void changeInterval(s.id, i);
+
+    if (s.id === "github") {
+      return (
+        <GithubConnect
+          key={s.id}
+          version={version}
+          interval={s.interval}
+          due={s.due}
+          savingInterval={saving}
+          removing={removing}
+          onIntervalChange={onIntervalChange}
+          onRemove={onRemove}
+        />
+      );
+    }
+    if (s.kind === "api") {
+      return (
+        <SourceConnect
+          key={s.id}
+          id={s.id}
+          version={version}
+          interval={s.interval}
+          due={s.due}
+          savingInterval={saving}
+          removing={removing}
+          onIntervalChange={onIntervalChange}
+          onRemove={onRemove}
+        />
+      );
+    }
+    return (
+      <SourceRow
+        key={s.id}
+        source={s}
+        saving={saving}
+        removing={removing}
+        onIntervalChange={onIntervalChange}
+        onRemove={onRemove}
+      />
+    );
+  }
 
   return (
     <div>
@@ -101,8 +182,20 @@ export function SourcesPanel({
           <p className="text-sm font-semibold text-fg">Sources</p>
         </div>
         <p className="mt-1 text-xs text-muted-fg">
-          Live feeds that sync on a schedule. Connect once with a key; set how often to pull.
+          Connect an integration, then schedule how often it pulls. Feeds sync on their
+          own; a dropped file just lands in the inbox above.
         </p>
+
+        <div className="mt-3 inline-flex rounded-lg border border-border bg-muted p-0.5 text-[13px]">
+          <TabButton active={tab === "connections"} onClick={() => setTab("connections")}>
+            Connections
+            <TabCount>{available.length}</TabCount>
+          </TabButton>
+          <TabButton active={tab === "automated"} onClick={() => setTab("automated")}>
+            Automated imports
+            <TabCount>{connected.length}</TabCount>
+          </TabButton>
+        </div>
       </div>
 
       {autoMsg ? (
@@ -112,57 +205,77 @@ export function SourcesPanel({
         </div>
       ) : null}
 
-      <div className="divide-y divide-border">
-        <GithubConnect
-          version={version}
-          interval={github?.interval ?? "off"}
-          due={Boolean(github?.due)}
-          savingInterval={savingId === "github"}
-          onIntervalChange={(i) => changeInterval("github", i)}
-        />
-
-        {others.map((s) =>
-          isPluginRow(s) ? (
-            <SourceConnect
-              key={s.id}
-              id={s.id}
-              version={version}
-              interval={s.interval}
-              due={s.due}
-              savingInterval={savingId === s.id}
-              onIntervalChange={(i) => changeInterval(s.id, i)}
-            />
-          ) : (
-            <SourceRow
-              key={s.id}
-              source={s}
-              saving={savingId === s.id}
-              onIntervalChange={(i) => changeInterval(s.id, i)}
-            />
-          ),
-        )}
-      </div>
+      {sources === null ? (
+        <div className="flex items-center gap-2 p-4 text-xs text-muted-fg">
+          <Spinner width={13} height={13} /> Loading sources…
+        </div>
+      ) : list.length === 0 ? (
+        <p className="p-6 text-center text-xs text-muted-fg">
+          {tab === "automated"
+            ? "No automated imports yet. Connect a source under Connections to start a feed."
+            : "Every available integration is already connected."}
+        </p>
+      ) : (
+        <div className="divide-y divide-border">{list.map(row)}</div>
+      )}
     </div>
   );
 }
 
-/** Generic (non-GitHub) source row: manual sources discovered in the record and
- *  not-yet-live integrations. Connected sources get an interval dropdown; overdue
- *  manual sources get a stale badge. */
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium transition-colors",
+        active ? "bg-card text-fg shadow-sm" : "text-muted-fg hover:text-fg",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function TabCount({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-fg">
+      {children}
+    </span>
+  );
+}
+
+/** Generic (non-GitHub, non-plugin) source row: Tier-2 file importers + not-yet-live
+ *  integrations. Connected rows show last-sync + an interval dropdown + Remove;
+ *  overdue ones badge stale. Not-connected rows sit in the Connections catalog with
+ *  how-to-connect context (local file → CLI; stub → soon). */
 function SourceRow({
   source,
   saving,
+  removing,
   onIntervalChange,
+  onRemove,
 }: {
   source: SourceView;
   saving: boolean;
+  removing: boolean;
   onIntervalChange: (i: Interval) => void;
+  onRemove?: () => void;
 }) {
-  const { name, kind, detail, connected, lastSync, stale, interval } = source;
+  const { id, name, kind, detail, connected, lastSync, stale, interval, live } = source;
+  const Icon = sourceIcon(id);
   return (
     <div className="flex items-center gap-3 p-4">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-sm font-semibold uppercase text-muted-fg">
-        {name.charAt(0)}
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-fg">
+        <Icon width={18} height={18} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
@@ -179,6 +292,10 @@ function SourceRow({
             <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
               <Check width={12} height={12} /> connected
             </span>
+          ) : !live ? (
+            <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
+              soon
+            </span>
           ) : null}
         </div>
         <p className="truncate text-xs text-muted-fg">
@@ -191,14 +308,33 @@ function SourceRow({
           )}
         </p>
       </div>
-      <div className="shrink-0">
+      <div className="flex shrink-0 items-center gap-1.5">
         {connected ? (
-          <div className="flex items-center gap-1.5">
+          <>
             {saving ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
             <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />
-          </div>
+            {onRemove ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onRemove}
+                disabled={removing}
+                title="Remove this automated import"
+              >
+                {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
+                Remove
+              </Button>
+            ) : null}
+          </>
+        ) : live ? (
+          <span
+            className="text-xs text-muted-fg"
+            title={`Local source — import with: agentqs source file ${id}`}
+          >
+            local · CLI
+          </span>
         ) : (
-          <span className="text-xs text-muted-fg">not connected</span>
+          <span className="text-xs text-muted-fg">not yet available</span>
         )}
       </div>
     </div>
