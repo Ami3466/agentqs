@@ -2,11 +2,16 @@
   "name": "agentqs",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "agentqs": "bin/agentqs.mjs"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "cli": "tsx bin/agentqs-cli.ts",
+    "mcp": "tsx bin/agentqs-cli.ts serve --mcp",
     "rebuild": "tsx scripts/rebuild.ts",
     "rebuild:verify": "tsx scripts/rebuild.ts --record samples/record --verify",
     "import:github": "tsx scripts/import-github.ts",
@@ -28,9 +33,11 @@
     "@ai-sdk/anthropic": "^4.0.8",
     "@ai-sdk/google": "^4.0.8",
     "@ai-sdk/openai": "^4.0.7",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tanstack/react-table": "^8.21.3",
     "ai": "^7.0.15",
     "better-sqlite3": "^12.11.1",
+    "commander": "^12.1.0",
     "next": "14.2.15",
     "react": "18.3.1",
     "react-dom": "18.3.1",

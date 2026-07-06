@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/session";
 import type { LlmMessage } from "@/lib/llm";
 import { dbPath, recordDir } from "@/lib/paths";
 import { readSessionsFromRecord } from "@/lib/record";
-import { skillById } from "@/lib/skills";
+import { resolveSkill } from "@/lib/skills-store";
 import { continuityBlock, continuityFallbackReply } from "@/lib/synthesis";
 import {
   buildSpark,
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Say something first." }, { status: 400 });
   }
 
-  const skill = skillById(body.skill);
+  const skill = resolveSkill(body.skill);
   const cfg = readConfig();
 
   const history = Array.isArray(body.history)

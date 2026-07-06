@@ -1,0 +1,444 @@
+/**
+ * cli-core — the one brain behind every non-GUI face of agentqs.
+ *
+ * The `agentqs` CLI (bin/agentqs-cli.ts) and the MCP server (bin/mcp.ts) both call
+ * ONLY these functions; the Next app's API routes call the same underlying lib.
+ * So "import a file, connect a source, schedule a sync, run a sync, add a mentor,
+ * rebuild, query, chat" behave identically from the terminal, from Claude Code
+ * (MCP), from `curl` (JSON API), and from the GUI. Server-only (fs + sqlite).
+ *
+ * Every function returns a plain JSON-able object — the CLI prints it, the MCP
+ * tool wraps it in a text block, and nothing here talks to a terminal directly.
+ */
+import fs from "fs";
+import path from "path";
+import { readConfig, writeConfig, type AppConfig } from "./config";
+import { dbPath, recordDir } from "./paths";
+import { openReadonly } from "./db";
+import {
+  appendInboxItem,
+  mergeDailyCsv,
+  rebuild,
+  readRecord,
+  recordHash,
+  updateInboxItems,
+} from "./record";
+import { readJournal } from "./journal";
+import { buildSources } from "./source-registry";
+import { isValidInterval, type Interval } from "./sources";
+import { importGithub, resolveGithubToken } from "./importers/github";
+import { importPlugin, resolveCredential, windowDays } from "./importers/plugin";
+import { pluginById, PLUGINS } from "./importers/registry";
+import { importFile, resolveFilePath } from "./importers/file-plugin";
+import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
+import { structureCsv, sourceName } from "./structure";
+import { structurePending } from "./structure-run";
+import { composeReply, type ComposedReply } from "./reply";
+import { listSkills, removeSkill, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
+import { modelsForProvider } from "./models";
+import type { Skill } from "./skills";
+import type { LlmMessage } from "./llm";
+
+// ---- chat / query ---------------------------------------------------------
+
+/** One-shot grounded reply through the same funnel the GUI + channels use. */
+export async function chat(opts: {
+  message: string;
+  skill?: string | null;
+  history?: LlmMessage[];
+}): Promise<ComposedReply> {
+  return composeReply({
+    message: opts.message,
+    channel: "cli",
+    skill: opts.skill ?? null,
+    history: opts.history,
+  });
+}
+
+export interface QueryResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  count: number;
+}
+
+/** Read-only SQL over the rebuilt cache (daily / raw_inbox / sessions / search).
+ *  SELECT-only — the query path never mutates the derived store. */
+export function query(sql: string, limit = 200): QueryResult {
+  const trimmed = sql.trim().replace(/;+\s*$/, "");
+  if (!/^(select|with)\b/i.test(trimmed)) {
+    throw new Error("Only read-only SELECT / WITH queries are allowed.");
+  }
+  const file = dbPath();
+  if (!fs.existsSync(file)) throw new Error("No cache yet — run `agentqs rebuild` first.");
+  const db = openReadonly(file);
+  try {
+    const capped = /\blimit\b/i.test(trimmed) ? trimmed : `${trimmed} LIMIT ${limit}`;
+    const rows = db.prepare(capped).all() as Record<string, unknown>[];
+    const columns = rows.length ? Object.keys(rows[0]) : [];
+    return { columns, rows, count: rows.length };
+  } finally {
+    db.close();
+  }
+}
+
+// ---- journal --------------------------------------------------------------
+
+export function journal(opts: { limit?: number; source?: string } = {}) {
+  const data = readJournal();
+  const metrics = opts.source
+    ? data.metrics.filter((m) => m.source === opts.source)
+    : data.metrics;
+  const days = opts.limit && opts.limit > 0 ? data.days.slice(0, opts.limit) : data.days;
+  return {
+    metrics,
+    days,
+    totalDays: data.totalDays,
+    totalCells: data.totalCells,
+    sources: [...new Set(data.metrics.map((m) => m.source))].sort(),
+  };
+}
+
+// ---- sources: list / connect / interval / sync ----------------------------
+
+export function sources() {
+  return buildSources(readConfig());
+}
+
+/** Save an API source's credential (Tier-1 plugin). This is "connect a source". */
+export function connectSource(id: string, credential: string): { id: string; saved: boolean } {
+  const plugin = pluginById(id);
+  if (!plugin && id !== "github") {
+    throw new Error(`Unknown API source "${id}". Try: github, ${PLUGINS.map((p) => p.id).join(", ")}`);
+  }
+  if (!credential || !credential.trim()) throw new Error("Pass a credential to connect.");
+  const cfg = requireConfig();
+  if (id === "github") {
+    cfg.githubToken = credential.trim();
+  } else {
+    cfg.sourceCreds = { ...(cfg.sourceCreds ?? {}), [id]: credential.trim() };
+  }
+  writeConfig(cfg);
+  return { id, saved: true };
+}
+
+/** Set a source's sync cadence — this is "set up an automated import". `off`,
+ *  `hourly`, `daily`, `weekly`. API sources auto-sync when due; manual sources
+ *  badge stale when overdue. */
+export function setInterval(id: string, interval: string): { id: string; interval: Interval } {
+  if (!isValidInterval(interval)) {
+    throw new Error(`Invalid interval "${interval}". Use: off, hourly, daily, weekly.`);
+  }
+  const cfg = requireConfig();
+  cfg.sourceIntervals = { ...(cfg.sourceIntervals ?? {}), [id]: interval };
+  writeConfig(cfg);
+  return { id, interval };
+}
+
+export interface SyncResult {
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+  days: number;
+  metrics: string[];
+  cells: number;
+  dailyRows: number;
+  syncedAt: string;
+}
+
+/** Run one API source now: fetch → merge → rebuild, persisting the sync time.
+ *  `fixture` (a JSON file) drives it offline for GitHub-style ships-when tests. */
+export async function syncSource(opts: {
+  id: string;
+  credential?: string;
+  days?: number;
+  fixture?: string;
+}): Promise<SyncResult> {
+  const rDir = recordDir();
+  const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
+  const cfg = readConfig();
+  const now = new Date().toISOString();
+
+  if (opts.id === "github") {
+    const token = resolveGithubToken(opts.credential);
+    const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
+    if (!token && !fetchImpl) throw new Error("GitHub needs a token — pass --credential or set GITHUB_TOKEN.");
+    const s = await importGithub({ token, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    persistSync("github", opts.credential, now);
+    return {
+      id: "github", name: "GitHub", from: win.from, to: win.to,
+      days: s.days.filter((d) => d.commits > 0).length,
+      metrics: ["commits"], cells: s.days.length, dailyRows, syncedAt: now,
+    };
+  }
+
+  const plugin = pluginById(opts.id);
+  if (!plugin) {
+    throw new Error(`Unknown API source "${opts.id}". Try: github, ${PLUGINS.map((p) => p.id).join(", ")}`);
+  }
+  const credential = resolveCredential(plugin, opts.credential, cfg);
+  const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
+  if (plugin.requiresCredential && !credential && !fetchImpl) {
+    throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${plugin.id} <cred>'.`);
+  }
+  const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir);
+  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  persistSync(plugin.id, opts.credential, now);
+  return {
+    id: plugin.id, name: plugin.name, from: summary.from, to: summary.to,
+    days: summary.daysWithData, metrics: summary.metrics, cells: summary.cells,
+    dailyRows, syncedAt: now,
+  };
+}
+
+/** Sync every live, connected API source that has a credential (used by `sync` with
+ *  no --source). Skips sources with no credential rather than erroring. */
+export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; skipped: { id: string; reason: string }[] }> {
+  const synced: SyncResult[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+  const cfg = readConfig();
+  const candidates = ["github", ...PLUGINS.filter((p) => p.live).map((p) => p.id)];
+  for (const id of candidates) {
+    const hasCred =
+      id === "github"
+        ? Boolean(resolveGithubToken())
+        : Boolean(resolveCredential(pluginById(id)!, undefined, cfg));
+    if (!hasCred) {
+      skipped.push({ id, reason: "no credential" });
+      continue;
+    }
+    try {
+      synced.push(await syncSource({ id, days }));
+    } catch (e) {
+      skipped.push({ id, reason: (e as Error).message });
+    }
+  }
+  return { synced, skipped };
+}
+
+// ---- file sources (Tier-2, local disk) ------------------------------------
+
+/** Import a Tier-2 local file source (Chrome history, iPhone backup). */
+export async function syncFileSource(opts: {
+  id: string;
+  path?: string;
+  days?: number;
+}): Promise<SyncResult> {
+  const importer = fileImporterById(opts.id);
+  if (!importer) {
+    throw new Error(`Unknown file source "${opts.id}". Try: ${FILE_IMPORTERS.map((f) => f.id).join(", ")}`);
+  }
+  const filePath = resolveFilePath(importer, opts.path);
+  if (!filePath) {
+    throw new Error(
+      `${importer.name}: no file found. Pass --path, or probe defaults:\n  ${importer.defaultPaths().join("\n  ")}`,
+    );
+  }
+  const rDir = recordDir();
+  const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
+  const summary = await importFile(importer, { path: filePath, from: win.from, to: win.to }, rDir);
+  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  persistSync(importer.id, undefined, new Date().toISOString());
+  return {
+    id: importer.id, name: importer.name, from: summary.from, to: summary.to,
+    days: summary.daysWithData, metrics: summary.metrics, cells: summary.cells,
+    dailyRows, syncedAt: new Date().toISOString(),
+  };
+}
+
+// ---- import a raw file (the drag-and-drop escape hatch) --------------------
+
+export interface ImportRawResult {
+  inboxId: string;
+  bytes: number;
+  structured: boolean;
+  source?: string;
+  metrics?: string[];
+  cells?: number;
+  dailyRows?: number;
+  pending: number;
+  note: string;
+}
+
+/**
+ * Import an arbitrary file into the record. It always lands raw in the inbox
+ * (free, no LLM). A clean CSV/TSV is structured straight into the daily table
+ * (deterministic column map); prose is left pending for the Structure step
+ * (`agentqs structure`, which pays the LLM only then). This is the universal
+ * escape hatch — the agent can absorb any source.
+ */
+export function importRaw(opts: { file?: string; text?: string; name?: string }): ImportRawResult {
+  let text = opts.text;
+  let hint = opts.name;
+  if (opts.file) {
+    text = fs.readFileSync(opts.file, "utf8");
+    hint = hint ?? path.basename(opts.file);
+  }
+  if (text == null || text.trim() === "") throw new Error("Nothing to import — pass a file or --text.");
+
+  const rDir = recordDir();
+  const item = appendInboxItem(
+    { text, source: "drop", kind: "file", meta: hint ? { filename: hint } : null },
+    { recordDir: rDir },
+  );
+
+  // Clean-CSV fast path: structure now, no LLM, no key needed.
+  const structured = structureCsv(text);
+  if (structured) {
+    const source = sourceName(hint, "import");
+    const merge = mergeDailyCsv(rDir, source, { header: structured.header, rows: structured.rows });
+    updateInboxItems(
+      [{ id: item.id, status: "structured", meta: { filename: hint, via: "csv", source, cells: merge.cells } }],
+      { recordDir: rDir },
+    );
+    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    return {
+      inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source,
+      metrics: merge.metrics, cells: merge.cells, dailyRows,
+      pending: countPending(rDir),
+      note: `Structured ${merge.cells} cells into daily/${source}.csv.`,
+    };
+  }
+
+  rebuild({ recordDir: rDir });
+  return {
+    inboxId: item.id, bytes: Buffer.byteLength(text), structured: false,
+    pending: countPending(rDir),
+    note: "Landed raw in the inbox — run `agentqs structure` (needs an AI key for prose).",
+  };
+}
+
+/** Turn pending inbox captures into daily rows (CSV free, prose needs a key). */
+export async function structure(opts: { id?: string } = {}) {
+  return structurePending({ id: opts.id });
+}
+
+// ---- config ---------------------------------------------------------------
+
+const CONFIG_KEYS = ["provider", "model", "key", "theme", "username"] as const;
+type ConfigKey = (typeof CONFIG_KEYS)[number];
+
+/** Safe, redacted view of the settable config. */
+export function configList() {
+  const cfg = readConfig();
+  return {
+    provider: cfg?.llmProvider ?? "",
+    model: cfg?.model ?? "",
+    key: cfg?.llmKey ? `••••${cfg.llmKey.slice(-4)}` : "",
+    theme: cfg?.theme ?? "system",
+    username: cfg?.username ?? "",
+    dataDir: recordDir().replace(/\/record$/, ""),
+    keys: CONFIG_KEYS,
+  };
+}
+
+export function configGet(key: string): string {
+  const list = configList() as Record<string, unknown>;
+  if (!CONFIG_KEYS.includes(key as ConfigKey)) {
+    throw new Error(`Unknown key "${key}". Settable: ${CONFIG_KEYS.join(", ")}`);
+  }
+  return String(list[key] ?? "");
+}
+
+/** Set one config value. `model` is validated against the chosen provider. */
+export function configSet(key: string, value: string): { key: string; value: string } {
+  if (!CONFIG_KEYS.includes(key as ConfigKey)) {
+    throw new Error(`Unknown key "${key}". Settable: ${CONFIG_KEYS.join(", ")}`);
+  }
+  const cfg = requireConfig();
+  switch (key as ConfigKey) {
+    case "provider": {
+      if (value && !modelsForProvider(value).length) throw new Error(`Unknown provider "${value}".`);
+      cfg.llmProvider = value;
+      if (!value) cfg.model = "";
+      else if (!modelsForProvider(value).includes(cfg.model)) cfg.model = modelsForProvider(value)[0] ?? "";
+      break;
+    }
+    case "model": {
+      const models = modelsForProvider(cfg.llmProvider);
+      if (!cfg.llmProvider) throw new Error("Set a provider first: agentqs config set provider anthropic");
+      if (!models.includes(value)) throw new Error(`"${value}" isn't a ${cfg.llmProvider} model. Try: ${models.join(", ")}`);
+      cfg.model = value;
+      break;
+    }
+    case "key":
+      cfg.llmKey = value;
+      break;
+    case "theme":
+      if (!["light", "dark", "system"].includes(value)) throw new Error("theme must be light | dark | system.");
+      cfg.theme = value;
+      break;
+    case "username":
+      if (value.trim().length < 2) throw new Error("username too short.");
+      cfg.username = value.trim();
+      break;
+  }
+  writeConfig(cfg);
+  return { key, value: key === "key" ? `••••${value.slice(-4)}` : value };
+}
+
+// ---- mentors (skills) -----------------------------------------------------
+
+export function skillsList(): (Skill & { builtin: boolean })[] {
+  return listSkills().map((s) => ({ ...s, builtin: isBuiltinSkill(s.id) }));
+}
+
+export function skillUpsert(input: UpsertSkillInput) {
+  return upsertSkill(input);
+}
+
+export function skillRemove(id: string): { removed: string } {
+  if (!removeSkill(id)) throw new Error(`No custom mentor "${id}".`);
+  return { removed: id };
+}
+
+// ---- rebuild --------------------------------------------------------------
+
+/** Rebuild the SQLite cache from the record. `verify` asserts determinism
+ *  (two rebuilds → identical record hash), the guarantee behind the cache. */
+export function rebuildCache(opts: { verify?: boolean } = {}) {
+  const rDir = recordDir();
+  const r = rebuild({ recordDir: rDir });
+  if (opts.verify) {
+    const h1 = recordHash(rDir);
+    const r2 = rebuild({ recordDir: rDir });
+    const ok = h1 === recordHash(rDir) && r.daily === r2.daily;
+    return { ...r, verified: ok };
+  }
+  return r;
+}
+
+// ---- internals ------------------------------------------------------------
+
+function requireConfig(): AppConfig {
+  const cfg = readConfig();
+  if (!cfg) throw new Error("agentqs isn't set up yet. Open the app once, or POST /api/setup.");
+  return cfg;
+}
+
+function persistSync(id: string, freshCredential: string | undefined, at: string): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  if (freshCredential && freshCredential.trim() && id !== "github") {
+    cfg.sourceCreds = { ...(cfg.sourceCreds ?? {}), [id]: freshCredential.trim() };
+  }
+  if (id === "github") cfg.githubSyncedAt = at;
+  else cfg.sourceSyncedAt = { ...(cfg.sourceSyncedAt ?? {}), [id]: at };
+  try {
+    writeConfig(cfg);
+  } catch {
+    /* non-fatal — the record already holds the data */
+  }
+}
+
+function countPending(rDir: string): number {
+  return readRecord(rDir).inbox.filter((i) => i.status === "pending").length;
+}
+
+/** A fetch stand-in that replays a JSON fixture file — offline sync for tests. */
+function fixtureFetch(fixtureFile: string): typeof fetch {
+  const body = fs.readFileSync(fixtureFile, "utf8");
+  return (async () =>
+    new Response(body, { status: 200, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+}

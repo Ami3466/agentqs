@@ -66,11 +66,57 @@ Connect apps, set a sync interval per source, and drop files into the inbox. Hit
 
 ![Data](docs/images/data.png)
 
-## Built for Claude Code
+## Built for Claude Code — CLI-first
 
-A Supabase-style bar on top surfaces the **CLI command** and **API call** for whatever you're viewing, plus one-click **Connect to Claude Code** (MCP). Drive your whole life record from the terminal.
+Every capability is reachable three ways off **one core** (`src/lib/cli-core.ts`): the
+`agentqs` **CLI**, a **JSON API** (the Next routes the GUI calls), and an **MCP server**
+for Claude Code. The GUI is just a fourth face on the same core — nothing is
+GUI-only. A Supabase-style bar on top surfaces the exact CLI command + API call for
+whatever screen you're on, plus one-click **Connect to Claude Code**.
 
 ![API bar](docs/images/api-bar.png)
+
+**Install the CLI** (private repo — `npm link` exposes the `agentqs` command; or use `npm run cli -- …`):
+
+```bash
+npm install && npm run build && npm link      # → `agentqs` on your PATH
+```
+
+**Every command:**
+
+```bash
+agentqs chat "why have I felt off this week?"    # grounded mentor reply
+agentqs chat "recap" --skill therapist           # switch persona per call
+agentqs query "select date, value_num from daily where metric='mood'"
+agentqs journal --table --limit 30               # your record, wide view
+agentqs import ./export.csv --name mood          # drop any file (CSV structures instantly)
+agentqs structure                                # turn pending prose into daily rows (uses your key)
+agentqs sources                                  # list sources + sync state
+agentqs source connect rescuetime <key>          # save an API source's credential
+agentqs source interval github daily             # schedule an automated import
+agentqs sync github                              # run one source now (omit to sync all connected)
+agentqs source file chrome                        # import a local-disk source (Chrome/iPhone)
+agentqs skill add "Stoic" --system "…"           # add a mentor — answers everywhere
+agentqs skill list                               # built-ins + your own
+agentqs config set model claude-sonnet-4-5       # provider · model · key · theme
+agentqs rebuild --verify                         # rebuild the cache (assert determinism)
+```
+
+Add `--json` to any command for machine-readable output. The **same core** backs
+`/api/chat`, `/api/journal`, `/api/skills`, `/api/import/[source]`, `/api/structure`, …
+
+**Connect to Claude Code (MCP):** `agentqs serve --mcp` speaks MCP over stdio and
+exposes the whole core as tools (`chat`, `query`, `journal`, `sources`, `sync`,
+`sync_file`, `import_file`, `structure`, `connect_source`, `set_interval`, `rebuild`,
+`config_*`, `skill_*`). Register it once:
+
+```bash
+claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'
+```
+
+Now Claude Code can import a file, connect a source, schedule and run syncs, add a
+mentor, rebuild, query, and chat with your grounded record — without leaving the
+terminal.
 
 ## Integrations
 

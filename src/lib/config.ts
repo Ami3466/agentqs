@@ -2,6 +2,7 @@ import fs from "fs";
 import { configPath, dataDir } from "./paths";
 import type { JournalView } from "./journal";
 import type { Interval } from "./sources";
+import type { Skill } from "./skills";
 
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
@@ -22,6 +23,7 @@ export interface AppConfig {
   sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
+  customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
 }
 
 /** Coerce untrusted input into a clean JournalView[] before it hits config.json.

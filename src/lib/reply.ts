@@ -6,7 +6,7 @@ import { answerRecall } from "./embeddings";
 import { continuityBlock, continuityFallbackReply } from "./synthesis";
 import { dailyCatalog, resolveModel, runMentor } from "./agent";
 import { modeOf, memoText } from "./smart-input";
-import { skillById } from "./skills";
+import { resolveSkill } from "./skills-store";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -48,7 +48,7 @@ export interface ComposeReplyInput {
  *  (memo vs keyed agent vs keyless grounded vs continuity) without streaming. */
 export async function composeReply(input: ComposeReplyInput): Promise<ComposedReply> {
   const raw = input.message.trim();
-  const skill = skillById(input.skill);
+  const skill = resolveSkill(input.skill);
   const mode = modeOf(raw);
 
   // ---- Memo: land it raw in the inbox, no LLM, and ack. -------------------
