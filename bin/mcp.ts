@@ -263,6 +263,56 @@ export async function startMcpServer(): Promise<void> {
     async ({ id }) => guard(() => core.skillRemove(id)),
   );
 
+  server.registerTool(
+    "photos_import",
+    {
+      title: "Import photos (local)",
+      description:
+        "Bring a folder (or the Mac Photos library) into the record: EXIF (date/GPS/camera), thumbnails, and a local CLIP embedding for text→image recall. Originals never leave the machine — only metadata is recorded.",
+      inputSchema: {
+        folder: z.string().optional(),
+        library: z.boolean().optional(),
+        since: z.string().optional(),
+        caption: z.boolean().optional(),
+        push: z.boolean().optional(),
+      },
+    },
+    async ({ folder, library, since, caption, push }) =>
+      guard(() => core.photosImport({ folder, library, since, caption, push })),
+  );
+
+  server.registerTool(
+    "photos_status",
+    {
+      title: "Photos status",
+      description: "How many photos are in the record, indexed for recall, geotagged, captioned, and which cameras.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.photosStatus()),
+  );
+
+  server.registerTool(
+    "photos_search",
+    {
+      title: "Text → image recall",
+      description:
+        "Find photos matching a natural-language description ('beach at sunset', 'my dog') using the local CLIP index. No key, all local.",
+      inputSchema: { query: z.string(), limit: z.number().int().positive().optional() },
+    },
+    async ({ query, limit }) => guard(() => core.photosSearch(query, limit)),
+  );
+
+  server.registerTool(
+    "photo_context",
+    {
+      title: "Photo context for a date",
+      description:
+        "What the user's photos say about a stretch of time around a date — count, geotagged (out vs home), scene tags, captions.",
+      inputSchema: { date: z.string(), windowDays: z.number().int().min(0).max(30).optional() },
+    },
+    async ({ date, windowDays }) => guard(() => core.photoContext(date, windowDays)),
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // stderr is safe (stdout is the JSON-RPC channel).

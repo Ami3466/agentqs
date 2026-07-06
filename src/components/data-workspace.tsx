@@ -5,6 +5,7 @@ import { Card } from "@/components/ui";
 import { Dropzone } from "@/components/dropzone";
 import { SourcesPanel } from "@/components/sources-panel";
 import { InboxPanel } from "@/components/inbox-panel";
+import { PhotosPanel } from "@/components/photos-panel";
 import { DailyPreview } from "@/components/daily-preview";
 
 /**
@@ -34,6 +35,10 @@ export function DataWorkspace() {
 
       <Card>
         <SourcesPanel version={version} onChanged={bump} automateSignal={automateSignal} />
+      </Card>
+
+      <Card>
+        <PhotosPanel version={version} />
       </Card>
 
       <Card>

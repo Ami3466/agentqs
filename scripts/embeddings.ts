@@ -102,22 +102,23 @@ async function main() {
 
   // ---- 1. The pure local index (sqlite-vec + the local model), keyless. ----
   console.log("\nThe local semantic index — sqlite-vec + the local embedding model (no key)…\n");
-  const built = buildIndex({ recordDir: rDir, vecFile });
+  const built = await buildIndex({ recordDir: rDir, vecFile });
   check("the index built with the sqlite-vec backend", built.backend === "sqlite-vec", built.backend);
   check("every dated memo was embedded", built.count === DAYS.length, `${built.count} entries`);
 
-  // Feeling-queries that share NO words with the memo they should match.
+  // Feeling-queries that share NO words with the memo they should match — the real
+  // neural model has to line them up by MEANING, not lexical overlap.
   const semantic: [string, string][] = [
-    ["wired, couldn't switch my brain off", "2026-06-03"], // → anxious/stressed
-    ["wiped out, no energy at all", "2026-06-01"], // → exhausted/tired
-    ["over the moon, buzzing with energy", "2026-06-02"], // → happy/energized
-    ["peaceful, went jogging in the morning", "2026-06-04"], // → calm/run
-    ["furious, lost my temper", "2026-06-05"], // → frustrated/angry
+    ["couldn't stop worrying, on edge and panicking about a deadline", "2026-06-03"], // → anxious/stressed
+    ["completely wiped out, no energy at all", "2026-06-01"], // → exhausted/tired
+    ["thrilled and full of joy after a great win", "2026-06-02"], // → happy/energized
+    ["serene and relaxed, went jogging in the morning", "2026-06-04"], // → calm/run
+    ["furious and irritated, lost my temper", "2026-06-05"], // → frustrated/angry
   ];
   let semanticOk = 0;
   let firstTop = "";
   for (const [q, want] of semantic) {
-    const hits = semanticSearch(q, { recordDir: rDir, vecFile, limit: 3 });
+    const hits = await semanticSearch(q, { recordDir: rDir, vecFile, limit: 3 });
     const top = hits[0]?.date;
     if (!firstTop) firstTop = top ?? "";
     const pass = top === want;
@@ -129,11 +130,11 @@ async function main() {
   check("semantic recall matches by MEANING, not keywords", semanticOk === semantic.length, `${semanticOk}/${semantic.length}`);
 
   // Deterministic: rebuild → identical ranking (compare to the first build's result).
-  buildIndex({ recordDir: rDir, vecFile });
-  const again = semanticSearch(semantic[0][0], { recordDir: rDir, vecFile, limit: 3 });
+  await buildIndex({ recordDir: rDir, vecFile });
+  const again = await semanticSearch(semantic[0][0], { recordDir: rDir, vecFile, limit: 3 });
   check("the index is deterministic (same record → same top day)", again[0]?.date === firstTop, `${again[0]?.date} vs ${firstTop}`);
-  check("ensureIndex is a no-op when the index is fresh", ensureIndex({ recordDir: rDir, vecFile }) === null);
-  const st = indexStatus({ recordDir: rDir, vecFile });
+  check("ensureIndex is a no-op when the index is fresh", (await ensureIndex({ recordDir: rDir, vecFile })) === null);
+  const st = await indexStatus({ recordDir: rDir, vecFile });
   check("indexStatus reports built + fresh", st.built && !st.stale && st.count === DAYS.length);
 
   // ---- 2. End to end over the built app, NO AI key. ----

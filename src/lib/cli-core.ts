@@ -47,6 +47,16 @@ import type { AutomationCreds, PublicAutomation } from "./automation-types";
 import { composeReply, type ComposedReply } from "./reply";
 import { listSkills, removeSkill, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
 import { isProvider } from "./models";
+import {
+  importPhotos,
+  photosStatus as readPhotosStatus,
+  findSimilarImages,
+  photoContext as readPhotoContext,
+  type ImportResult,
+  type PhotosStatus,
+  type ImageHit,
+  type PhotoContext,
+} from "./photos";
 import type { Skill } from "./skills";
 import type { LlmMessage } from "./llm";
 
@@ -536,6 +546,37 @@ export function rebuildCache(opts: { verify?: boolean } = {}) {
     return { ...r, verified: ok };
   }
   return r;
+}
+
+// ---- photos ---------------------------------------------------------------
+
+/** Import a folder or the Mac photo library: EXIF + thumbnails + CLIP embed, all
+ *  local. Originals never leave the machine — only metadata is recorded. */
+export async function photosImport(opts: {
+  folder?: string;
+  library?: boolean;
+  since?: string;
+  caption?: boolean;
+  push?: boolean;
+}): Promise<ImportResult> {
+  requireConfig();
+  if (!opts.folder && !opts.library) {
+    throw new Error("Give a folder path or --library (the Mac Photos library).");
+  }
+  return importPhotos(opts);
+}
+
+export function photosStatus(): PhotosStatus {
+  return readPhotosStatus();
+}
+
+/** Text → image recall — "beach at sunset", "my dog". Local CLIP, no key. */
+export async function photosSearch(query: string, limit = 8): Promise<ImageHit[]> {
+  return findSimilarImages(query, limit);
+}
+
+export function photoContext(date: string, windowDays = 1): PhotoContext {
+  return readPhotoContext(date, windowDays);
 }
 
 // ---- internals ------------------------------------------------------------

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { buildIndex, indexStatus } from "@/lib/embeddings";
-import { EMBED_MODEL_ID } from "@/lib/embed";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,8 +11,8 @@ export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const status = indexStatus();
-  return NextResponse.json({ ...status, modelId: EMBED_MODEL_ID });
+  const status = await indexStatus();
+  return NextResponse.json({ ...status, modelId: status.model });
 }
 
 /** POST — reindex now (Settings "Reindex"). Rebuilds the local embedding index from
@@ -23,7 +22,7 @@ export async function POST() {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
   try {
-    const result = buildIndex();
+    const result = await buildIndex();
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
