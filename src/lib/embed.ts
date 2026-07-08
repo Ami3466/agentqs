@@ -77,7 +77,7 @@ const CONCEPT_WEIGHT = 2.2; // concept axes count for more than a raw word
 const TRIGRAM_WEIGHT = 0.5;
 
 /** FNV-1a 32-bit hash of a string — stable across runs/machines. */
-function fnv1a(str: string): number {
+export function fnv1a(str: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);

@@ -3,7 +3,35 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Check, Copy, Eye, EyeOff, Moon, Plus, RefreshCw, Spinner, Sparkles, Sun, Trash } from "@/components/icons";
+import {
+  AudioLines,
+  Check,
+  Code,
+  Copy,
+  Cpu,
+  Data as DataIcon,
+  Eye,
+  EyeOff,
+  Key,
+  Mic,
+  Moon,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  Slack,
+  Sliders,
+  Sparkles,
+  Spinner,
+  Sun,
+  Table,
+  Telegram,
+  Terminal,
+  Trash,
+  User,
+  Wand,
+} from "@/components/icons";
+import { CliRow, CopyRow, KeyRow, PH, SYNC_CMD, mcpSnip, skillSnip } from "@/components/connect-api";
 import { Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
@@ -75,26 +103,59 @@ interface ProviderRow {
 let rid = 0;
 const newId = (type: string) => `${type}-${Date.now().toString(36)}-${(rid++).toString(36)}`;
 
-/** Settings row: heading + blurb on the left, the controls card on the right.
- *  `id` makes the section a deep-link target (e.g. /settings#skills from the chat). */
+type IconComponent = (p: React.SVGProps<SVGSVGElement>) => JSX.Element;
+
+/** Settings subtabs. Deep links use the hash (/settings#skills, /settings#api);
+ *  legacy anchors that aren't tab ids (#memos) map to their tab below. */
+const TABS: { id: string; label: string; icon: IconComponent }[] = [
+  { id: "general", label: "General", icon: Sliders },
+  { id: "models", label: "Models", icon: Sparkles },
+  { id: "voice", label: "Voice", icon: Mic },
+  { id: "channels", label: "Channels", icon: Send },
+  { id: "skills", label: "Skills", icon: Wand },
+  { id: "data", label: "Data", icon: DataIcon },
+  { id: "api", label: "API", icon: Key },
+];
+
+const HASH_TABS: Record<string, string> = { memos: "voice" };
+
+function tabForHash(hash: string): string | null {
+  if (TABS.some((t) => t.id === hash)) return hash;
+  return HASH_TABS[hash] ?? null;
+}
+
+/** One settings topic: icon chip + title + description over an always-open body.
+ *  `action` renders on the right of the header (status pills, quick buttons). */
 function Section({
   id,
   title,
   desc,
+  icon: Icon,
+  action,
   children,
 }: {
   id?: string;
   title: string;
   desc?: string;
+  icon?: IconComponent;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="grid grid-cols-1 scroll-mt-4 items-start gap-3 md:grid-cols-[240px_1fr] md:gap-10 lg:grid-cols-[280px_1fr]">
-      <div className="md:pt-1.5">
-        <h2 className="text-sm font-semibold text-fg">{title}</h2>
-        {desc ? <p className="mt-1 text-[13px] leading-snug text-muted-fg">{desc}</p> : null}
+    <section id={id} className="scroll-mt-4 rounded-xl border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+        {Icon ? (
+          <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+            <Icon width={15} height={15} />
+          </span>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-fg">{title}</h2>
+          {desc ? <p className="mt-0.5 text-[13px] leading-snug text-muted-fg">{desc}</p> : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
-      <Card className="min-w-0 p-5 sm:p-6">{children}</Card>
+      <div className="p-5 sm:p-6">{children}</div>
     </section>
   );
 }
@@ -102,6 +163,29 @@ function Section({
 export function SettingsForm({ config }: { config: PublicConfig }) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
+
+  // Active subtab, synced with the URL hash so deep links + back/forward work.
+  const [tab, setTab] = useState("general");
+  useEffect(() => {
+    const apply = () => {
+      const hash = window.location.hash.slice(1);
+      const target = tabForHash(hash);
+      if (!target) return;
+      setTab(target);
+      // Legacy section anchors (#memos) also scroll to their card inside the tab.
+      if (target !== hash) {
+        window.setTimeout(() => document.getElementById(hash)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      }
+    };
+    apply();
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
+  }, []);
+
+  function goTab(id: string) {
+    setTab(id);
+    window.history.replaceState(null, "", `#${id}`);
+  }
 
   const [username, setUsername] = useState(config.username);
   const [password, setPassword] = useState("");
@@ -410,9 +494,37 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const selRow = providers.find((p) => p.id === sel?.providerId);
 
   return (
-    <form onSubmit={save} className="space-y-6 md:space-y-8">
+    <form onSubmit={save} className="md:grid md:grid-cols-[190px_1fr] md:items-start md:gap-8 lg:grid-cols-[210px_1fr] lg:gap-10">
+      {/* Submenu — vertical rail on desktop, scrollable pills on mobile */}
+      <nav
+        aria-label="Settings sections"
+        className="scrollbar-none -mx-1 mb-4 flex gap-1 overflow-x-auto px-1 md:sticky md:top-4 md:mx-0 md:mb-0 md:block md:space-y-1 md:overflow-visible md:px-0"
+      >
+        {TABS.map((t) => {
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => goTab(t.id)}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors md:w-full",
+                active ? "bg-accent/10 text-fg" : "text-muted-fg hover:bg-muted hover:text-fg",
+              )}
+            >
+              <t.icon width={15} height={15} className={cn("shrink-0", active && "text-accent")} />
+              {t.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="min-w-0 space-y-3">
+      {tab === "general" ? (
+      <>
       {/* Profile */}
-      <Section title="Profile" desc="Login email and password.">
+      <Section title="Profile" icon={User} desc="Login email and password.">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Email" htmlFor="username">
             <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
@@ -430,8 +542,37 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
+      {/* Appearance */}
+      <Section title="Appearance" icon={Sun} desc="Theme for the whole app.">
+        <div className="grid max-w-xs grid-cols-2 gap-2">
+          {(["light", "dark"] as const).map((t) => {
+            const active = theme === t;
+            const Icon = t === "light" ? Sun : Moon;
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTheme(t)}
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium capitalize transition-colors",
+                  active ? "border-accent bg-accent/10 text-fg" : "border-border bg-card text-muted-fg hover:bg-muted hover:text-fg",
+                )}
+              >
+                <Icon width={16} height={16} />
+                {t}
+                {active ? <Check width={14} height={14} className="text-accent" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+      </>
+      ) : null}
+
+      {tab === "models" ? (
+      <>
       {/* AI providers list */}
-      <Section title="AI providers" desc="API accounts that power chat. Add as many as you like, then pick the default model.">
+      <Section title="AI providers" icon={Sparkles} desc="API accounts that power chat. Add as many as you like, then pick the default model.">
         <div className="space-y-3">
           {providers.length === 0 ? (
             <p className="text-sm text-muted-fg">No providers added.</p>
@@ -491,7 +632,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       </Section>
 
       {/* Embedding model */}
-      <Section title="Embedding model" desc="Powers semantic search over your journal. Local runs on-device.">
+      <Section title="Embedding model" icon={Cpu} desc="Powers semantic search over your journal. Local runs on-device.">
         <div className="grid max-w-xs grid-cols-2 gap-2">
           {(["local", "api"] as const).map((m) => (
             <button
@@ -535,8 +676,50 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         )}
       </Section>
 
+      {/* Semantic search (embeddings) */}
+      <Section title="Semantic search" icon={Search} desc="The vector index over your entries. Reindex after big imports.">
+        <div className="space-y-3">
+          <Checkbox
+            label="Embed entries for semantic search"
+            hint="On by default — the local model runs on-device, no key. Off = no vectors; chat recall and search fall back to keywords."
+            checked={embEnabled}
+            onChange={setEmbEnabled}
+          />
+          <Checkbox
+            label="Auto-index"
+            hint="Rebuild the index automatically whenever new entries land. Off = only the Reindex button updates it."
+            checked={embAutoIndex}
+            onChange={setEmbAutoIndex}
+            disabled={!embEnabled}
+          />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-border pt-4">
+          <div className="flex items-center gap-2 text-sm">
+            <span className={cn("inline-flex h-2 w-2 rounded-full", embed?.built ? "bg-accent" : "bg-muted-fg/50")} />
+            <span className="text-fg">
+              {embed
+                ? embed.built
+                  ? `${embed.count} ${embed.count === 1 ? "entry" : "entries"} indexed`
+                  : "Not indexed yet"
+                : "Checking…"}
+            </span>
+            {embed?.stale && embed.built ? (
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">out of date</span>
+            ) : null}
+          </div>
+          <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing || !embEnabled}>
+            {reindexing ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
+            {reindexing ? "Reindexing…" : "Reindex now"}
+          </Button>
+        </div>
+      </Section>
+      </>
+      ) : null}
+
+      {tab === "voice" ? (
+      <>
       {/* Voice model */}
-      <Section title="Voice model" desc="Speech provider for voice sessions.">
+      <Section title="Voice model" icon={AudioLines} desc="Speech provider for voice sessions.">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Provider">
             <Select
@@ -583,6 +766,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       <Section
         id="memos"
         title="Voice memos"
+        icon={Mic}
         desc="How the top-bar mic transcribes. Install Whisper into the app for private, offline transcription — no key, no cloud, audio never leaves this machine."
       >
         <div className="space-y-4">
@@ -659,53 +843,59 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
-      {/* Channels */}
-      <Section
-        title="Channels"
-        desc="Talk to your record from Telegram or Slack — the same brain as the chat. Each channel can answer with AI (pick the skill + model) or just log everything to your inbox."
-      >
-        <div className="space-y-4">
-          <ChannelCard
-            name="Telegram"
-            linked={config.channels.telegram}
-            token={tgToken}
-            onToken={setTgToken}
-            tokenPlaceholder="123456:ABC…"
-            webhook={`${origin || "https://<your-host>"}/api/channels/telegram`}
-            steps={[
-              "Message @BotFather in Telegram → /newbot → copy the bot token.",
-              "Paste the token below and save.",
-              "Register the webhook: open https://api.telegram.org/bot<TOKEN>/setWebhook?url=<webhook URL> once in your browser.",
-              "DM your bot. Plain text chats with your record; “// a note” logs a memo with zero tokens.",
-            ]}
-            prefs={replies.telegram}
-            onPrefs={(up) => patchReplies("telegram", up)}
-            skills={skills}
-            providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
-          />
-          <ChannelCard
-            name="Slack"
-            linked={config.channels.slack}
-            token={slackToken}
-            onToken={setSlackToken}
-            tokenPlaceholder="xoxb-…"
-            webhook={`${origin || "https://<your-host>"}/api/channels/slack`}
-            steps={[
-              "Create an app at api.slack.com/apps → OAuth & Permissions → add the chat:write, im:history and app_mentions:read bot scopes.",
-              "Install the app to your workspace and copy the xoxb- bot token below.",
-              "Event Subscriptions → enable, set the Request URL to the webhook URL, subscribe to message.im and app_mention.",
-              "DM the bot or @mention it. Plain text chats with your record; “// a note” logs a memo.",
-            ]}
-            prefs={replies.slack}
-            onPrefs={(up) => patchReplies("slack", up)}
-            skills={skills}
-            providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
-          />
-        </div>
-      </Section>
+      </>
+      ) : null}
 
+      {tab === "channels" ? (
+      <>
+      {/* Channels — one section per platform, same brain as the chat */}
+      <ChannelCard
+        name="Telegram"
+        icon={Telegram}
+        desc="DM your bot to chat with your record — “// a note” logs a memo with zero tokens."
+        linked={config.channels.telegram}
+        token={tgToken}
+        onToken={setTgToken}
+        tokenPlaceholder="123456:ABC…"
+        webhook={`${origin || "https://<your-host>"}/api/channels/telegram`}
+        steps={[
+          "Message @BotFather in Telegram → /newbot → copy the bot token.",
+          "Paste the token below and save.",
+          "Register the webhook: open https://api.telegram.org/bot<TOKEN>/setWebhook?url=<webhook URL> once in your browser.",
+          "DM your bot. Plain text chats with your record; “// a note” logs a memo with zero tokens.",
+        ]}
+        prefs={replies.telegram}
+        onPrefs={(up) => patchReplies("telegram", up)}
+        skills={skills}
+        providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
+      />
+      <ChannelCard
+        name="Slack"
+        icon={Slack}
+        desc="DM or @mention the bot to chat with your record — “// a note” logs a memo with zero tokens."
+        linked={config.channels.slack}
+        token={slackToken}
+        onToken={setSlackToken}
+        tokenPlaceholder="xoxb-…"
+        webhook={`${origin || "https://<your-host>"}/api/channels/slack`}
+        steps={[
+          "Create an app at api.slack.com/apps → OAuth & Permissions → add the chat:write, im:history and app_mentions:read bot scopes.",
+          "Install the app to your workspace and copy the xoxb- bot token below.",
+          "Event Subscriptions → enable, set the Request URL to the webhook URL, subscribe to message.im and app_mention.",
+          "DM the bot or @mention it. Plain text chats with your record; “// a note” logs a memo.",
+        ]}
+        prefs={replies.slack}
+        onPrefs={(up) => patchReplies("slack", up)}
+        skills={skills}
+        providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
+      />
+      </>
+      ) : null}
+
+      {tab === "data" ? (
+      <>
       {/* Data */}
-      <Section title="Data" desc="Where local files live. Keep personal data out of public repositories.">
+      <Section title="Data" icon={DataIcon} desc="Where local files live. Keep personal data out of public repositories.">
         <Field label="Record folder">
           <div className="scrollbar-thin overflow-x-auto rounded-lg border border-border bg-muted px-3 py-2.5 font-mono text-[13px] text-fg">
             {config.recordDir}
@@ -745,34 +935,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
-      {/* Appearance */}
-      <Section title="Appearance" desc="Theme for the whole app.">
-        <div className="grid max-w-xs grid-cols-2 gap-2">
-          {(["light", "dark"] as const).map((t) => {
-            const active = theme === t;
-            const Icon = t === "light" ? Sun : Moon;
-            return (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTheme(t)}
-                className={cn(
-                  "flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium capitalize transition-colors",
-                  active ? "border-accent bg-accent/10 text-fg" : "border-border bg-card text-muted-fg hover:bg-muted hover:text-fg",
-                )}
-              >
-                <Icon width={16} height={16} />
-                {t}
-                {active ? <Check width={14} height={14} className="text-accent" /> : null}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-
       {/* Structure (the pending inbox) */}
       <Section
         title="Structure"
+        icon={Table}
         desc="How new captures — memos, voice notes, dropped files, channel messages — become daily rows."
       >
         <Checkbox
@@ -783,46 +949,13 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         />
       </Section>
 
-      {/* Semantic search (embeddings) */}
-      <Section title="Semantic search" desc="The vector index over your entries. Reindex after big imports.">
-        <div className="space-y-3">
-          <Checkbox
-            label="Embed entries for semantic search"
-            hint="On by default — the local model runs on-device, no key. Off = no vectors; chat recall and search fall back to keywords."
-            checked={embEnabled}
-            onChange={setEmbEnabled}
-          />
-          <Checkbox
-            label="Auto-index"
-            hint="Rebuild the index automatically whenever new entries land. Off = only the Reindex button updates it."
-            checked={embAutoIndex}
-            onChange={setEmbAutoIndex}
-            disabled={!embEnabled}
-          />
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-border pt-4">
-          <div className="flex items-center gap-2 text-sm">
-            <span className={cn("inline-flex h-2 w-2 rounded-full", embed?.built ? "bg-accent" : "bg-muted-fg/50")} />
-            <span className="text-fg">
-              {embed
-                ? embed.built
-                  ? `${embed.count} ${embed.count === 1 ? "entry" : "entries"} indexed`
-                  : "Not indexed yet"
-                : "Checking…"}
-            </span>
-            {embed?.stale && embed.built ? (
-              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">out of date</span>
-            ) : null}
-          </div>
-          <Button type="button" size="sm" onClick={() => void reindex()} disabled={reindexing || !embEnabled}>
-            {reindexing ? <Spinner width={14} height={14} /> : <Sparkles width={14} height={14} />}
-            {reindexing ? "Reindexing…" : "Reindex now"}
-          </Button>
-        </div>
-      </Section>
+      </>
+      ) : null}
 
+      {tab === "skills" ? (
+      <>
       {/* Skills */}
-      <Section id="skills" title="Skills" desc="Personas you can invoke in chat with /name. Any skill can be deleted — defaults are restorable.">
+      <Section id="skills" title="Skills" icon={Wand} desc="Personas you can invoke in chat with /name. Any skill can be deleted — defaults are restorable.">
         <div className="space-y-2">
           {skills.map((s) => (
             <div key={s.id} className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
@@ -873,10 +1006,14 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
       </Section>
 
-      {/* Save bar — sticky so it stays reachable on this long page */}
-      <div className="sticky bottom-0 z-10 border-t border-border bg-bg/90 py-3 backdrop-blur">
-        <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] md:gap-10 lg:grid-cols-[280px_1fr]">
-          <div className="hidden md:block" />
+      </>
+      ) : null}
+
+      {tab === "api" ? <ApiTab /> : null}
+
+      {/* Save bar — Skills and API act instantly, everything else saves as one form */}
+      {tab !== "api" && tab !== "skills" ? (
+        <div className="sticky bottom-0 z-10 border-t border-border bg-bg/90 py-3 backdrop-blur">
           <div className="flex items-center gap-3">
             <Button type="submit" variant="primary" disabled={saving}>
               {saving ? <Spinner width={16} height={16} /> : null}
@@ -890,8 +1027,162 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
             {error ? <span className="text-sm text-destructive">{error}</span> : null}
           </div>
         </div>
+      ) : null}
       </div>
     </form>
+  );
+}
+
+/** Core HTTP endpoints the bearer key unlocks — the same routes the app itself uses. */
+const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[] = [
+  { method: "POST", path: "/api/chat", body: `{"message":"…"}`, desc: "Ask your record — grounded answer with sources." },
+  { method: "POST", path: "/api/search", body: `{"query":"…","limit":5}`, desc: "Semantic search — closest days plus a ready answer." },
+  { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens." },
+  { method: "GET", path: "/api/journal", desc: "List journal entries." },
+  { method: "GET", path: "/api/daily", desc: "The structured daily table." },
+  { method: "GET", path: "/api/graphs", desc: "Graph definitions and their data." },
+];
+
+/**
+ * API tab: mint / rotate / revoke the instance bearer key and show how to call
+ * the HTTP API — the same key the CLI, the MCP server, and agent skills use.
+ * Everything here talks to /api/keys directly; nothing goes through the form save.
+ */
+function ApiTab() {
+  const [base, setBase] = useState("http://localhost:3000");
+  const [hasKey, setHasKey] = useState(false);
+  const [masked, setMasked] = useState("");
+  const [fullKey, setFullKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const key = fullKey || masked || PH;
+
+  useEffect(() => {
+    if (typeof window !== "undefined") setBase(window.location.origin);
+    let alive = true;
+    fetch("/api/keys")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive || !d) return;
+        setHasKey(Boolean(d.hasKey));
+        setMasked(d.masked || "");
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function generate() {
+    setBusy(true);
+    try {
+      const d = await fetch("/api/keys", { method: "POST" }).then((r) => r.json()).catch(() => ({}));
+      if (d.key) {
+        setFullKey(d.key);
+        setMasked(d.masked || "");
+        setHasKey(true);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke() {
+    if (!window.confirm("Revoke the API key? Every CLI, MCP, and skill using it stops working until you generate a new one.")) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/keys", { method: "DELETE" });
+      if (r.ok) {
+        setHasKey(false);
+        setMasked("");
+        setFullKey("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const curl = `curl -s ${base}/api/chat -H "authorization: Bearer ${key}" -H "content-type: application/json" -d '{"message":"How was last week?"}'`;
+
+  return (
+    <>
+      <Section
+        title="API key"
+        icon={Key}
+        desc="One bearer key authenticates the HTTP API, the CLI, and the MCP server. Rotating it replaces the old key everywhere."
+      >
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className={cn("inline-flex h-2 w-2 shrink-0 rounded-full", hasKey ? "bg-accent" : "bg-muted-fg/50")} />
+            <span className="text-fg">{hasKey ? "Key active" : "No key yet"}</span>
+            {masked ? <code className="font-mono text-xs text-muted-fg">{masked}</code> : null}
+          </div>
+          {fullKey ? (
+            <>
+              <KeyRow value={fullKey} />
+              <p className="text-xs text-muted-fg">Copy it now — the full key is shown only once.</p>
+            </>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="primary" onClick={() => void generate()} disabled={busy}>
+              {busy ? <Spinner width={14} height={14} /> : <Key width={14} height={14} />}
+              {hasKey ? "Regenerate key" : "Generate key"}
+            </Button>
+            {hasKey ? (
+              <Button type="button" size="sm" variant="danger" onClick={() => void revoke()} disabled={busy}>
+                <Trash width={14} height={14} /> Revoke
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Connect"
+        icon={Terminal}
+        desc="Ready-made snippets with your key filled in — sync from the CLI, add the MCP server, or drop in the agent skill."
+      >
+        <div className="space-y-2">
+          <CliRow code={SYNC_CMD} />
+          <div className="flex gap-2">
+            <CopyRow label="Copy mcp" code={mcpSnip(base, key)} className="flex-1" />
+            <CopyRow label="Copy skill" code={skillSnip(base, key)} className="flex-1" />
+          </div>
+          <p className="text-xs text-muted-fg">
+            or work directly in your forked repo — the record is plain files in your own git repo.
+          </p>
+        </div>
+      </Section>
+
+      <Section
+        title="Endpoints"
+        icon={Code}
+        desc="Send the key as an authorization: Bearer header with every call."
+      >
+        <div className="space-y-3">
+          <div className="scrollbar-thin overflow-x-auto rounded-lg border border-border">
+            <table className="w-full text-left text-sm">
+              <tbody>
+                {ENDPOINTS.map((e) => (
+                  <tr key={e.method + e.path} className="border-b border-border last:border-0">
+                    <td className="py-2.5 pl-3 pr-2 align-top">
+                      <span className="inline-flex rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-fg">
+                        {e.method}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2.5 align-top">
+                      <code className="font-mono text-[12px] text-fg">{e.path}</code>
+                      {e.body ? <code className="ml-2 font-mono text-[11px] text-muted-fg">{e.body}</code> : null}
+                    </td>
+                    <td className="w-full px-3 py-2.5 align-top text-[13px] text-muted-fg">{e.desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <CliRow code={curl} />
+        </div>
+      </Section>
+    </>
   );
 }
 
@@ -974,12 +1265,15 @@ function ProviderCard({
 }
 
 /**
- * One channel (Telegram / Slack): status, a step-by-step connect guide, the bot
- * token, the webhook URL (copyable), and how the bot answers — AI replies with a
- * chosen skill + optional model override, or log-only capture (no LLM, no tokens).
+ * One channel (Telegram / Slack) as its own settings section: brand icon + linked
+ * pill in the header, then Setup (step-by-step guide, bot token, copyable webhook
+ * URL) and Replies — AI answers with a chosen skill + optional model override, or
+ * log-only capture (no LLM, no tokens).
  */
 function ChannelCard({
   name,
+  icon,
+  desc,
   linked,
   token,
   onToken,
@@ -992,6 +1286,8 @@ function ChannelCard({
   providers,
 }: {
   name: string;
+  icon: IconComponent;
+  desc: string;
   linked: boolean;
   token: string;
   onToken: (v: string) => void;
@@ -1015,26 +1311,42 @@ function ChannelCard({
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-border p-4">
-      <div className="flex items-center gap-2">
-        <span className={cn("h-2 w-2 shrink-0 rounded-full", linked ? "bg-accent" : "bg-muted-fg/40")} aria-hidden />
-        <p className="text-sm font-semibold text-fg">{name}</p>
-        <span className="text-xs text-muted-fg">{linked ? "Linked" : "Not linked"}</span>
+    <Section
+      title={name}
+      icon={icon}
+      desc={desc}
+      action={
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+            linked ? "border-accent/40 bg-accent/10 text-accent" : "border-border bg-muted text-muted-fg",
+          )}
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full", linked ? "bg-accent" : "bg-muted-fg/50")} aria-hidden />
+          {linked ? "Linked" : "Not linked"}
+        </span>
+      }
+    >
+      <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-fg">Setup</p>
         <button
           type="button"
           onClick={() => setGuideOpen((v) => !v)}
-          className="ml-auto text-xs font-medium text-muted-fg underline decoration-border underline-offset-2 hover:text-fg"
+          className="text-xs font-medium text-muted-fg underline decoration-border underline-offset-2 hover:text-fg"
         >
-          {guideOpen ? "Hide guide" : "How it works"}
+          {guideOpen ? "Hide guide" : "Setup guide"}
         </button>
       </div>
 
       {guideOpen ? (
-        <ol className="space-y-1 rounded-lg bg-muted/40 p-3 text-xs text-muted-fg">
+        <ol className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-fg">
           {steps.map((s, i) => (
             <li key={i} className="flex gap-2">
-              <span className="w-4 shrink-0 text-right tabular-nums text-fg">{i + 1}.</span>
-              <span>{s}</span>
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-fg/10 text-[10px] font-semibold tabular-nums text-fg">
+                {i + 1}
+              </span>
+              <span className="pt-px">{s}</span>
             </li>
           ))}
         </ol>
@@ -1067,7 +1379,7 @@ function ChannelCard({
         </Field>
       </div>
 
-      <div>
+      <div className="border-t border-border pt-4">
         <p className="mb-1.5 text-sm font-medium text-fg">Replies</p>
         <div className="grid max-w-xs grid-cols-2 gap-2">
           {([
@@ -1130,6 +1442,7 @@ function ChannelCard({
           </p>
         )}
       </div>
-    </div>
+      </div>
+    </Section>
   );
 }

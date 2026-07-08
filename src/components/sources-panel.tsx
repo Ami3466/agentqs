@@ -1,26 +1,49 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Plus, RefreshCw, sourceIcon, Spinner, Trash, X } from "@/components/icons";
+import { Check, ChevronDown, Inbox, Plus, RefreshCw, sourceIcon, Spinner, Trash, X } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
-import { Button, cn } from "@/components/ui";
+import { Button, cn, Input } from "@/components/ui";
 import { type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
 
+type GoogleImportStatus = {
+  exists: boolean;
+  days: number;
+  from: string | null;
+  to: string | null;
+  events: number;
+  updatedAt: string | null;
+};
+
+type ChromeImporterStatus = {
+  extensionDir: string;
+  downloadUrl: string;
+  extensionSeenAt: string | null;
+  extensionVersion: string;
+  imports: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    source: string;
+    page: string;
+    status: GoogleImportStatus;
+  }>;
+};
+
 /**
  * The Data-tab Sources card. One fetcher/persister of /api/sources, split into two
- * tabs BY TYPE (a source never moves between them when it connects):
- *   • Connections     — API integrations (GitHub, WHOOP, Tier-1 plugins + extra
- *                       accounts). Connected rows edit their interval / Remove here.
- *   • Automated imports — the no-API lane: browser-automation recipes, local file
- *                       feeds, the no-API roster (Connect opens the wizard), and the
- *                       "automate a site without an API" entry.
+ * tabs by acquisition path:
+ *   • Connections       — API integrations, connected or not.
+ *   • Automated imports — everything the server ingests without an API key: the
+ *     Chrome-extension Google presets, Playwright/scraping automations, and
+ *     record-backed imports (Chrome history file, Google archives, other CSVs).
  * A source is only shown as connected when its record actually has rows (derived,
  * never faked). Also owns lazy-sync-on-open: on mount it POSTs every DUE api source,
  * then bumps the shared `version` so downstream panels refetch.
@@ -28,25 +51,24 @@ type Tab = "connections" | "automated";
 export function SourcesPanel({
   version,
   onChanged,
-  automateSignal = 0,
 }: {
   version: number;
   onChanged: () => void;
-  /** Incremented by the inbox "Automate imports" button — opens the setup wizard in
-   *  the Automated imports tab. */
-  automateSignal?: number;
 }) {
   const [sources, setSources] = useState<SourceView[] | null>(null);
   const [tab, setTab] = useState<Tab>("connections");
   const [savingId, setSavingId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState("");
+  const [chromeStatus, setChromeStatus] = useState<ChromeImporterStatus | null>(null);
+  const [chromeStatusError, setChromeStatusError] = useState("");
+  const [sourceError, setSourceError] = useState("");
   const [autoMsg, setAutoMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
   // Extra-account rows being set up (instance ids like "spotify-2") — ephemeral
   // until a credential is saved, then /api/sources owns them.
   const [addingAccounts, setAddingAccounts] = useState<string[]>([]);
-  // The automation wizard, optionally seeded from a specific roster source. It lives
-  // under Automated imports (it becomes one), so opening it lands the user there.
+  // The automation wizard records scraping/browser automation recipes.
   const [wizardSeed, setWizardSeed] = useState<{ name?: string; url?: string } | null>(null);
   const openWizard = useCallback((seed: { name?: string; url?: string } = {}) => {
     setTab("automated");
@@ -62,12 +84,48 @@ export function SourcesPanel({
   }, [wizardSeed]);
 
   const load = useCallback(async (): Promise<SourceView[] | null> => {
-    const res = await fetch("/api/sources");
-    if (!res.ok) return null;
-    const data = (await res.json()) as { sources: SourceView[] };
-    setSources(data.sources);
-    return data.sources;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 15000);
+    try {
+      setSourceError("");
+      const res = await fetch("/api/sources", { signal: controller.signal });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `Could not load sources (${res.status}).`);
+      }
+      const data = (await res.json()) as { sources: SourceView[] };
+      setSources(data.sources);
+      return data.sources;
+    } catch (e) {
+      setSourceError((e as Error).name === "AbortError" ? "Sources took too long to load. Restart AgentQS and try again." : (e as Error).message);
+      setSources([]);
+      return null;
+    } finally {
+      window.clearTimeout(timer);
+    }
   }, []);
+
+  const loadChromeStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/automations/google-activity-extension/status");
+      if (!res.ok) throw new Error(`Google import status failed (${res.status}).`);
+      setChromeStatus((await res.json()) as ChromeImporterStatus);
+      setChromeStatusError("");
+    } catch (e) {
+      setChromeStatusError((e as Error).message || "Could not load Google import status.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadChromeStatus();
+  }, [loadChromeStatus]);
+
+  useEffect(() => {
+    if (tab !== "automated") return;
+    void loadChromeStatus();
+    const id = window.setInterval(() => void loadChromeStatus(), 5000);
+    return () => window.clearInterval(id);
+  }, [tab, loadChromeStatus]);
 
   // Load on mount + whenever the shared version bumps. The first load also fires
   // lazy-sync-on-open for any due api source (guarded so it runs exactly once).
@@ -102,13 +160,6 @@ export function SourcesPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
 
-  // Inbox "Automate imports" → jump to the Automated tab and open the wizard.
-  useEffect(() => {
-    if (!automateSignal) return;
-    setTab("automated");
-    openWizard();
-  }, [automateSignal, openWizard]);
-
   async function changeInterval(id: string, interval: Interval) {
     setSavingId(id);
     try {
@@ -128,6 +179,7 @@ export function SourcesPanel({
 
   async function removeSource(id: string) {
     setRemovingId(id);
+    setRemoveError("");
     try {
       const res = await fetch("/api/sources", {
         method: "DELETE",
@@ -137,20 +189,33 @@ export function SourcesPanel({
       if (res.ok) {
         const data = (await res.json()) as { sources: SourceView[] };
         setSources(data.sources);
+        void loadChromeStatus(); // a removed Google preset leaves the card too
         onChanged(); // its rows leave the daily table too
+      } else {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setRemoveError(data.error || `Could not remove ${id}.`);
       }
+    } catch (e) {
+      setRemoveError((e as Error).message || `Could not remove ${id}.`);
     } finally {
       setRemovingId(null);
     }
   }
 
-  // Split by type: API integrations stay under Connections for good; everything
-  // driven without an API (automations, file feeds, no-API roster) is Automated.
+  // Split by acquisition path. Connections = API integrations. Automated imports =
+  // the Google-extension presets + scraping automations, with every record-backed
+  // import (file/archive CSVs) grouped into ONE collapsible, searchable box —
+  // a lifetime record holds dozens of sources and flat rows would drown the tab.
   const all = sources ?? [];
   const byConnected = (a: SourceView, b: SourceView) => Number(b.connected) - Number(a.connected);
   const connections = all.filter((s) => s.kind === "api" && !s.automation).sort(byConnected);
-  const automated = all.filter((s) => s.automation || s.kind !== "api").sort(byConnected);
-  const list = tab === "automated" ? automated : connections;
+  const automations = all.filter((s) => s.automation).sort(byConnected);
+  const importedData = all
+    .filter((s) => !s.automation && s.kind !== "api")
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const list = tab === "automated" ? automations : connections;
+  const googleImportsLanded = (chromeStatus?.imports ?? []).filter((item) => item.status.exists).length;
+  const automatedCount = automations.filter((s) => s.connected).length + googleImportsLanded + importedData.length;
 
   // Multi-account: a connected plugin source can be connected AGAIN under a new
   // instance id ("spotify-2"). Ephemeral rows live here until the credential is
@@ -243,7 +308,7 @@ export function SourcesPanel({
         removing={removing}
         onIntervalChange={onIntervalChange}
         onRemove={onRemove}
-        onConnect={() => openWizard({ name: s.name, url: s.setupUrl })}
+        onConnect={() => openWizard({ name: s.name })}
       />
     );
   }
@@ -258,7 +323,7 @@ export function SourcesPanel({
           </TabButton>
           <TabButton active={tab === "automated"} onClick={() => setTab("automated")}>
             Automated imports
-            <TabCount>{automated.filter((s) => s.connected).length}</TabCount>
+            <TabCount>{automatedCount}</TabCount>
           </TabButton>
         </div>
       </div>
@@ -269,14 +334,38 @@ export function SourcesPanel({
           {autoMsg}
         </div>
       ) : null}
-
+      {removeError ? (
+        <div className="border-b border-border bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
+          {removeError}
+        </div>
+      ) : null}
+      {sourceError ? (
+        <div className="border-b border-border bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
+          {sourceError}
+        </div>
+      ) : null}
       {sources === null ? (
         <div className="flex items-center gap-2 p-4 text-xs text-muted-fg">
           <Spinner width={13} height={13} /> Loading…
         </div>
       ) : (
         <>
+          {tab === "automated" ? (
+            <div className="divide-y divide-border">
+              <GoogleImporterCard
+                status={chromeStatus}
+                error={chromeStatusError}
+                removingId={removingId}
+                onRemove={(id) => void removeSource(id)}
+              />
+            </div>
+          ) : null}
+
           {list.length ? <div className="divide-y divide-border">{list.map(row)}</div> : null}
+
+          {tab === "automated" && importedData.length ? (
+            <ImportedDataGroup sources={importedData} renderRow={row} />
+          ) : null}
 
           {tab === "connections" && pendingAccounts.length ? (
             <div className="divide-y divide-border border-t border-border">
@@ -346,7 +435,10 @@ export function SourcesPanel({
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-muted text-muted-fg">
                 <RefreshCw width={17} height={17} />
               </span>
-              <p className="min-w-0 flex-1 text-sm font-medium text-fg">Automate a site without an API</p>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-fg">Custom scraping</p>
+                <p className="truncate text-xs text-muted-fg">Record a click-path on any site and replay it on a schedule</p>
+              </div>
               <span className="shrink-0 text-xs font-medium text-muted-fg">Set up →</span>
             </button>
           ) : null}
@@ -387,10 +479,217 @@ function TabCount({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Minimal source row for the no-API roster and any generic connected source, both
- *  under Automated imports. Connect opens the record-login + scrape wizard; the row
- *  matches the layout of the API rows (icon · name · one primary action). Connected
- *  rows expose interval + Remove. Stale is monochrome. */
+/**
+ * The predone Google scraping presets, one row per preset. Data flows through the
+ * Chrome extension: install it once, open a preset's Google page, press
+ * "Start import" in the AgentQS panel there. Each preset lands in its own source
+ * (daily rollup + events), shows its coverage here, and is removable per preset.
+ */
+function GoogleImporterCard({
+  status,
+  error,
+  removingId,
+  onRemove,
+}: {
+  status: ChromeImporterStatus | null;
+  error: string;
+  removingId: string | null;
+  onRemove: (sourceId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const imports = status?.imports ?? [];
+  const landed = imports.filter((item) => item.status.exists);
+  const pending = imports.filter((item) => !item.status.exists);
+  const totalEvents = landed.reduce((sum, item) => sum + item.status.events, 0);
+  // The extension pings the server every ~5 minutes while installed; a stamp older
+  // than that (or none) means clicking a Google page would silently do nothing, so
+  // the card teaches the install steps instead.
+  const extensionOnline = Boolean(
+    status?.extensionSeenAt && Date.now() - new Date(status.extensionSeenAt).getTime() < 6 * 60 * 1000,
+  );
+  // All imported presets always show; the not-yet-imported tail fills the card up
+  // to ~6 rows, the rest sits behind "Show all" so the card doesn't drown the tab.
+  const fillCount = Math.max(0, 6 - landed.length);
+  const visible = expanded ? [...landed, ...pending] : [...landed, ...pending.slice(0, fillCount)];
+  const hiddenCount = imports.length - visible.length;
+
+  return (
+    <div className="p-4">
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-fg">
+          <RefreshCw width={17} height={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-fg">Google data · Chrome extension</p>
+          <p className="truncate text-xs text-muted-fg">
+            {landed.length
+              ? `${totalEvents.toLocaleString()} events across ${landed.length} import${landed.length === 1 ? "" : "s"}`
+              : "Search, YouTube, Maps, Chrome, Timeline and more"}
+            {extensionOnline ? ` · extension connected${status?.extensionVersion ? ` (v${status.extensionVersion})` : ""}` : ""}
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant={extensionOnline ? "secondary" : "primary"}
+          onClick={() => window.open(status?.downloadUrl ?? "/downloads/agentqs-google-activity-exporter.zip", "_blank", "noopener,noreferrer")}
+        >
+          {extensionOnline ? "Update extension" : "Download extension"}
+        </Button>
+      </div>
+
+      {extensionOnline ? (
+        <p className="mt-2 text-xs text-muted-fg">
+          Press <span className="font-medium text-fg">Import</span> on a row: the Google page opens and the import starts in the
+          AgentQS panel there. Long histories resume automatically.
+        </p>
+      ) : (
+        <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-xs text-muted-fg">
+          <li>Download the extension zip and unzip it.</li>
+          <li>Open <span className="font-mono text-[11px] text-fg">chrome://extensions</span>, turn on Developer mode, click <span className="font-medium text-fg">Load unpacked</span> and pick the unzipped folder.</li>
+          <li>This card shows "extension connected" within a minute; then press Import on any row below.</li>
+        </ol>
+      )}
+
+      {error ? (
+        <div className="mt-3 rounded-md border border-border bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>
+      ) : null}
+
+      {imports.length ? (
+        <div className="mt-3 divide-y divide-border rounded-md border border-border">
+          {visible.map((item) => {
+            const removing = removingId === item.source;
+            return (
+              <div key={item.id} className="flex items-center gap-3 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-medium text-fg">{item.label}</p>
+                  <p className="truncate text-xs text-muted-fg">
+                    {item.status.exists
+                      ? `${item.status.events.toLocaleString()} events · ${item.status.days.toLocaleString()} days` +
+                        (item.status.from ? ` · ${item.status.from} → ${item.status.to}` : "")
+                      : item.detail}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant={item.status.exists ? "ghost" : "secondary"}
+                    onClick={() => {
+                      // #agentqs-import=<preset> auto-starts the import once the
+                      // extension's panel loads on the Google page.
+                      const target = `${item.page}${item.page.includes("#") ? "" : `#agentqs-import=${item.id}`}`;
+                      window.open(target, "_blank", "noopener,noreferrer");
+                    }}
+                    title={
+                      extensionOnline
+                        ? `Open ${item.label} on Google and start the import there`
+                        : `Install the extension first, then this opens ${item.label} and starts the import`
+                    }
+                  >
+                    {item.status.exists ? "Update" : "Import"}
+                  </Button>
+                  {item.status.exists ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        const ok = window.confirm(
+                          `Remove ${item.label}? This deletes ${item.status.events.toLocaleString()} imported events across ${item.status.days.toLocaleString()} days. Re-importing takes a full new run.`,
+                        );
+                        if (ok) onRemove(item.source);
+                      }}
+                      disabled={removing}
+                      title={`Remove ${item.label} data`}
+                    >
+                      {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+          {hiddenCount > 0 || expanded ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="w-full px-3 py-2 text-left text-xs font-medium text-muted-fg transition-colors hover:text-fg"
+            >
+              {expanded ? "Show fewer" : `Show all ${imports.length} Google imports`}
+            </button>
+          ) : null}
+        </div>
+      ) : !error ? (
+        <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/25 px-3 py-2 text-xs text-muted-fg">
+          <Spinner width={13} height={13} /> Loading Google import status…
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** All record-backed imports (merged CSVs, file imports, archive bundles) in one
+ *  collapsible box: a count when closed; searchable and scrollable when open. */
+function ImportedDataGroup({
+  sources,
+  renderRow,
+}: {
+  sources: SourceView[];
+  renderRow: (s: SourceView) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? sources.filter((s) => s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q))
+    : sources;
+  return (
+    <div className="border-t border-border">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/40"
+        aria-expanded={open}
+      >
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-fg">
+          <Inbox width={17} height={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-fg">Imported data</p>
+          <p className="truncate text-xs text-muted-fg">
+            {sources.length.toLocaleString()} source{sources.length === 1 ? "" : "s"} from files, archives and merges
+          </p>
+        </div>
+        <ChevronDown
+          width={15}
+          height={15}
+          className={cn("shrink-0 text-muted-fg transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open ? (
+        <div className="border-t border-border">
+          {sources.length > 6 ? (
+            <div className="border-b border-border p-3">
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search imported sources"
+                className="h-8 text-[13px]"
+              />
+            </div>
+          ) : null}
+          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+            {filtered.length ? (
+              filtered.map(renderRow)
+            ) : (
+              <p className="p-4 text-xs text-muted-fg">No source matches "{query}".</p>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Minimal row for imported files/archives. Connected rows expose interval + Remove. */
 function SourceRow({
   source,
   saving,

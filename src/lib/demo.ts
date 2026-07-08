@@ -42,6 +42,78 @@ export function isDemoSeeded(): boolean {
   return readConfig()?.demoSeeded === true;
 }
 
+function hasDataRows(file: string): boolean {
+  if (!fs.existsSync(file)) return false;
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter((line) => line.trim());
+  return lines.length > 1;
+}
+
+function hasDemoJsonlLines(file: string): boolean {
+  if (!fs.existsSync(file)) return false;
+  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const o = JSON.parse(t) as Record<string, unknown>;
+      if (
+        o.source === DEMO_INBOX_SOURCE ||
+        String(o.id ?? "").startsWith(DEMO_SESSION_PREFIX) ||
+        Boolean((o.meta as { demo?: unknown } | null | undefined)?.demo)
+      ) {
+        return true;
+      }
+    } catch {
+      /* ignore unparseable lines */
+    }
+  }
+  return false;
+}
+
+function hasDemoArtifacts(): boolean {
+  const dir = recordDir();
+  // Only EXPLICITLY marked demo lines count (demo source / demo id prefix /
+  // meta.demo). A daily CSV merely named like a demo source ("sleep.csv") must
+  // never trigger a wipe: it could be the user's real data under a colliding name.
+  return (
+    hasDemoJsonlLines(path.join(dir, "inbox.jsonl")) ||
+    hasDemoJsonlLines(path.join(dir, "sessions.jsonl"))
+  );
+}
+
+export function hasUserRecordData(): boolean {
+  const dir = recordDir();
+  const dailyDir = path.join(dir, "daily");
+  if (fs.existsSync(dailyDir)) {
+    for (const name of fs.readdirSync(dailyDir)) {
+      if (!name.endsWith(".csv")) continue;
+      const source = name.replace(/\.csv$/, "");
+      if (DEMO_SOURCES.includes(source as (typeof DEMO_SOURCES)[number])) continue;
+      if (hasDataRows(path.join(dailyDir, name))) return true;
+    }
+  }
+
+  for (const file of [path.join(dir, "events.jsonl"), path.join(dir, "inbox.jsonl"), path.join(dir, "sessions.jsonl")]) {
+    if (!fs.existsSync(file)) continue;
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const o = JSON.parse(t) as Record<string, unknown>;
+        if (
+          o.source !== DEMO_INBOX_SOURCE &&
+          !String(o.id ?? "").startsWith(DEMO_SESSION_PREFIX) &&
+          !Boolean((o.meta as { demo?: unknown } | null | undefined)?.demo)
+        ) {
+          return true;
+        }
+      } catch {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Seed the generic demo record and rebuild the cache. Idempotent — one pass per
  *  day computes every metric from the same seeds, so the correlations the mentor
  *  points at (sleep → mood/focus/HR, workouts → mood) actually hold in the data. */
@@ -272,7 +344,7 @@ export function clearDemo(): void {
   dropJsonlLines(path.join(dir, "sessions.jsonl"), (o) => String(o.id ?? "").startsWith(DEMO_SESSION_PREFIX));
 
   const cfg = readConfig();
-  if (cfg?.demoSeeded) {
+  if (cfg) {
     cfg.demoSeeded = false;
     writeConfig(cfg);
   }
@@ -284,7 +356,7 @@ export function clearDemo(): void {
  * real source never lands next to the sample rows. No-op once wiped.
  */
 export function wipeDemoOnImport(): void {
-  if (isDemoSeeded()) clearDemo();
+  if (isDemoSeeded() || hasDemoArtifacts()) clearDemo();
 }
 
 /** Rewrite a .jsonl file dropping lines whose parsed object matches `drop`. */

@@ -46,5 +46,5 @@ export async function POST(req: Request) {
   const result = applyDailyEdits(edits, { recordDir: recordDir() });
   rebuild({ recordDir: recordDir() });
 
-  return NextResponse.json({ ok: true, ...result, journal: readJournal() });
+  return NextResponse.json({ ok: true, ...result, journal: readJournal({ days: 180 }) });
 }

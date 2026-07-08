@@ -66,6 +66,41 @@ export const Settings = (p: P) => (
   </svg>
 );
 
+export const User = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+  </svg>
+);
+
+export const Key = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="7.5" cy="15.5" r="5.5" />
+    <path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3" />
+  </svg>
+);
+
+export const Search = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="11" cy="11" r="8" />
+    <path d="m21 21-4.3-4.3" />
+  </svg>
+);
+
+export const Code = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="m16 18 6-6-6-6M8 6l-6 6 6 6" />
+  </svg>
+);
+
+export const Cpu = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <rect x="9" y="9" width="6" height="6" />
+    <path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" />
+  </svg>
+);
+
 export const Terminal = (p: P) => (
   <svg {...base} {...p}>
     <path d="m4 17 6-5-6-5M12 19h8" />
@@ -322,6 +357,18 @@ export const Waveform = (p: P) => (
 
 // ---- brand marks (monochrome, simple-icons geometry, filled) --------------
 
+export const Telegram = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+  </svg>
+);
+
+export const Slack = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" />
+  </svg>
+);
+
 export const Chrome = (p: P) => (
   <svg {...base} fill="currentColor" stroke="none" {...p}>
     <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0zM1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29zm13.342 2.166a5.446 5.446 0 0 1 1.45 7.09l.001.001h.006l-5.457 9.448A12 12 0 0 0 24 12c0-1.588-.309-3.104-.868-4.49zM12 16.364a4.364 4.364 0 1 1 0-8.728 4.364 4.364 0 0 1 0 8.728z" />
@@ -484,6 +531,15 @@ export const Withings = (p: P) => (
   </svg>
 );
 
+/** Granola's mark — the app's rounded "G" bowl, drawn as a single open ring so it
+ *  reads at 18px next to the other monochrome brand marks. */
+export const Granola = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M12 2a10 10 0 1 0 9.8 12h-2.1A7.9 7.9 0 1 1 12 4.1c2.1 0 4 .8 5.4 2.2l1.5-1.5A9.97 9.97 0 0 0 12 2Z" />
+    <path d="M12.6 10.9v2.2h4.7a5.4 5.4 0 1 1-1.4-4.7l1.6-1.5a7.6 7.6 0 1 0 2 6.4c.06-.4.1-.8.1-1.2v-1.2h-7Z" />
+  </svg>
+);
+
 /** One monochrome brand mark per source id, shared by every Data-tab source row
  *  so the catalog + automated-imports lists read the same (never a letter-box). */
 export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
@@ -506,11 +562,16 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   mastodon: Mastodon,
   instapaper: Instapaper,
   withings: Withings,
+  granola: Granola,
   "health-connect": ShieldHeart,
   "apple-weather": Apple,
   // Tier-2 file importers keep their real marks when they hold data.
   chrome: Chrome,
   iphone: Apple,
+  // Archive imports reuse their service's mark rather than the generic plug.
+  granola_texts: Granola,
+  spotify_history: Spotify,
+  spotify_history_texts: Spotify,
 };
 
 export function sourceIcon(id: string): (p: P) => JSX.Element {

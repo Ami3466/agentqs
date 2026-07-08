@@ -63,7 +63,7 @@ export function AutomationRow({
               </span>
             ) : automationStatus === "ok" ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
-                <Check width={12} height={12} /> importing
+                <Check width={12} height={12} /> last run ok
               </span>
             ) : null}
           </div>

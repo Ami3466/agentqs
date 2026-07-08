@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 24" role="img" aria-label="agentQS logo">
+  <title>agentQS</title>
+
+  <!-- theme-aware when loaded standalone (e.g. the GitHub README): black on light, white on dark -->
+  <style>
+    :root { color: #111111; }
+    @media (prefers-color-scheme: dark) { :root { color: #ededed; } }
+  </style>
+
+  <!-- classic robot head, thin line art; currentColor = theme-aware standalone AND when inlined -->
+  <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="12" y1="6.4" x2="12" y2="4.6"/>
+    <circle cx="12" cy="3.4" r="1.1" fill="currentColor" stroke="none"/>
+    <rect x="4.5" y="6.4" width="15" height="12" rx="3"/>
+    <line x1="1.9" y1="10.9" x2="1.9" y2="13.9"/>
+    <line x1="22.1" y1="10.9" x2="22.1" y2="13.9"/>
+    <circle cx="9.3" cy="11.6" r="1.2" fill="currentColor" stroke="none"/>
+    <circle cx="14.7" cy="11.6" r="1.2" fill="currentColor" stroke="none"/>
+    <line x1="9.7" y1="15.3" x2="14.3" y2="15.3"/>
+  </g>
+
+  <!-- QS, same brand font -->
+  <text x="28" y="12.9" dominant-baseline="central"
+        font-family="'Avenir Next', Avenir, Futura, 'Century Gothic', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-weight="500" font-size="17" letter-spacing="1.8" fill="currentColor">QS</text>
+</svg>

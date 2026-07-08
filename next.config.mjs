@@ -10,6 +10,9 @@ const nextConfig = {
   // and the sqlite-vec loadable extension all ship native binaries or resolve model
   // files at runtime.
   experimental: {
+    // Boots the standalone ingest listener (src/instrumentation.ts) once per
+    // server process.
+    instrumentationHook: true,
     serverComponentsExternalPackages: [
       "@huggingface/transformers",
       "onnxruntime-node",
@@ -18,6 +21,18 @@ const nextConfig = {
       "better-sqlite3",
       "sqlite-vec",
     ],
+  },
+  webpack: (config, { dev }) => {
+    if (dev) {
+      // The data store (AGENTQS_DATA_DIR) defaults to ./data INSIDE the project,
+      // so without this every imported event retriggers a dev recompile — which
+      // briefly 404s the very API routes the importers are posting to.
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: ["**/node_modules/**", "**/.git/**", "**/data/**", "**/tmp/**", "**/public/downloads/**"],
+      };
+    }
+    return config;
   },
 };
 

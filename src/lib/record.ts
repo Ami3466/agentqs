@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import Database from "better-sqlite3";
 import { SCHEMA_VERSION, createEmpty } from "./db";
 import { dbPath, recordDir } from "./paths";
 
@@ -49,10 +50,22 @@ export interface SessionItem {
   commitments: string[];
 }
 
+export interface EventItem {
+  id: string;
+  date: string;
+  ts: string;
+  source: string;
+  title: string | null;
+  text: string;
+  url: string | null;
+  meta: unknown;
+}
+
 export interface RecordData {
   daily: DailyRow[];
   inbox: InboxItem[];
   sessions: SessionItem[];
+  events: EventItem[];
 }
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -129,25 +142,83 @@ export function parseCsv(
   return { header, rows: nonEmpty };
 }
 
+/** Iterate a text file line by line without materializing it as one string —
+ *  events.jsonl can exceed V8's ~512MB string cap, where a whole-file
+ *  readFileSync(..., "utf8") throws "Cannot create a string longer than
+ *  0x1fffffe8 characters". Chunks split only at newline BYTES (0x0a never occurs
+ *  inside a multi-byte UTF-8 sequence), so decoding stays byte-exact. */
+function forEachFileLine(file: string, onLine: (line: string, idx: number) => void): void {
+  const fd = fs.openSync(file, "r");
+  try {
+    const chunk = Buffer.alloc(16 * 1024 * 1024);
+    let carry = Buffer.alloc(0);
+    let idx = 0;
+    for (;;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (read <= 0) break;
+      const data = carry.length ? Buffer.concat([carry, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+      const lastNl = data.lastIndexOf(0x0a);
+      if (lastNl === -1) {
+        carry = Buffer.from(data);
+        continue;
+      }
+      // `data` may alias the reused chunk buffer, so the partial tail is copied.
+      carry = Buffer.from(data.subarray(lastNl + 1));
+      for (const line of data.subarray(0, lastNl).toString("utf8").split("\n")) {
+        onLine(line.endsWith("\r") ? line.slice(0, -1) : line, idx);
+        idx += 1;
+      }
+    }
+    if (carry.length) {
+      const line = carry.toString("utf8");
+      onLine(line.endsWith("\r") ? line.slice(0, -1) : line, idx);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function readJsonl(file: string): Array<Record<string, unknown>> {
   if (!fs.existsSync(file)) return [];
-  const text = fs.readFileSync(file, "utf8");
   const out: Array<Record<string, unknown>> = [];
-  text.split(/\r?\n/).forEach((line, idx) => {
+  let skipped = 0;
+  let firstBad = 0;
+  forEachFileLine(file, (line, idx) => {
     const t = line.trim();
     if (t === "") return;
     try {
       out.push(JSON.parse(t) as Record<string, unknown>);
-    } catch (e) {
-      throw new Error(
-        `${path.basename(file)}: invalid JSON on line ${idx + 1}: ${(e as Error).message}`,
-      );
+    } catch {
+      // A truncated line (interrupted append, crash mid-write) must not brick
+      // every reader of the record — skip it, keep everything else. Skipping is
+      // deterministic, so the rebuild guarantee holds.
+      skipped += 1;
+      if (!firstBad) firstBad = idx + 1;
     }
   });
+  if (skipped) {
+    console.warn(
+      `${path.basename(file)}: skipped ${skipped} unparseable line${skipped === 1 ? "" : "s"} (first at line ${firstBad}).`,
+    );
+  }
   return out;
 }
 
 // ---- Readers (per stream) -------------------------------------------------
+
+/** The one daily CSV the readers skip: a Takeout-derived browser_history.csv
+ *  superseded by the extension's higher-fidelity browser_history_scrape.csv —
+ *  reading both would double-count the same visits. Everything else in daily/
+ *  is a real source: `_texts` / `_semantic` sidecars carry journal text and
+ *  timeline metrics that the journal, FTS index and embeddings all consume.
+ *  Shared by readDaily, recordHash and the sources registry so the record, its
+ *  hash and the UI never disagree about what counts as a source. */
+export function shouldSkipDailyCsvRead(dir: string, file: string): boolean {
+  return (
+    file === "browser_history.csv" &&
+    fs.existsSync(path.join(dir, "browser_history_scrape.csv"))
+  );
+}
 
 function readDaily(dir: string): DailyRow[] {
   const out: DailyRow[] = [];
@@ -155,6 +226,7 @@ function readDaily(dir: string): DailyRow[] {
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith(".csv"))
+    .filter((f) => !shouldSkipDailyCsvRead(dir, f))
     .sort();
   for (const file of files) {
     const source = file.replace(/\.csv$/i, "");
@@ -199,8 +271,40 @@ function readInbox(dir: string): InboxItem[] {
     .sort((a, b) => cmp(a.ts, b.ts) || cmp(a.id, b.id));
 }
 
+function readEvents(dir: string): EventItem[] {
+  const raw = readJsonl(path.join(dir, "events.jsonl"));
+  return raw
+    .map((o) => {
+      const ts = String(o.ts ?? o.time ?? "");
+      const date = String(o.date ?? ts.slice(0, 10));
+      return {
+        id: String(o.id),
+        date,
+        ts: ts || `${date}T00:00:00.000Z`,
+        source: String(o.source ?? "event"),
+        title: str(o.title),
+        text: String(o.text ?? o.action ?? o.title ?? ""),
+        url: str(o.url),
+        meta: o.meta ?? null,
+      };
+    })
+    .filter((e) => e.id && e.date && e.text)
+    .sort((a, b) => cmp(a.date, b.date) || cmp(a.ts, b.ts) || cmp(a.id, b.id));
+}
+
+export function readEventsFromRecord(dir: string): EventItem[] {
+  return readEvents(dir);
+}
+
 /** Read the raw inbox (record/inbox.jsonl) — the pending capture bucket. Exposed for
  *  the semantic index, which embeds each memo's text. */
+/** Read the daily stream alone (record/daily/*.csv). Exposed for consumers that
+ *  don't need inbox/sessions/events — reading everything via readRecord would
+ *  parse the (potentially huge) events.jsonl for nothing. */
+export function readDailyFromRecord(dir: string): DailyRow[] {
+  return readDaily(path.join(dir, "daily"));
+}
+
 export function readInboxFromRecord(dir: string): InboxItem[] {
   return readInbox(dir);
 }
@@ -236,6 +340,7 @@ export function readRecord(dir: string): RecordData {
     daily: readDaily(path.join(dir, "daily")),
     inbox: readInbox(dir),
     sessions: readSessionsFromRecord(dir),
+    events: readEvents(dir),
   };
 }
 
@@ -248,6 +353,12 @@ export function recordHash(dir: string): string {
     for (const name of fs.readdirSync(d).sort()) {
       const full = path.join(d, name);
       if (fs.statSync(full).isDirectory()) walk(full);
+      else if (
+        path.basename(path.dirname(full)) === "daily" &&
+        shouldSkipDailyCsvRead(path.dirname(full), path.basename(full))
+      ) {
+        continue;
+      }
       else files.push(full);
     }
   };
@@ -266,37 +377,43 @@ export function recordHash(dir: string): string {
 // ---- Writers --------------------------------------------------------------
 
 export interface AppendInboxInput {
+  /**
+   * Stable id, for a capture an importer can produce again. Re-appending it is a
+   * no-op, which is what makes re-running an import idempotent — the same guarantee
+   * `appendEvents` gives. Omit it for a live capture: two identical memos typed a
+   * minute apart are two captures, not one, so those keep a random uuid.
+   */
+  id?: string;
   text: string;
   source?: string; // memo | drop | chat | telegram | ...  (default: memo)
   kind?: string; // text | csv | file | ...                (default: text)
   meta?: unknown;
   ts?: string; // capture time override (demo/backfill); defaults to now
+  /**
+   * Lifecycle status (default "pending"). Both the inbox panel and the Structure
+   * step act only on "pending", but every reader — FTS and the embedding index —
+   * indexes an inbox item whatever its status. So an importer landing a finished
+   * reference document (a Spotify taste profile, a saved-tracks list) passes
+   * "reference": searchable and recall-able, but never queued as pending work and
+   * never fed to the structuring LLM.
+   */
+  status?: string;
 }
 
-/**
- * Append one raw capture to record/inbox.jsonl — the pending bucket. The record
- * is the source of truth; the caller rebuilds the SQLite cache afterwards. No
- * LLM, no parsing: whatever the user typed lands verbatim, status `pending`.
- * A trailing newline is guaranteed so lines never run together on re-append.
- */
-export function appendInboxItem(
-  input: AppendInboxInput,
-  opts: { recordDir?: string; dataDir?: string } = {},
-): InboxItem {
-  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
-  fs.mkdirSync(rDir, { recursive: true });
-
-  const item: InboxItem = {
-    id: crypto.randomUUID(),
+function buildInboxItem(input: AppendInboxInput, id: string): InboxItem {
+  return {
+    id,
     ts: input.ts || new Date().toISOString(),
     source: input.source?.trim() || "memo",
     kind: input.kind?.trim() || "text",
     text: input.text,
     meta: input.meta ?? null,
-    status: "pending",
+    status: input.status?.trim() || "pending",
   };
+}
 
-  const line = JSON.stringify({
+function serializeInboxItem(item: InboxItem): string {
+  return JSON.stringify({
     id: item.id,
     ts: item.ts,
     source: item.source,
@@ -305,14 +422,45 @@ export function appendInboxItem(
     ...(item.meta == null ? {} : { meta: item.meta }),
     status: item.status,
   });
+}
 
+/**
+ * Append raw captures to record/inbox.jsonl — the pending bucket. The record is
+ * the source of truth; the caller rebuilds the SQLite cache afterwards. No LLM,
+ * no parsing: whatever the user typed lands verbatim, status `pending`.
+ * Inputs carrying an `id` already on file are skipped, so an importer that hands
+ * out stable ids can re-run over the same export without duplicating captures.
+ */
+export function appendInboxItems(
+  inputs: AppendInboxInput[],
+  opts: { recordDir?: string; dataDir?: string } = {},
+): { added: number; total: number; items: InboxItem[] } {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  fs.mkdirSync(rDir, { recursive: true });
   const file = path.join(rDir, "inbox.jsonl");
-  if (fs.existsSync(file)) {
-    const buf = fs.readFileSync(file);
-    if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) fs.appendFileSync(file, "\n");
+  const existing = jsonlIdsFor(file);
+  const lines: string[] = [];
+  const items: InboxItem[] = [];
+  for (const input of inputs) {
+    const id = input.id?.trim() || crypto.randomUUID();
+    if (existing.has(id)) continue;
+    existing.add(id);
+    const item = buildInboxItem(input, id);
+    items.push(item);
+    lines.push(serializeInboxItem(item));
   }
-  fs.appendFileSync(file, `${line}\n`);
-  return item;
+  appendJsonlLines(file, lines, existing);
+  return { added: lines.length, total: existing.size, items };
+}
+
+/** One capture. Returns the item as it now stands on disk — a duplicate `id` is a
+ *  no-op, not an error, so callers can append blind. */
+export function appendInboxItem(
+  input: AppendInboxInput,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): InboxItem {
+  const { items } = appendInboxItems([input], opts);
+  return items[0] ?? buildInboxItem(input, input.id!.trim());
 }
 
 export interface AppendSessionInput {
@@ -372,12 +520,234 @@ export function appendSession(
   });
 
   const file = path.join(rDir, "sessions.jsonl");
-  if (fs.existsSync(file)) {
-    const buf = fs.readFileSync(file);
-    if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) fs.appendFileSync(file, "\n");
-  }
+  ensureTrailingNewline(file);
   fs.appendFileSync(file, `${line}\n`);
   return item;
+}
+
+export interface AppendEventInput {
+  id?: string;
+  date?: string;
+  ts?: string;
+  source: string;
+  title?: string | null;
+  text: string;
+  url?: string | null;
+  meta?: unknown;
+}
+
+/** Dedup ids for an append-only jsonl stream (events.jsonl, inbox.jsonl), cached
+ *  per file identity (path + size). events.jsonl can reach hundreds of MB and the
+ *  extension POSTs one batch per scraped page — re-reading it per batch made long
+ *  imports quadratic and indistinguishable from a hung server. One scan per process
+ *  (or per external rewrite), then O(batch). */
+const jsonlIdCache = new Map<string, { size: number; ids: Set<string> }>();
+
+function jsonlIdsFor(file: string): Set<string> {
+  let size = -1;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    jsonlIdCache.delete(file);
+    return new Set();
+  }
+  const cached = jsonlIdCache.get(file);
+  if (cached && cached.size === size) return cached.ids;
+  const ids = new Set<string>();
+  forEachFileLine(file, (line) => {
+    // Both jsonl writers serialize id first, so the fast regex covers our own lines;
+    // JSON.parse only runs for foreign/hand-edited ones.
+    const quick = line.match(/^\{"id":"([^"]+)"/);
+    if (quick) {
+      ids.add(quick[1]);
+      return;
+    }
+    const t = line.trim();
+    if (!t) return;
+    try {
+      const id = (JSON.parse(t) as { id?: unknown }).id;
+      if (typeof id === "string") ids.add(id);
+    } catch {
+      /* unparseable line carries no id */
+    }
+  });
+  jsonlIdCache.set(file, { size, ids });
+  return ids;
+}
+
+/** Append lines to a jsonl stream and keep its id cache valid for the next batch
+ *  (`ids` already holds the new ids — it IS the cached set). */
+function appendJsonlLines(file: string, lines: string[], ids: Set<string>): void {
+  if (!lines.length) return;
+  ensureTrailingNewline(file);
+  fs.appendFileSync(file, `${lines.join("\n")}\n`);
+  try {
+    jsonlIdCache.set(file, { size: fs.statSync(file).size, ids });
+  } catch {
+    jsonlIdCache.delete(file);
+  }
+}
+
+/** Append a newline iff the file's LAST BYTE isn't one — without reading the whole
+ *  file (the old whole-file read cost 500MB+ of I/O per appended batch). */
+function ensureTrailingNewline(file: string): void {
+  if (!fs.existsSync(file)) return;
+  const fd = fs.openSync(file, "r");
+  let last = -1;
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (size === 0) return;
+    const b = Buffer.alloc(1);
+    fs.readSync(fd, b, 0, 1, size - 1);
+    last = b[0];
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (last !== 0x0a) fs.appendFileSync(file, "\n");
+}
+
+export function appendEvents(
+  inputs: AppendEventInput[],
+  opts: { recordDir?: string; dataDir?: string } = {},
+): { added: number; total: number; items: EventItem[] } {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  fs.mkdirSync(rDir, { recursive: true });
+  const file = path.join(rDir, "events.jsonl");
+  const existing = jsonlIdsFor(file);
+  const lines: string[] = [];
+  const items: EventItem[] = [];
+  for (const input of inputs) {
+    const ts = input.ts || (input.date ? `${input.date}T00:00:00.000Z` : new Date().toISOString());
+    const date = input.date || ts.slice(0, 10);
+    const id =
+      input.id ||
+      crypto
+        .createHash("sha256")
+        .update([input.source, date, ts, input.title ?? "", input.text, input.url ?? ""].join("\0"))
+        .digest("hex")
+        .slice(0, 24);
+    if (existing.has(id)) continue;
+    existing.add(id);
+    items.push({
+      id,
+      date,
+      ts,
+      source: input.source,
+      title: input.title ?? null,
+      text: input.text,
+      url: input.url ?? null,
+      meta: input.meta ?? null,
+    });
+    lines.push(JSON.stringify({
+      id,
+      date,
+      ts,
+      source: input.source,
+      ...(input.title == null ? {} : { title: input.title }),
+      text: input.text,
+      ...(input.url == null ? {} : { url: input.url }),
+      ...(input.meta == null ? {} : { meta: input.meta }),
+    }));
+  }
+  appendJsonlLines(file, lines, existing);
+  return { added: lines.length, total: existing.size, items };
+}
+
+/** Best-effort incremental insert of freshly appended events into the derived
+ *  SQLite cache, so a long-running import shows up in the journal/graphs without
+ *  a full rebuild per batch (a full rebuild re-parses the whole events.jsonl —
+ *  far too heavy to run 100+ times per import). No-op when the cache doesn't
+ *  exist yet; the next full rebuild converges the cache exactly. */
+export function insertEventsIntoCache(
+  items: EventItem[],
+  opts: { dataDir?: string } = {},
+): number {
+  const file = dbPath(opts.dataDir);
+  if (!items.length || !fs.existsSync(file)) return 0;
+  try {
+    const db = new Database(file);
+    try {
+      const ins = db.prepare(
+        "INSERT OR IGNORE INTO events (id,date,ts,source,title,text,url,meta) VALUES (?,?,?,?,?,?,?,?)",
+      );
+      let n = 0;
+      const tx = db.transaction(() => {
+        for (const e of items) {
+          const r = ins.run(
+            e.id,
+            e.date,
+            e.ts,
+            e.source,
+            e.title,
+            e.text,
+            e.url,
+            e.meta == null ? null : JSON.stringify(e.meta),
+          );
+          n += r.changes;
+        }
+      });
+      tx();
+      return n;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return 0; // stale schema / locked cache — the final rebuild catches up
+  }
+}
+
+/** Drop events a source landed in record/events.jsonl. Used two ways: with no
+ *  window, when the source is removed (its events leave with its daily CSV); with
+ *  a `{from,to}` window, when a source's records are re-derived each sync (Granola
+ *  re-summarizes a meeting) so the fresh pull can replace the window in place —
+ *  events outside the window are untouched. Rewrites the file once, preserving
+ *  lines it can't parse. Returns how many events were dropped. */
+export function removeEventsBySource(
+  source: string,
+  opts: { recordDir?: string; dataDir?: string; from?: string; to?: string } = {},
+): number {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const file = path.join(rDir, "events.jsonl");
+  if (!fs.existsSync(file)) return 0;
+  const { from, to } = opts;
+  // Streamed line-by-line into a temp file (events.jsonl can exceed the ~512MB
+  // string cap), swapped in atomically only when something was removed.
+  const tmp = `${file}.rewrite.tmp`;
+  const out = fs.openSync(tmp, "w");
+  let removed = 0;
+  let kept = 0;
+  try {
+    forEachFileLine(file, (line) => {
+      const t = line.trim();
+      if (!t) return;
+      try {
+        const o = JSON.parse(t) as Record<string, unknown>;
+        const date = String(o.date ?? (o.ts ? String(o.ts).slice(0, 10) : ""));
+        const inWindow = (!from || date >= from) && (!to || date <= to);
+        if (String(o.source ?? "") === source && inWindow) {
+          removed++;
+          return;
+        }
+      } catch {
+        /* keep unparseable lines untouched */
+      }
+      kept++;
+      fs.writeSync(out, `${t}\n`);
+    });
+  } finally {
+    fs.closeSync(out);
+  }
+  if (!removed) {
+    fs.rmSync(tmp, { force: true });
+    return 0;
+  }
+  if (kept) fs.renameSync(tmp, file);
+  else {
+    fs.rmSync(tmp, { force: true });
+    fs.rmSync(file, { force: true });
+  }
+  jsonlIdCache.delete(file); // rewritten — the append dedup cache must rescan
+  return removed;
 }
 
 /** Patch inbox items in place by id (e.g. mark `structured` / `discarded`).
@@ -772,6 +1142,7 @@ export interface RebuildResult {
   daily: number;
   inbox: number;
   sessions: number;
+  events: number;
 }
 
 /**
@@ -782,10 +1153,53 @@ export interface RebuildResult {
 export function rebuild(opts: RebuildOptions = {}): RebuildResult {
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
   const outPath = opts.dbPath ?? dbPath(opts.dataDir);
-  const record = readRecord(rDir);
+
+  // events.jsonl can reach hundreds of MB; parsing it dominates every rebuild.
+  // When it is byte-identical to what the previous cache was built from (stamped
+  // in meta), its rows are copied table-to-table from that cache instead — the
+  // daily/inbox/sessions streams that actually changed still rebuild from text.
+  const eventsFile = path.join(rDir, "events.jsonl");
+  let eventsStamp = "absent";
+  try {
+    const st = fs.statSync(eventsFile);
+    eventsStamp = `${st.size}:${Math.floor(st.mtimeMs)}`;
+  } catch {
+    /* no events yet */
+  }
+  let copyEventsFrom: string | null = null;
+  let copiedEventRows = 0;
+  if (fs.existsSync(outPath)) {
+    try {
+      const prev = new Database(outPath, { readonly: true, fileMustExist: true });
+      try {
+        const meta = new Map(
+          (prev.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>).map(
+            (r) => [r.key, r.value],
+          ),
+        );
+        if (meta.get("schema_version") === String(SCHEMA_VERSION) && meta.get("events_stamp") === eventsStamp) {
+          copiedEventRows = (prev.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n;
+          copyEventsFrom = outPath;
+        }
+      } finally {
+        prev.close();
+      }
+    } catch {
+      /* unreadable previous cache — full parse below */
+    }
+  }
+
+  const record: RecordData = {
+    daily: readDailyFromRecord(rDir),
+    inbox: readInboxFromRecord(rDir),
+    sessions: readSessionsFromRecord(rDir),
+    events: copyEventsFrom ? [] : readEvents(rDir),
+  };
   const hash = recordHash(rDir);
+  const eventRows = copyEventsFrom ? copiedEventRows : record.events.length;
 
   const db = createEmpty();
+  if (copyEventsFrom) db.exec(`ATTACH DATABASE '${copyEventsFrom.replace(/'/g, "''")}' AS prev`);
   const insertAll = db.transaction((rec: RecordData) => {
     const insDaily = db.prepare(
       "INSERT OR REPLACE INTO daily (date,source,metric,value_num,value_text) VALUES (?,?,?,?,?)",
@@ -824,9 +1238,34 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
         JSON.stringify(s.commitments),
       );
 
+    if (copyEventsFrom) {
+      // Same canonical order the parse path inserts in, so both paths produce
+      // byte-identical caches (rebuild:verify asserts this).
+      db.exec("INSERT INTO events SELECT id,date,ts,source,title,text,url,meta FROM prev.events ORDER BY date, ts, id");
+    } else {
+      const insEvent = db.prepare(
+        "INSERT INTO events (id,date,ts,source,title,text,url,meta) VALUES (?,?,?,?,?,?,?,?)",
+      );
+      for (const e of rec.events)
+        insEvent.run(
+          e.id,
+          e.date,
+          e.ts,
+          e.source,
+          e.title,
+          e.text,
+          e.url,
+          e.meta == null ? null : JSON.stringify(e.meta),
+        );
+    }
+
     const insSearch = db.prepare(
       "INSERT INTO search (ref,kind,body) VALUES (?,?,?)",
     );
+    for (const d of rec.daily) {
+      if (d.valueNum != null || d.valueText.trim().length < 8) continue;
+      insSearch.run(`daily:${d.date}:${d.source}:${d.metric}`, "daily", `${d.source}.${d.metric}\n${d.valueText}`);
+    }
     for (const s of rec.sessions) {
       const body = [s.title, s.summary, ...s.insights, ...s.commitments, s.transcript]
         .filter(Boolean)
@@ -845,14 +1284,25 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
     insMeta.run("daily_rows", String(rec.daily.length));
     insMeta.run("inbox_rows", String(rec.inbox.length));
     insMeta.run("session_rows", String(rec.sessions.length));
+    insMeta.run("event_rows", String(eventRows));
+    insMeta.run("events_stamp", eventsStamp);
   });
   insertAll(record);
+  if (copyEventsFrom) db.exec("DETACH DATABASE prev");
 
+  // VACUUM into a sibling temp file, then rename over the old cache: readers
+  // (the running app) never observe a missing or half-written DB, even when the
+  // write takes seconds on a large record.
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  for (const p of [outPath, `${outPath}-wal`, `${outPath}-shm`, `${outPath}-journal`])
+  const tmpPath = `${outPath}.rebuild-${process.pid}`;
+  for (const p of [tmpPath, `${outPath}-wal`, `${outPath}-shm`, `${outPath}-journal`])
     if (fs.existsSync(p)) fs.rmSync(p);
-  db.exec(`VACUUM INTO '${outPath.replace(/'/g, "''")}'`);
-  db.close();
+  try {
+    db.exec(`VACUUM INTO '${tmpPath.replace(/'/g, "''")}'`);
+  } finally {
+    db.close();
+  }
+  fs.renameSync(tmpPath, outPath);
 
   return {
     dbPath: outPath,
@@ -860,5 +1310,6 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
     daily: record.daily.length,
     inbox: record.inbox.length,
     sessions: record.sessions.length,
+    events: eventRows,
   };
 }

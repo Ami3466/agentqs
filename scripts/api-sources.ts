@@ -41,6 +41,7 @@ const FIXTURES: Record<string, string> = {
   swarm: "samples/swarm-checkins.json",
   mastodon: "samples/mastodon-statuses.json",
   withings: "samples/withings-measures.json",
+  granola: "samples/granola-documents.json",
 };
 
 // Split-credential sources take "<a>:<b>" in the single credential slot.
@@ -48,15 +49,33 @@ const CRED: Record<string, string> = {
   lastfm: "APIKEY:testuser",
   trakt: "CLIENTID:ACCESSTOKEN",
   mastodon: "mastodon.example:ACCESSTOKEN",
+  granola: "test-refresh-token",
+};
+
+/** Multi-request sources need a fixture keyed by endpoint — and, for the
+ *  per-document ones, by the `document_id` the plugin posts. */
+type Fixture = Record<string, unknown>;
+type Router = (href: string, body: Fixture, req: Fixture) => unknown;
+
+const MULTI: Record<string, Router> = {
+  mastodon: (href, body) => (href.includes("/verify_credentials") ? { id: "42" } : body),
+  granola: (href, body, req) => {
+    const byDoc = (key: string) =>
+      (body[key] as Record<string, unknown>)[String(req.document_id)] ?? [];
+    if (href.includes("refresh-access-token")) return body.refresh;
+    if (href.includes("get-documents")) return body.documents;
+    if (href.includes("get-document-panels")) return byDoc("panels");
+    if (href.includes("get-document-transcript")) return byDoc("transcript");
+    return {};
+  },
 };
 
 function fetchForFixture(pluginId: string, body: unknown) {
-  if (pluginId !== "mastodon") return fixtureFetch(body);
-  return (async (url: string | URL | Request) => {
-    const href = String(url);
-    const payload = href.includes("/verify_credentials")
-      ? { id: "42" }
-      : body;
+  const route = MULTI[pluginId];
+  if (!route) return fixtureFetch(body);
+  return (async (url: string | URL | Request, init?: RequestInit) => {
+    const req = init?.body ? (JSON.parse(String(init.body)) as Fixture) : {};
+    const payload = route(String(url), body as Fixture, req);
     return new Response(JSON.stringify(payload), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -98,6 +117,28 @@ async function main() {
     check(`${plugin.name}: ${plugin.primaryMetric} has real numbers`,
       summary.rows > 0 && withMetric.length > 0,
       `${withMetric.length} days, latest ${plugin.primaryMetric}=${withMetric.at(-1)?.[mi]}`);
+
+    // A rich source (Granola) also lands prose the search index can reach and one
+    // event per item on the journal timeline. Both go through importPlugin, so the
+    // same fixture run proves them.
+    for (const extra of summary.extraSources) {
+      const extraFile = path.join(recordDir, "daily", `${extra}.csv`);
+      const ok = fs.existsSync(extraFile);
+      check(`${plugin.name}: wrote record/daily/${extra}.csv`, ok);
+      if (!ok) continue;
+      const t = parseCsv(fs.readFileSync(extraFile, "utf8"));
+      const ti = t.header.indexOf("text");
+      const prose = t.rows.filter((r) => (r[ti] ?? "").trim().length >= 20);
+      check(`${plugin.name}: ${extra} carries searchable prose`, ti >= 0 && prose.length > 0,
+        `${prose.length} day(s), ${prose[0]?.[ti]?.length ?? 0} chars`);
+    }
+
+    if (summary.eventsAdded > 0) {
+      const lines = fs.readFileSync(path.join(recordDir, "events.jsonl"), "utf8").trim().split("\n");
+      const mine = lines.map((l) => JSON.parse(l) as { source: string }).filter((e) => e.source === plugin.id);
+      check(`${plugin.name}: ${summary.eventsAdded} event(s) on the journal timeline`,
+        mine.length === summary.eventsAdded, `${mine.length} in events.jsonl`);
+    }
   }
 
   fs.rmSync(root, { recursive: true, force: true });

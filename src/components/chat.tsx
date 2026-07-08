@@ -118,7 +118,11 @@ function parseScope(raw: string, metricKeys: Set<string>): { text: string; dateR
     const column = token.match(/^@([A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*)$/);
     if (column) {
       const requested = column[1].split(",").filter(Boolean);
-      if (requested.length && requested.every((c) => metricKeys.has(c))) {
+      // A known metric key always scopes. A dotted token (source.metric shape) also
+      // scopes even when the journal fetch hasn't landed yet or the key is a typo —
+      // otherwise the literal "@oura.sleep_deep" leaks into the model prompt.
+      // Undotted tokens ("@john") stay in the text: they're handles, not columns.
+      if (requested.length && requested.every((c) => metricKeys.has(c) || c.includes("."))) {
         columns.push(...requested);
         continue;
       }
@@ -157,6 +161,15 @@ function scopeSuggestions(token: ScopeToken | null, metrics: JournalData["metric
         insert: token.raw,
       });
     }
+  } else if (!query || /^[\d-]*$/.test(token.query)) {
+    // Teach the syntax while it's being typed — a hint that only appears once the
+    // full valid range is already entered teaches nothing.
+    suggestions.push({
+      kind: "date",
+      label: "Date range",
+      detail: "Type @mmddyyyy-mmddyyyy",
+      insert: "@mmddyyyy-mmddyyyy",
+    });
   }
 
   const columns = metrics
@@ -268,7 +281,8 @@ export function Chat() {
   // Load the journal so @ can suggest real columns from the user's record.
   useEffect(() => {
     let alive = true;
-    fetch("/api/journal")
+    // Chat only needs the column metadata (for @scope suggestions) — never the days.
+    fetch("/api/journal?days=0")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (alive && d && Array.isArray(d.metrics)) setJournal(d as JournalData);

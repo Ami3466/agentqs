@@ -19,42 +19,16 @@ import { resolveCredential } from "./importers/plugin";
 import { FILE_IMPORTERS } from "./importers/files/registry";
 import { listAutomations } from "./automation";
 import type { AutomationRecipe } from "./automation-types";
+import { GOOGLE_PRESET_DAILY_SOURCES } from "./google-web-scraper";
+import { shouldSkipDailyCsvRead } from "./record";
+import { SOURCE_BUNDLES, type SourceBundle } from "./source-bundles";
 import {
   isDue,
   isStale,
   isValidInterval,
   type Interval,
-  type SourceKind,
   type SourceView,
 } from "./sources";
-
-interface Registered {
-  id: string;
-  name: string;
-  kind: SourceKind;
-  detail: string;
-  csv?: string; // daily/<csv>.csv this source owns (so it isn't double-counted as manual)
-  live: boolean; // has a working importer
-  /** Real wire-up path for a not-yet-live source (never a fake "connected" row):
-   *  "file" → a local export imported via the CLI; "automation" → the record-login
-   *  + scrape wizard. */
-  setup: "automation" | "file";
-  setupUrl?: string; // seeds the wizard's Start URL for automation sources
-}
-
-/**
- * Roster integrations that have no live single-credential in-app importer yet,
- * shown as real connectable sources — never faked as connected. Wiring one up runs
- * the record-login + scrape wizard, which moves it to Automated imports for real.
- * (The rest of the roster — Oura, Fitbit, Strava, Withings, Mastodon, … — are live
- * API plugins in ./importers/registry; GitHub + WHOOP are bespoke rows.)
- */
-const PLACEHOLDERS: Registered[] = [
-  { id: "health-connect", name: "Health Connect", kind: "manual", detail: "Android health + fitness aggregate", live: false, setup: "automation" },
-  { id: "garmin", name: "Garmin", kind: "manual", detail: "activities, sleep, body battery", live: false, setup: "automation", setupUrl: "https://connect.garmin.com/signin" },
-  { id: "instapaper", name: "Instapaper", kind: "manual", detail: "articles saved + read", live: false, setup: "automation", setupUrl: "https://www.instapaper.com/user/login" },
-  { id: "apple-weather", name: "Apple Weather", kind: "manual", detail: "daily conditions + temperature", live: false, setup: "automation", setupUrl: "https://weather.apple.com" },
-];
 
 function intervalFor(cfg: AppConfig | null, id: string): Interval {
   const raw = cfg?.sourceIntervals?.[id];
@@ -69,12 +43,104 @@ function fileMtimeISO(file: string): string | null {
   }
 }
 
-function hasRows(file: string): boolean {
+function regularFileSize(file: string): number {
   try {
-    return fs.readFileSync(file, "utf8").trim().split(/\r?\n/).length > 1;
+    const stat = fs.statSync(file);
+    return stat.isFile() ? stat.size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function hasRows(file: string): boolean {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(8192);
+    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+    if (bytes <= 0) return false;
+    const text = buf.subarray(0, bytes).toString("utf8").trim();
+    if (!text) return false;
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    if (lines.length > 1) return true;
+    return fs.fstatSync(fd).size > bytes;
   } catch {
     return false;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
+}
+
+function firstDataDate(file: string): string | null {
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(8192);
+      const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+      const lines = buf.subarray(0, bytes).toString("utf8").split(/\r?\n/).filter((line) => line.trim());
+      return lines[1]?.split(",")[0]?.trim() || null;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function csvMetricCount(file: string): number {
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(2048);
+      const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+      const header = buf.subarray(0, bytes).toString("utf8").split(/\r?\n/)[0] ?? "";
+      return Math.max(0, header.split(",").length - 1);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return 0;
+  }
+}
+
+function displayName(id: string): string {
+  const words: Record<string, string> = {
+    api: "API",
+    browser: "Browser",
+    calendar: "Calendar",
+    chrome: "Chrome",
+    fit: "Fit",
+    google: "Google",
+    history: "History",
+    journal: "Journal",
+    maps: "Maps",
+    myactivity: "My Activity",
+    notion: "Notion",
+    places: "Places",
+    semantic: "Semantic",
+    settings: "Settings",
+    takeout: "Takeout",
+    text: "Text",
+    texts: "Text",
+    timeline: "Timeline",
+  };
+  return id
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => words[part.toLowerCase()] ?? part.replace(/\b\w/g, (m) => m.toUpperCase()))
+    .join(" ");
+}
+
+function coverageForFiles(files: string[]): { files: number; from: string | null; to: string | null; metrics: number } {
+  const dates: string[] = [];
+  let metrics = 0;
+  for (const file of files) {
+    metrics += csvMetricCount(file);
+    const first = firstDataDate(file);
+    if (first) dates.push(first);
+  }
+  const ordered = dates.sort();
+  return { files: files.length, from: ordered[0] ?? null, to: ordered[ordered.length - 1] ?? null, metrics };
 }
 
 /** GitHub is connected once its record file holds commits; last-sync prefers the
@@ -205,6 +271,72 @@ function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FIL
   };
 }
 
+function recordSourceRows(cfg: AppConfig | null, dir: string, owned: Set<string>): SourceView[] {
+  const dailyDir = path.join(dir, "daily");
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(dailyDir).filter((f) => f.toLowerCase().endsWith(".csv")).sort();
+  } catch {
+    return [];
+  }
+  const out: SourceView[] = [];
+  for (const f of files) {
+    const id = f.slice(0, -4);
+    if (!id || owned.has(id)) continue;
+    // Same skip rule as readDaily — a CSV the record readers ignore must not
+    // surface as a phantom "connected" source.
+    if (shouldSkipDailyCsvRead(dailyDir, f)) continue;
+    const file = path.join(dailyDir, f);
+    if (regularFileSize(file) <= 0) continue;
+    const lastSync = cfg?.sourceSyncedAt?.[id] ?? fileMtimeISO(file);
+    const interval = intervalFor(cfg, id);
+    out.push({
+      id,
+      name: displayName(id),
+      kind: "manual",
+      detail: "record import",
+      connected: true,
+      interval,
+      lastSync,
+      stale: isStale(lastSync, interval),
+      due: false,
+      syncEndpoint: null,
+      live: true,
+    });
+  }
+  return out;
+}
+
+function bundleRow(cfg: AppConfig | null, dir: string, bundle: SourceBundle): SourceView | null {
+  const sourceIds = bundle.sourceIds(dir).filter((id) => hasRows(path.join(dir, "daily", `${id}.csv`)));
+  if (!sourceIds.length) return null;
+  const files = sourceIds.map((id) => path.join(dir, "daily", `${id}.csv`));
+  const c = coverageForFiles(files);
+  const lastSync =
+    cfg?.sourceSyncedAt?.[bundle.id] ??
+    files
+      .map(fileMtimeISO)
+      .filter((v): v is string => Boolean(v))
+      .sort()
+      .at(-1) ??
+    null;
+  const interval = intervalFor(cfg, bundle.id);
+  const span = c.from ? `from ${c.from}` : "imported";
+  return {
+    id: bundle.id,
+    name: bundle.name,
+    kind: "manual",
+    detail: `${bundle.detail} · ${sourceIds.length} files · ${c.metrics} metrics · ${span}`,
+    connected: true,
+    interval,
+    lastSync,
+    stale: isStale(lastSync, interval),
+    due: false,
+    syncEndpoint: null,
+    live: true,
+  };
+}
+
 /** Row for a browser-automation recipe (a source with no API). Always shown as a
  *  set-up import (connected) so it stays editable under Automated imports even if a
  *  replay fails; the server CAN auto-sync it (headless Playwright), so overdue → due
@@ -222,7 +354,7 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
   const detail =
     recipe.lastStatus === "error"
       ? `${host} · last run failed`
-      : `${host} · ${hasRows(file) ? "importing" : "no data yet"}`;
+      : `${host} · ${hasRows(file) ? "last run ok" : "no data yet"}`;
   return {
     id: recipe.id,
     name: recipe.name,
@@ -241,16 +373,19 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
   };
 }
 
-/** Compose the sources list = real, repeatable integrations only: GitHub +
- *  Tier-1 API plugins + Tier-2 file importers + not-yet-live placeholders. A
- *  one-off dropped CSV is NOT a source — it lands in the inbox and, once
- *  structured, shows up in the daily table, never as a fake "connected" feed. */
+/** Compose the sources list from registered integrations plus real record-backed
+ *  imports already present in record/daily. A source is connected only when the
+ *  record has rows for it; unknown CSVs are surfaced as removable record imports,
+ *  not as fake automations. */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
+  const owned = new Set<string>(["github", "whoop"]);
   for (const plugin of PLUGINS) {
     out.push(pluginRow(cfg, dir, plugin));
+    owned.add(plugin.id);
     for (const instanceId of pluginInstanceIds(cfg, dir, plugin)) {
       out.push(pluginRow(cfg, dir, plugin, instanceId));
+      owned.add(instanceId);
     }
   }
   // Tier-2 file importers (Chrome, iPhone) are local-only and off the API roster —
@@ -258,28 +393,27 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   // the API roster while imported file data is still manageable under Automated.
   for (const importer of FILE_IMPORTERS) {
     const row = fileSourceRow(cfg, dir, importer);
+    owned.add(importer.id);
     if (row.connected) out.push(row);
   }
 
-  for (const recipe of listAutomations(cfg)) out.push(automationRow(cfg, dir, recipe));
-
-  for (const reg of PLACEHOLDERS) {
-    out.push({
-      id: reg.id,
-      name: reg.name,
-      kind: reg.kind,
-      detail: reg.detail,
-      connected: false,
-      interval: intervalFor(cfg, reg.id),
-      lastSync: null,
-      stale: false,
-      due: false,
-      syncEndpoint: null,
-      live: reg.live,
-      setup: reg.setup,
-      setupUrl: reg.setupUrl,
-    });
+  for (const recipe of listAutomations(cfg)) {
+    owned.add(recipe.id);
+    out.push(automationRow(cfg, dir, recipe));
   }
 
+  // Chrome-extension Google scrapes are owned by the Data tab's Google card
+  // (per-preset status + remove) — keep them out of the generic record rows.
+  for (const id of GOOGLE_PRESET_DAILY_SOURCES) owned.add(id);
+
+  for (const bundle of SOURCE_BUNDLES) {
+    const sourceIds = bundle.sourceIds(dir);
+    if (!sourceIds.length) continue;
+    for (const id of sourceIds) owned.add(id);
+    const row = bundleRow(cfg, dir, bundle);
+    if (row) out.push(row);
+  }
+
+  out.push(...recordSourceRows(cfg, dir, owned));
   return out;
 }

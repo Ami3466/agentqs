@@ -109,10 +109,37 @@ export async function startMcpServer(): Promise<void> {
     "structure",
     {
       title: "Structure pending captures",
-      description: "Turn pending inbox items into daily rows (CSV is free; prose uses your AI key). Omit id to drain all.",
-      inputSchema: { id: z.string().optional() },
+      description:
+        "Turn pending inbox items into daily rows. Omit id to drain all (clean CSV items are free; prose needs the in-app AI key). " +
+        "KEY-FREE AGENT ROUTE: read one pending item via inbox_pending, extract its dated metrics YOURSELF into CSV " +
+        "(first column `date` as YYYY-MM-DD, other columns snake_case metrics, one row per date — keep each fact on ITS OWN date, " +
+        "never collapse a multi-date document onto the capture day), then call this with {id, csv}.",
+      inputSchema: { id: z.string().optional(), csv: z.string().optional() },
     },
-    async ({ id }) => guard(() => core.structure({ id })),
+    async ({ id, csv }) => guard(() => core.structure({ id, csv })),
+  );
+
+  server.registerTool(
+    "inbox_pending",
+    {
+      title: "Read pending inbox items",
+      description:
+        "Every capture waiting to be structured, FULL TEXT included — the input for the key-free `structure {id, csv}` agent route.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.inboxPending()),
+  );
+
+  server.registerTool(
+    "recall",
+    {
+      title: "Semantic recall (local, no key)",
+      description:
+        "Search memos, sessions and journal text by MEANING using the local embedding index — 'days that felt like X'. " +
+        "Runs fully on-device; combine with `query` (exact numbers) to answer questions without any AI key.",
+      inputSchema: { query: z.string(), limit: z.number().int().positive().optional() },
+    },
+    async ({ query, limit }) => guard(() => core.recall(query, limit)),
   );
 
   server.registerTool(

@@ -6,11 +6,11 @@ import { cn } from "./ui";
 
 /** Connect / API: mint the instance key, copy the sync command / skill / MCP snippets with it filled in. Kept deliberately tiny. */
 
-const PH = "AQS_KEY_HERE";
-const SYNC_CMD = "agentqs sync --source github";
-const skillSnip = (b: string, k: string) =>
+export const PH = "AQS_KEY_HERE";
+export const SYNC_CMD = "agentqs sync --source github";
+export const skillSnip = (b: string, k: string) =>
   `---\nname: agentqs\ndescription: Query the agentqs life-record.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}`;
-const mcpSnip = (b: string, k: string) =>
+export const mcpSnip = (b: string, k: string) =>
   `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}'`;
 
 /** Small copy state hook: flips a checkmark for 1.2s after writing to the clipboard. */
@@ -27,7 +27,7 @@ function useCopy(): [boolean, (code: string) => void] {
 }
 
 /** Centered label + copy icon, side-by-side use (Copy mcp · Copy skill). */
-function CopyRow({ label, code, className }: { label: string; code: string; className?: string }) {
+export function CopyRow({ label, code, className }: { label: string; code: string; className?: string }) {
   const [done, copy] = useCopy();
   return (
     <button
@@ -45,7 +45,7 @@ function CopyRow({ label, code, className }: { label: string; code: string; clas
 }
 
 /** The CLI one-liner shown verbatim in a terminal-style row with its own copy button. */
-function CliRow({ code }: { code: string }) {
+export function CliRow({ code }: { code: string }) {
   const [done, copy] = useCopy();
   return (
     <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 py-1 pl-2.5 pr-1">
@@ -55,6 +55,24 @@ function CliRow({ code }: { code: string }) {
         type="button"
         onClick={() => copy(code)}
         aria-label="Copy command"
+        className="shrink-0 rounded-md p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+      >
+        {done ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
+      </button>
+    </div>
+  );
+}
+
+/** The freshly minted key with its own copy button — shown once right after generating. */
+export function KeyRow({ value }: { value: string }) {
+  const [done, copy] = useCopy();
+  return (
+    <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 py-1 pl-2.5 pr-1">
+      <code className="scrollbar-none flex-1 overflow-x-auto whitespace-nowrap font-mono text-[12px] text-fg">{value}</code>
+      <button
+        type="button"
+        onClick={() => copy(value)}
+        aria-label="Copy API key"
         className="shrink-0 rounded-md p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-fg"
       >
         {done ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
@@ -122,7 +140,7 @@ export function ConnectApi() {
             {busy ? <Spinner width={14} height={14} /> : null}
             {fullKey ? "New key generated" : masked ? `Regenerate API key · ${masked}` : "Generate API key"}
           </button>
-          {fullKey ? <p className="px-1 font-mono text-[12px] text-muted-fg break-all">{fullKey}</p> : null}
+          {fullKey ? <KeyRow value={fullKey} /> : null}
           <CliRow code={SYNC_CMD} />
           <div className="flex gap-2">
             <CopyRow label="Copy mcp" code={mcpSnip(base, key)} className="flex-1" />

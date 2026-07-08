@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItem, readRecord, rebuild, updateInboxItems } from "@/lib/record";
+import { appendInboxItem, readInboxFromRecord, rebuild, updateInboxItems } from "@/lib/record";
 import { autoStructureNewItem } from "@/lib/structure-run";
 
 export const runtime = "nodejs";
@@ -12,11 +12,13 @@ export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const inbox = readRecord(recordDir()).inbox.filter((i) => i.status === "pending");
+  const inbox = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending");
   return NextResponse.json({
     pending: inbox.length,
+    // The panel renders these in a fixed-height searchable box, so a real backlog
+    // is fine to ship - cap only to keep a pathological inbox from megabyte payloads.
     items: inbox
-      .slice(-20)
+      .slice(-200)
       .reverse()
       .map((i) => ({ id: i.id, ts: i.ts, source: i.source, kind: i.kind, text: i.text })),
   });
@@ -49,7 +51,7 @@ export async function POST(req: Request) {
   if (!auto || auto.structured === 0) rebuild({ recordDir: recordDir() });
 
   const pending =
-    auto?.pending ?? readRecord(recordDir()).inbox.filter((i) => i.status === "pending").length;
+    auto?.pending ?? readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length;
   return NextResponse.json({
     ok: true,
     id: item.id,
@@ -74,6 +76,6 @@ export async function DELETE(req: Request) {
   }
   rebuild({ recordDir: recordDir() });
 
-  const pending = readRecord(recordDir()).inbox.filter((i) => i.status === "pending").length;
+  const pending = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length;
   return NextResponse.json({ ok: true, pending });
 }

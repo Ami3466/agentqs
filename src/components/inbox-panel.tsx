@@ -15,7 +15,7 @@ interface Item {
 interface StructResult {
   id: string;
   status: "structured" | "empty" | "error";
-  route: "csv" | "llm";
+  route: "csv" | "llm" | "agent";
   source?: string;
   rowsAdded?: number;
   message?: string;
@@ -39,6 +39,9 @@ export function InboxPanel({
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [pending, setPending] = useState<number | null>(null);
+  // A big backlog lives inside a fixed-height scrollable box with its own search —
+  // it must never turn the page itself into an endless scroll.
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null); // item id | "all"
   const [flash, setFlash] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   // The auto-structure switch (same setting as Settings → Structure): new captures
@@ -135,6 +138,10 @@ export function InboxPanel({
   }
 
   const anyBusy = busy !== null;
+  const q = query.trim().toLowerCase();
+  const filteredItems = q
+    ? items.filter((it) => it.text.toLowerCase().includes(q) || it.source.toLowerCase().includes(q) || it.kind.toLowerCase().includes(q))
+    : items;
 
   return (
     <div className="p-4">
@@ -183,8 +190,19 @@ export function InboxPanel({
       ) : null}
 
       {items.length ? (
-        <ul className="mt-3 space-y-1.5">
-          {items.map((it) => (
+        <div className="mt-3 rounded-lg border border-border">
+          {items.length > 5 ? (
+            <div className="border-b border-border p-2">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Search ${items.length} pending items`}
+                className="h-8 w-full rounded-md border border-input bg-bg px-2.5 text-[13px] text-fg placeholder:text-muted-fg/70 focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+              />
+            </div>
+          ) : null}
+          <ul className="max-h-80 space-y-1.5 overflow-y-auto p-2">
+          {filteredItems.map((it) => (
             <li key={it.id} className="rounded-lg border border-border bg-bg px-3 py-2">
               <div className="mb-0.5 flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-fg">
                 <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{it.source}</span>
@@ -219,7 +237,11 @@ export function InboxPanel({
               <p className="line-clamp-2 whitespace-pre-wrap text-sm text-fg">{it.text}</p>
             </li>
           ))}
-        </ul>
+          {!filteredItems.length ? (
+            <li className="px-3 py-4 text-center text-xs text-muted-fg">No pending item matches "{query}".</li>
+          ) : null}
+          </ul>
+        </div>
       ) : (
         <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-fg">
           Inbox empty. Drop a file above or log a memo with{" "}

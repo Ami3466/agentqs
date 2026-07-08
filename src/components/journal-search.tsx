@@ -12,7 +12,7 @@ import { cn } from "./ui";
  */
 interface Hit {
   date: string;
-  kind: "memo" | "session";
+  kind: "memo" | "session" | "daily_text";
   snippet: string;
   score: number;
 }
