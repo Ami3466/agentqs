@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentQS Importer</title>
+    <style>
+      body {
+        width: 340px;
+        margin: 0;
+        color: #111;
+        background: #fff;
+        font: 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      header {
+        padding: 12px 14px 10px;
+        border-bottom: 1px solid #d0d7de;
+        font-weight: 700;
+      }
+      main {
+        padding: 12px 14px 14px;
+      }
+      .status {
+        color: #57606a;
+        line-height: 1.35;
+        margin-bottom: 12px;
+        white-space: pre-wrap;
+        max-height: 86px;
+        overflow: auto;
+      }
+      .grid {
+        display: grid;
+        gap: 8px;
+      }
+      label.field {
+        display: grid;
+        gap: 5px;
+        margin-bottom: 10px;
+        color: #57606a;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      select,
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #fff;
+        color: #111;
+        font: 13px system-ui, sans-serif;
+        padding: 8px;
+      }
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 10px 0 12px;
+        color: #24292f;
+        font-size: 12px;
+      }
+      .toggle input {
+        width: 16px;
+        height: 16px;
+      }
+      button,
+      a {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #f6f8fa;
+        color: #24292f;
+        cursor: pointer;
+        font: 600 12px system-ui, sans-serif;
+        padding: 8px 9px;
+        text-decoration: none;
+      }
+      button.primary {
+        background: #0969da;
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <header>AgentQS Google Importer</header>
+    <main>
+      <div id="status" class="status">Loading status...</div>
+      <label class="field">
+        Google data
+        <select id="importer">
+          <option value="google_activity_all">All Google activity</option>
+        </select>
+      </label>
+      <label class="field">
+        AgentQS server URL
+        <input id="base-url" type="text" placeholder="http://localhost:3000" spellcheck="false" />
+      </label>
+      <div class="grid">
+        <button id="start-import" class="primary" type="button">Start import <span></span></button>
+        <button id="test-import" type="button">Test import <span>1 page</span></button>
+        <button id="open-agentqs" type="button">Open AgentQS <span></span></button>
+      </div>
+      <label class="toggle">
+        <input id="auto-browser" type="checkbox" />
+        Re-import the selection daily while Chrome runs
+      </label>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

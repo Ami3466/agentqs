@@ -4,8 +4,8 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { recordDir as recordDirFor, vecPath } from "./paths";
 import { autoIndexEnabled, embeddingEnabled, readConfig } from "./config";
-import { readInboxFromRecord, readSessionsFromRecord, recordHash } from "./record";
-import { blobToVector, cosine, vectorToBlob } from "./embed";
+import { readDailyFromRecord, readInboxFromRecord, readSessionsFromRecord, recordHash } from "./record";
+import { blobToVector, cosine, fnv1a, vectorToBlob } from "./embed";
 import { getTextEmbedder } from "./embedder";
 
 /**
@@ -67,16 +67,21 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 export interface IndexItem {
   ref: string;
-  kind: "memo" | "session";
+  kind: "memo" | "session" | "daily_text";
   date: string;
   text: string;
 }
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+// A daily cell is embeddable free text by SHAPE (non-numeric, long enough to say
+// something), the same structural test the FTS insert in record.ts rebuild()
+// applies — an enumerated metric-name list would silently miss any new journal
+// column and let the semantic and keyword indexes drift apart.
+const DAILY_TEXT_MIN_CHARS = 20;
 
 /** Collect the record's free text into embeddable items, deterministically ordered
- *  so the index rebuilds identically. Memos + session synthesis (never raw daily
- *  numbers, which SQL already answers). */
+ *  so the index rebuilds identically. Numeric daily cells stay in SQL; text daily
+ *  cells from imports (for example Notion journal text) are embedded for recall. */
 export function collectItems(recordDir: string): IndexItem[] {
   const out: IndexItem[] = [];
 
@@ -97,6 +102,19 @@ export function collectItems(recordDir: string): IndexItem[] {
       kind: "session",
       date: s.date || (s.startedAt || "").slice(0, 10),
       text,
+    });
+  }
+
+  for (const d of readDailyFromRecord(recordDir)) {
+    const text = d.valueText.trim();
+    if (d.valueNum != null || text.length < DAILY_TEXT_MIN_CHARS) continue;
+    const refKey = `${d.date}:${d.source}:${d.metric}`;
+    const ref = `daily:${(fnv1a(refKey) >>> 0).toString(16).padStart(8, "0")}`;
+    out.push({
+      ref,
+      kind: "daily_text",
+      date: d.date,
+      text: `${d.source}.${d.metric}: ${text}`,
     });
   }
 
@@ -235,7 +253,7 @@ export async function ensureIndex(
 
 export interface SemanticHit {
   ref: string;
-  kind: "memo" | "session";
+  kind: "memo" | "session" | "daily_text";
   date: string;
   snippet: string;
   score: number; // cosine similarity in [0,1]-ish (higher = closer)
@@ -337,7 +355,7 @@ export async function semanticSearch(query: string, opts: SearchOptions = {}): P
     .slice(0, limit)
     .map((r) => ({
       ref: r.ref,
-      kind: r.kind as "memo" | "session",
+      kind: r.kind as "memo" | "session" | "daily_text",
       date: r.date,
       snippet: snippetOf(r.text),
       score: Math.round(Math.max(0, r.score) * 1000) / 1000,
@@ -381,7 +399,7 @@ export function recallQueryText(
 export interface RecallAnswer {
   text: string;
   hits: SemanticHit[];
-  sources: string[]; // "memos" / "sessions" — for the grounded badge
+  sources: string[]; // "memos" / "sessions" / "daily_text" — for the grounded badge
   query: string;
 }
 
@@ -406,7 +424,9 @@ export async function answerRecall(
   const hits = await semanticSearch(query, { ...opts, limit: opts.limit ?? 5 });
   if (!hits.length) return null;
 
-  const kinds = new Set(hits.map((h) => (h.kind === "session" ? "sessions" : "memos")));
+  const sourceName = (kind: SemanticHit["kind"]) =>
+    kind === "session" ? "sessions" : kind === "daily_text" ? "daily journal text" : "memos";
+  const kinds = new Set(hits.map((h) => sourceName(h.kind)));
   const lines = hits.map((h) => `- ${niceDate(h.date)} — "${h.snippet}"`);
   const text =
     `Days that felt like that, closest first:\n${lines.join("\n")}\n\n` +

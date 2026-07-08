@@ -1,5 +1,11 @@
 import { readConfig, type AppConfig } from "../config";
-import { mergeDailyCsv, type DailyMergeResult } from "../record";
+import {
+  appendEvents,
+  mergeDailyCsv,
+  removeEventsBySource,
+  type AppendEventInput,
+  type DailyMergeResult,
+} from "../record";
 import { recordDir } from "../paths";
 
 /**
@@ -31,8 +37,23 @@ export interface ImporterContext {
   fetchImpl?: FetchLike;
 }
 
+/** A per-item record for the journal timeline. `source` defaults to the instance id
+ *  so a multi-account instance ("granola-2") keeps its own events. */
+export type ImporterEvent = Omit<AppendEventInput, "source"> & { source?: string };
+
 export interface ImporterResult {
   table: DailyTable;
+  /**
+   * Long-form text the source wants embedded + full-text searchable, keyed by the
+   * suffix of its own daily file — `{ texts: … }` → `record/daily/<id>_texts.csv`.
+   * Only daily *text* cells reach the search index (events do not), so a source
+   * whose value is prose (meeting notes) lands it here, by the `date,chars,text`
+   * convention the journal importers already use.
+   */
+  extraTables?: Record<string, DailyTable>;
+  /** Per-item records for the journal timeline. `appendEvents` dedups by id, and
+   *  a `mutableEvents` plugin replaces its window first (see ImporterPlugin). */
+  events?: ImporterEvent[];
   meta?: Record<string, unknown>;
 }
 
@@ -50,13 +71,27 @@ export interface ImporterPlugin {
   /** The metric column the Data-tab sparkline / headline number reads. */
   primaryMetric: string;
   unit?: string; // shown after the headline number (e.g. "meetings")
+  /**
+   * The source's per-item records are re-derived on every sync, not immutable
+   * history — a Granola meeting gets a fresh AI summary after it ends. When set,
+   * a sync REPLACES this source's events across the fetched window (delete in
+   * [from,to] → append the fresh set) instead of dedup-appending, so a re-sync
+   * reflects the current content. Leave unset for append-only event sources.
+   */
+  mutableEvents?: boolean;
+  /** Last-resort credential lookup for a source whose own desktop app already
+   *  holds a login on this machine (Granola). Base account only, like `envKey`,
+   *  so extra accounts never silently inherit the desktop login. */
+  discoverCredential?(): string | undefined;
   /** Fetch a window and normalize it into the wide daily table. */
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }
 
-/** Credential precedence: explicit arg → env var → saved config (sourceCreds[key]).
- *  `credKey` is the multi-account instance id ("spotify-2"); the env fallback only
- *  applies to the base account so extra accounts never silently share one login. */
+/** Credential precedence: explicit arg → env var → saved config (sourceCreds[key])
+ *  → the source's own desktop app, if it exposes one (`discoverCredential`).
+ *  `credKey` is the multi-account instance id ("spotify-2"); the env and desktop
+ *  fallbacks only apply to the base account so extra accounts never silently
+ *  share one login. */
 export function resolveCredential(
   plugin: ImporterPlugin,
   explicit?: string,
@@ -64,10 +99,20 @@ export function resolveCredential(
   credKey: string = plugin.id,
 ): string | undefined {
   if (explicit && explicit.trim()) return explicit.trim();
-  if (credKey === plugin.id && plugin.envKey && process.env[plugin.envKey]) {
+  const isBase = credKey === plugin.id;
+  if (isBase && plugin.envKey && process.env[plugin.envKey]) {
     return process.env[plugin.envKey];
   }
-  return cfg?.sourceCreds?.[credKey]?.trim() || undefined;
+  const saved = cfg?.sourceCreds?.[credKey]?.trim();
+  if (saved) return saved;
+  if (isBase && plugin.discoverCredential) {
+    try {
+      return plugin.discoverCredential()?.trim() || undefined;
+    } catch {
+      return undefined; // a desktop app that isn't installed/signed in is not an error
+    }
+  }
+  return undefined;
 }
 
 export interface PluginImportSummary extends DailyMergeResult {
@@ -76,11 +121,17 @@ export interface PluginImportSummary extends DailyMergeResult {
   from: string;
   to: string;
   daysWithData: number; // distinct dates the incoming window wrote
+  eventsAdded: number; // new journal events (0 for a daily-metrics-only source)
+  extraSources: string[]; // extra daily files written, e.g. ["granola_texts"]
   meta?: Record<string, unknown>;
 }
 
 /**
- * Run one plugin end to end: fetch → normalize → merge into record/daily/<fileId>.csv.
+ * Run one plugin end to end: fetch → normalize → merge into record/daily/<fileId>.csv,
+ * plus any `extraTables` (→ record/daily/<fileId>_<suffix>.csv) and `events`
+ * (→ record/events.jsonl, deduped by id). Keeping the writes here — not in
+ * `fetch()` — leaves every plugin a pure fetch → normalize function, so the same
+ * code path runs offline against a fixture (`fixtureFetch`) into a temp record dir.
  * `fileId` defaults to the plugin id; a multi-account instance passes its own id
  * ("spotify-2") so each account keeps its own daily file + journal columns.
  * Rebuilding the SQLite cache is the caller's job (route / CLI), exactly like the
@@ -97,6 +148,24 @@ export async function importPlugin(
   }
   const result = await plugin.fetch(ctx);
   const merge = mergeDailyCsv(dir, fileId, result.table);
+
+  const extraSources: string[] = [];
+  for (const [suffix, table] of Object.entries(result.extraTables ?? {})) {
+    if (!table.rows.length) continue;
+    const extraId = `${fileId}_${suffix}`;
+    mergeDailyCsv(dir, extraId, table);
+    extraSources.push(extraId);
+  }
+
+  const events = (result.events ?? []).map((e) => ({ ...e, source: e.source ?? fileId }));
+  // A mutable-events source (Granola) re-derives its records each sync, so replace
+  // its window before appending — otherwise the id dedup would keep the stale copy
+  // and a re-summarized meeting would never update on the timeline.
+  if (plugin.mutableEvents) {
+    removeEventsBySource(fileId, { recordDir: dir, from: ctx.from, to: ctx.to });
+  }
+  const eventsAdded = events.length ? appendEvents(events, { recordDir: dir }).added : 0;
+
   return {
     ...merge,
     id: fileId,
@@ -104,6 +173,8 @@ export async function importPlugin(
     from: ctx.from,
     to: ctx.to,
     daysWithData: merge.dates.length,
+    eventsAdded,
+    extraSources,
     meta: result.meta,
   };
 }

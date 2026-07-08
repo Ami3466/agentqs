@@ -1,0 +1,120 @@
+{
+  "_comment": "Offline fixture for the Granola plugin, keyed by endpoint (and by document_id for the per-document ones). Synthetic content; the real API returns these shapes. Three docs on purpose: a real meeting, the onboarding note whose placeholder calendar block spans a week, and a deleted doc.",
+  "refresh": {
+    "access_token": "test-access-token",
+    "expires_in": 21599,
+    "token_type": "Bearer"
+  },
+  "documents": {
+    "docs": [
+      {
+        "id": "11111111-2222-3333-4444-555555555555",
+        "title": "Weekly sync — pricing",
+        "created_at": "2026-06-12T15:00:00.000Z",
+        "updated_at": "2026-06-12T16:05:00.000Z",
+        "deleted_at": null,
+        "type": "meeting",
+        "valid_meeting": true,
+        "notes_markdown": "",
+        "google_calendar_event": {
+          "summary": "Weekly sync — pricing",
+          "htmlLink": "https://www.google.com/calendar/event?eid=test",
+          "start": { "dateTime": "2026-06-12T15:00:00Z" },
+          "end": { "dateTime": "2026-06-12T15:45:00Z" },
+          "attendees": [
+            { "email": "me@example.com", "displayName": "Me", "self": true },
+            { "email": "dana@example.com", "displayName": "Dana Levi" }
+          ]
+        }
+      },
+      {
+        "id": "77777777-7777-7777-7777-777777777777",
+        "title": "Get started with Granola",
+        "created_at": "2026-06-12T12:58:00.000Z",
+        "deleted_at": null,
+        "type": "meeting",
+        "notes_markdown": "Welcome to Granola. Take notes during your next call and Granola will clean them up afterwards.",
+        "google_calendar_event": {
+          "start": { "dateTime": "2026-06-12T12:58:00.000Z" },
+          "end": { "dateTime": "2026-06-19T13:28:00.000Z" }
+        }
+      },
+      {
+        "id": "99999999-8888-7777-6666-555555555555",
+        "title": "Deleted scratchpad",
+        "created_at": "2026-06-13T09:00:00.000Z",
+        "deleted_at": "2026-06-14T09:00:00.000Z",
+        "type": "meeting"
+      }
+    ]
+  },
+  "panels": {
+    "11111111-2222-3333-4444-555555555555": [
+      {
+        "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "document_id": "11111111-2222-3333-4444-555555555555",
+        "title": "Summary",
+        "content": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "heading",
+              "attrs": { "level": 3 },
+              "content": [{ "type": "text", "text": "Pricing decision" }]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Hold the annual tier at $180 through Q3." }]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Dana to draft the migration email by Friday." }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "77777777-7777-7777-7777-777777777777": []
+  },
+  "transcript": {
+    "11111111-2222-3333-4444-555555555555": [
+      {
+        "document_id": "11111111-2222-3333-4444-555555555555",
+        "source": "microphone",
+        "text": "Are we holding the annual tier where it is?",
+        "start_timestamp": "2026-06-12T15:02:00.000Z",
+        "end_timestamp": "2026-06-12T15:02:04.000Z"
+      },
+      {
+        "document_id": "11111111-2222-3333-4444-555555555555",
+        "source": "system",
+        "text": "Yes — one eighty through Q3.",
+        "start_timestamp": "2026-06-12T15:02:05.000Z",
+        "end_timestamp": "2026-06-12T15:02:09.000Z"
+      },
+      {
+        "document_id": "11111111-2222-3333-4444-555555555555",
+        "source": "system",
+        "text": "I'll draft the migration email by Friday.",
+        "start_timestamp": "2026-06-12T15:30:00.000Z",
+        "end_timestamp": "2026-06-12T15:30:06.000Z"
+      }
+    ],
+    "77777777-7777-7777-7777-777777777777": []
+  }
+}

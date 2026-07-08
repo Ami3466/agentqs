@@ -17,7 +17,7 @@
  * Flags:
  *   --source <id>   chrome | iphone                          (required)
  *   --path <file>   local file / backup dir (default: probe platform locations)
- *   --days <n>      trailing window length in days (default: 90)
+ *   --days <n>      trailing window length in days (default: 90; Takeout JSON defaults to all)
  *   --from <date>   window start YYYY-MM-DD (overrides --days)
  *   --to <date>     window end   YYYY-MM-DD (default: today)
  *   --record <dir>  record dir to write (default: <data>/record)
@@ -103,8 +103,9 @@ async function main(): Promise<void> {
 
   const rDir = args.record ?? recordDir(args.data);
   const dbFile = dbPath(args.data);
+  const takeoutJson = importer.id === "chrome" && /\.json$/i.test(filePath);
   const win = windowDays(args.days ? Number(args.days) : 90);
-  const from = args.from ?? win.from;
+  const from = args.from ?? (!args.days && takeoutJson ? "0001-01-01" : win.from);
   const to = args.to ?? win.to;
 
   let summary;

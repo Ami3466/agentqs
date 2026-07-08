@@ -140,7 +140,9 @@ export function VoiceMemo() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const probeSeqRef = useRef(0);
 
-  const active = phase === "recording" || phase === "transcribing" || phase === "saving";
+  // Only a hot mic locks the popover. A stalled transcribe/save fetch must never
+  // trap the user — closing leaves the request to finish (or fail) in the background.
+  const locked = phase === "recording";
 
   const probeCapability = useCallback(async () => {
     const seq = probeSeqRef.current + 1;
@@ -177,17 +179,17 @@ export function VoiceMemo() {
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
-      if (active) return;
+      if (locked) return;
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !active && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !locked && setOpen(false);
     document.addEventListener("mousedown", onClick);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, active]);
+  }, [open, locked]);
 
   function stopTimer() {
     if (timerRef.current) {
@@ -254,7 +256,10 @@ export function VoiceMemo() {
       stopTimer();
       releaseStream();
       setPhase("error");
-      setError(e instanceof ErrorEvent && e.error ? micErrorMessage(e.error) : "Recording failed.");
+      // MediaRecorder error events are MediaRecorderErrorEvent, not ErrorEvent —
+      // read .error structurally or the tailored messages never show.
+      const err = (e as { error?: unknown }).error;
+      setError(err ? micErrorMessage(err) : "Recording failed.");
     };
     rec.onstop = () => void upload(rec.mimeType || mime || "audio/webm");
     rec.start();
@@ -264,11 +269,21 @@ export function VoiceMemo() {
 
   function stopRecording() {
     stopTimer();
+    const rec = recorderRef.current;
+    if (!rec) {
+      // The recorder was already torn down (a mic error raced this click) — there
+      // is nothing to upload, and onstop will never fire to move the phase along.
+      setPhase((p) => (p === "recording" ? "error" : p));
+      setError((msg) => msg || "Recording ended unexpectedly.");
+      return;
+    }
     setPhase("transcribing");
     try {
-      recorderRef.current?.stop(); // fires onstop → upload
+      rec.stop(); // fires onstop → upload
     } catch {
-      /* already stopped */
+      releaseStream();
+      setPhase("error");
+      setError("The recorder was already stopped.");
     }
   }
 
@@ -360,7 +375,7 @@ export function VoiceMemo() {
   }
 
   function onButton() {
-    if (active) return;
+    if (locked) return;
     if (!open) {
       setOpen(true);
       return;

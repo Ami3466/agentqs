@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Card } from "./ui";
-import { MessageSquare, Sparkles } from "./icons";
+import { ChevronDown, MessageSquare, Sparkles } from "./icons";
 import { cn } from "./ui";
 import type { JournalData, JournalDay, MetricColumn } from "@/lib/journal";
 
@@ -14,6 +14,14 @@ function localDate(iso: string): Date {
 
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A heavy day (hundreds of chips/memos) must not swallow the page: collapsed
+ * cards render at most this much, the rest sits behind the per-day expander. */
+const CHIPS_COLLAPSED = 10;
+const SESSIONS_COLLAPSED = 2;
+const MEMOS_COLLAPSED = 3;
+/** Days rendered before the "Show more days" button — never the whole record. */
+const DAYS_PAGE = 30;
 
 function relativeLabel(iso: string): string | null {
   const today = new Date();
@@ -40,6 +48,7 @@ function DayCard({
 }) {
   const dt = localDate(day.date);
   const rel = relativeLabel(day.date);
+  const [expanded, setExpanded] = useState(false);
 
   // Group metric cells by source for readable chip rows.
   const bySource = new Map<string, Array<{ metric: string; value: string; numeric: boolean }>>();
@@ -55,6 +64,27 @@ function DayCard({
     });
     bySource.set(source, list);
   }
+
+  // Collapsed: spend a chip budget across the source groups, count the rest.
+  let chipBudget = expanded ? Infinity : CHIPS_COLLAPSED;
+  let hiddenChips = 0;
+  const chipGroups: Array<[string, Array<{ metric: string; value: string; numeric: boolean }>]> =
+    [];
+  for (const [source, cells] of bySource) {
+    if (chipBudget <= 0) {
+      hiddenChips += cells.length;
+      continue;
+    }
+    const take = cells.slice(0, chipBudget);
+    chipBudget -= take.length;
+    hiddenChips += cells.length - take.length;
+    chipGroups.push([source, take]);
+  }
+
+  const sessions = expanded ? day.sessions : day.sessions.slice(0, SESSIONS_COLLAPSED);
+  const memos = expanded ? day.memos : day.memos.slice(0, MEMOS_COLLAPSED);
+  const hidden =
+    hiddenChips + (day.sessions.length - sessions.length) + (day.memos.length - memos.length);
 
   return (
     <Card className="flex gap-4 p-4">
@@ -74,18 +104,24 @@ function DayCard({
       </div>
 
       <div className="min-w-0 flex-1 space-y-3">
-        {bySource.size ? (
+        {chipGroups.length ? (
           <div className="space-y-1.5">
-            {[...bySource.entries()].map(([source, cells]) => (
+            {chipGroups.map(([source, cells]) => (
               <div key={source} className="flex flex-wrap items-center gap-1.5">
                 <span className="shrink-0 text-[11px] font-medium text-muted-fg">{source}</span>
                 {cells.map((c) => (
                   <span
                     key={c.metric}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px]"
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px]"
                   >
-                    <span className="text-muted-fg">{c.metric}</span>
-                    <span className={cn("font-medium text-fg", c.numeric && "font-mono")}>
+                    <span className="shrink-0 text-muted-fg">{c.metric}</span>
+                    <span
+                      title={c.value}
+                      className={cn(
+                        "max-w-[16rem] truncate font-medium text-fg",
+                        c.numeric && "font-mono",
+                      )}
+                    >
                       {c.value}
                     </span>
                   </span>
@@ -95,7 +131,7 @@ function DayCard({
           </div>
         ) : null}
 
-        {day.sessions.map((s) => (
+        {sessions.map((s) => (
           <div
             key={s.id}
             className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5"
@@ -127,15 +163,30 @@ function DayCard({
           </div>
         ))}
 
-        {day.memos.map((m) => (
+        {memos.map((m) => (
           <div key={m.id} className="flex items-start gap-2 text-sm">
             <MessageSquare width={14} height={14} className="mt-0.5 shrink-0 text-muted-fg" />
             <p className="min-w-0 flex-1 text-muted-fg">
-              <span className="text-fg">{m.text}</span>
+              <span className={cn("text-fg", !expanded && "line-clamp-2")}>{m.text}</span>
               <span className="ml-1.5 text-[11px] text-muted-fg/70">· {m.source}</span>
             </p>
           </div>
         ))}
+
+        {hidden > 0 || expanded ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
+          >
+            <ChevronDown
+              width={12}
+              height={12}
+              className={cn("transition-transform", expanded && "rotate-180")}
+            />
+            {expanded ? "Show less" : `Show all (${hidden.toLocaleString()} more)`}
+          </button>
+        ) : null}
       </div>
     </Card>
   );
@@ -146,6 +197,7 @@ export function JournalTimeline({ data }: { data: JournalData }) {
     () => new Map(data.metrics.map((m) => [m.key, m])),
     [data.metrics],
   );
+  const [shownDays, setShownDays] = useState(DAYS_PAGE);
 
   if (!data.days.length) {
     return (
@@ -158,11 +210,25 @@ export function JournalTimeline({ data }: { data: JournalData }) {
     );
   }
 
+  const days = data.days.slice(0, shownDays);
+  const remaining = data.days.length - days.length;
+
   return (
     <div className="space-y-3">
-      {data.days.map((day) => (
+      {days.map((day) => (
         <DayCard key={day.date} day={day} metricsByKey={metricsByKey} />
       ))}
+      {remaining > 0 ? (
+        <div className="flex justify-center pt-1">
+          <button
+            type="button"
+            onClick={() => setShownDays((n) => n + DAYS_PAGE * 2)}
+            className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+          >
+            Show more days ({remaining.toLocaleString()} more)
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

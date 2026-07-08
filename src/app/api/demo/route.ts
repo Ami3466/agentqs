@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { clearDemo, isDemoSeeded, seedDemo } from "@/lib/demo";
+import { clearDemo, hasUserRecordData, isDemoSeeded, seedDemo } from "@/lib/demo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 /** Generic demo data: POST loads it, DELETE clears it, GET reports whether it's on. */
 export async function GET() {
   if (!getCurrentUser()) return unauth();
-  return NextResponse.json({ seeded: isDemoSeeded() });
+  return NextResponse.json({ seeded: isDemoSeeded(), hasUserData: hasUserRecordData() });
 }
 
 export async function POST() {

@@ -100,12 +100,23 @@ export function JournalTable({
   views,
   onViewsChange,
   onData,
+  sourceFilter = null,
+  fullHistory = true,
+  loadingFull = false,
+  onLoadFullHistory,
 }: {
   data: JournalData;
   views: JournalView[];
   onViewsChange: (next: JournalView[]) => void;
   /** Receives the fresh journal returned by /api/journal/edit after a Save. */
   onData: (next: JournalData) => void;
+  /** Show only this source's columns — a display overlay, NOT persisted, so the
+   * saved layout/views survive filtering. */
+  sourceFilter?: string | null;
+  /** false → only a recent window is loaded; the footer offers the full fetch. */
+  fullHistory?: boolean;
+  loadingFull?: boolean;
+  onLoadFullHistory?: () => void;
 }) {
   const metricKeys = useMemo(() => new Set(data.metrics.map((m) => m.key)), [data.metrics]);
   const metricsByKey = useMemo(
@@ -304,6 +315,8 @@ export function JournalTable({
       values: {},
       memos: [],
       sessions: [],
+      events: [],
+      eventCount: 0,
     }));
     return [...data.days, ...extra]
       .filter((d) => !removedRows.has(d.date))
@@ -400,10 +413,28 @@ export function JournalTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.metrics, editing, addedCols, removedCols]);
 
+  // Compact by default: a lifetime record is thousands of days — render a page,
+  // expand on demand. Edit mode always shows everything so no edited row hides.
+  const COMPACT_ROWS = 30;
+  const [showAllRows, setShowAllRows] = useState(false);
+  const visibleRows = useMemo(
+    () => (editing || showAllRows ? rows : rows.slice(0, COMPACT_ROWS)),
+    [editing, showAllRows, rows],
+  );
+
+  // The source filter hides other columns at render time only; the persisted
+  // `columnVisibility` state stays what the user chose.
+  const effectiveVisibility = useMemo<VisibilityState>(() => {
+    if (!sourceFilter) return columnVisibility;
+    const v: VisibilityState = { ...columnVisibility };
+    for (const m of data.metrics) if (m.source !== sourceFilter) v[m.key] = false;
+    return v;
+  }, [columnVisibility, sourceFilter, data.metrics]);
+
   const table = useReactTable({
-    data: rows,
+    data: visibleRows,
     columns,
-    state: { columnVisibility, columnOrder, columnSizing },
+    state: { columnVisibility: effectiveVisibility, columnOrder, columnSizing },
     getRowId: (d) => d.date,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnOrderChange: setColumnOrder,
@@ -787,10 +818,32 @@ export function JournalTable({
           No data yet.
         </div>
       ) : (
-        <p className="mt-2.5 text-[11px] text-muted-fg">
-          {data.totalDays} day{data.totalDays === 1 ? "" : "s"} · {shownCount} column
-          {shownCount === 1 ? "" : "s"}
-        </p>
+        <div className="mt-2.5 flex items-center gap-3">
+          <p className="text-[11px] text-muted-fg">
+            {(editing || showAllRows ? rows.length : Math.min(COMPACT_ROWS, rows.length)).toLocaleString()} of{" "}
+            {data.totalDays.toLocaleString()} day{data.totalDays === 1 ? "" : "s"} · {shownCount} column
+            {shownCount === 1 ? "" : "s"}
+          </p>
+          {!editing && rows.length > COMPACT_ROWS ? (
+            <button
+              type="button"
+              onClick={() => setShowAllRows((v) => !v)}
+              className="text-[11px] font-medium text-accent hover:underline"
+            >
+              {showAllRows ? "Show fewer" : `Show all ${rows.length.toLocaleString()} loaded days`}
+            </button>
+          ) : null}
+          {!editing && !fullHistory && onLoadFullHistory ? (
+            <button
+              type="button"
+              onClick={onLoadFullHistory}
+              disabled={loadingFull}
+              className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50"
+            >
+              {loadingFull ? "Loading full history…" : `Load full history (${data.totalDays.toLocaleString()} days)`}
+            </button>
+          ) : null}
+        </div>
       )}
     </div>
   );

@@ -64,12 +64,21 @@ export function Onboarding() {
   const [seeding, setSeeding] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     if (typeof window !== "undefined" && !window.localStorage.getItem(DONE_KEY)) {
-      setShow(true);
+      void fetch("/api/demo")
+        .then((res) => res.json())
+        .then((status) => {
+          if (!cancelled && status?.hasUserData !== true) setShow(true);
+        })
+        .catch(() => undefined);
     }
     const onTour = () => runTour();
     window.addEventListener("agentqs:tour", onTour);
-    return () => window.removeEventListener("agentqs:tour", onTour);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("agentqs:tour", onTour);
+    };
   }, []);
 
   function finish(startTour: boolean) {

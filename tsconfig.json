@@ -33,9 +33,18 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next-e2e/types/**/*.ts"
+    ".next-e2e/types/**/*.ts",
+    "tmp/next-dist-screenshots/types/**/*.ts",
+    ".next-verify/types/**/*.ts",
+    ".next-scatter/types/**/*.ts",
+    "tmp/e2e-dist/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next",
+    ".next-*",
+    ".next.*",
+    "data",
+    "tmp"
   ]
 }

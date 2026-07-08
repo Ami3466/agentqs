@@ -52,6 +52,8 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
   const router = useRouter();
   const [items, setItems] = useState<LogItem[]>([]);
   const [total, setTotal] = useState<number | null>(null);
+  // Like every long list here: a fixed-height scrollable box with its own search.
+  const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const [armed, setArmed] = useState<string | null>(null); // reject needs a second click
   const [busy, setBusy] = useState<string | null>(null);
@@ -68,6 +70,13 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
   useEffect(() => {
     void load();
   }, [load, version]);
+
+  const q = query.trim().toLowerCase();
+  const filteredItems = q
+    ? items.filter((it) =>
+        [it.text, it.source, it.kind, it.status, it.filename ?? ""].some((v) => v.toLowerCase().includes(q)),
+      )
+    : items;
 
   function toggle(id: string) {
     setOpen((cur) => (cur === id ? null : id));
@@ -135,8 +144,19 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
 
       {items.length ? (
-        <ul className="mt-3 space-y-1.5">
-          {items.map((it) => {
+        <div className="mt-3 rounded-lg border border-border">
+          {items.length > 5 ? (
+            <div className="border-b border-border p-2">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Search ${items.length} log entries`}
+                className="h-8 w-full rounded-md border border-input bg-bg px-2.5 text-[13px] text-fg placeholder:text-muted-fg/70 focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+              />
+            </div>
+          ) : null}
+          <ul className="max-h-80 space-y-1.5 overflow-y-auto p-2">
+          {filteredItems.map((it) => {
             const expanded = open === it.id;
             const s = it.structured;
             return (
@@ -244,7 +264,11 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
               </li>
             );
           })}
-        </ul>
+          {!filteredItems.length ? (
+            <li className="px-3 py-4 text-center text-xs text-muted-fg">No log entry matches "{query}".</li>
+          ) : null}
+          </ul>
+        </div>
       ) : (
         <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-fg">
           Nothing logged yet. Drop a file above or log a memo with{" "}

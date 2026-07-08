@@ -8,7 +8,7 @@
 import { activeLlm, autoStructureEnabled, readConfig } from "./config";
 import { wipeDemoOnImport } from "./demo";
 import { recordDir } from "./paths";
-import { mergeDailyCsv, readRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
+import { mergeDailyCsv, readInboxFromRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
 import { llmComplete } from "./llm";
 import {
   parseLlmCsv,
@@ -18,7 +18,7 @@ import {
   structureCsv,
 } from "./structure";
 
-export type StructureRoute = "csv" | "llm";
+export type StructureRoute = "csv" | "llm" | "agent";
 export type StructureStatus = "structured" | "empty" | "error";
 
 export interface StructureItemResult {
@@ -62,14 +62,30 @@ export async function autoStructureNewItem(id: string): Promise<StructureRunResu
   }
 }
 
-/** Drain pending inbox items into daily rows. `{id}` structures one; `{}` drains all. */
-export async function structurePending(opts: { id?: string; all?: boolean } = {}): Promise<StructureRunResult> {
+/** Drain pending inbox items into daily rows. `{id}` structures one; `{}` drains all.
+ *  `{id, csv}` is the key-free agent route: a CLI agent (Claude Code, Codex) reads
+ *  the pending item itself and SUPPLIES the extracted daily CSV — same validation,
+ *  merge, and undo metadata as the LLM route, no API key involved. */
+export async function structurePending(
+  opts: { id?: string; all?: boolean; csv?: string } = {},
+): Promise<StructureRunResult> {
+  if (opts.csv && !opts.id) {
+    return {
+      ok: false,
+      structured: 0,
+      results: [],
+      pending: 0,
+      dailyRows: null,
+      error: "csv requires id — an agent structures one item at a time.",
+    };
+  }
   // Structuring real data is a real import — clear the demo record first, from EVERY
   // face (GUI button, CLI, MCP, agent tool, auto-structure), so real rows never merge
   // into demo CSVs that a later wipe would delete.
   wipeDemoOnImport();
   const rDir = recordDir();
-  const pending = readRecord(rDir).inbox.filter((i) => i.status === "pending");
+  // Inbox stream only - readRecord would parse the (huge) events.jsonl for nothing.
+  const pending = readInboxFromRecord(rDir).filter((i) => i.status === "pending");
 
   let targets = pending;
   if (opts.id) targets = pending.filter((i) => i.id === opts.id);
@@ -100,16 +116,31 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
       continue;
     }
     const hint = filenameOf(item);
-    let structured = structureCsv(item.text);
-    let route: StructureRoute = "csv";
+    let structured = opts.csv ? structureCsv(parseLlmCsv(opts.csv)) : structureCsv(item.text);
+    let route: StructureRoute = opts.csv ? "agent" : "csv";
     let source: string;
 
     if (structured) {
-      source = sourceName(hint, "import");
+      source = sourceName(hint, opts.csv ? "notes" : "import");
+    } else if (opts.csv) {
+      results.push({
+        id: item.id,
+        route: "agent",
+        status: "error",
+        message:
+          "That CSV didn't parse into dated rows. First column must be `date` with YYYY-MM-DD values, every other column one snake_case metric, one row per date.",
+      });
+      continue;
     } else {
       route = "llm";
       if (!hasLlm) {
-        results.push({ id: item.id, route, status: "error", message: "Add an AI key to structure prose notes." });
+        results.push({
+          id: item.id,
+          route,
+          status: "error",
+          message:
+            "No AI key configured. Add one in Settings, or structure key-free with a CLI agent: `agentqs structure --id <id> --csv '<date,... CSV>'` (see CLAUDE.md).",
+        });
         continue;
       }
       const captureDate = (item.ts || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
@@ -119,7 +150,9 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
           llm: llm!,
           system: proseExtractionSystem(),
           messages: [{ role: "user", content: proseExtractionUser(item.text, captureDate) }],
-          maxTokens: 700,
+          // Multi-date documents (timelines, exports) produce one CSV row per date —
+          // a small cap truncated them mid-table and collapsed history onto one day.
+          maxTokens: 4000,
         });
       } catch (e) {
         results.push({ id: item.id, route, status: "error", message: `Model call failed: ${(e as Error).message}` });
@@ -163,7 +196,7 @@ export async function structurePending(opts: { id?: string; all?: boolean } = {}
 
   if (patches.length) updateInboxItems(patches, { recordDir: rDir });
   const rebuilt = mutated ? rebuild({ recordDir: rDir }) : null;
-  const remaining = readRecord(rDir).inbox.filter((i) => i.status === "pending").length;
+  const remaining = readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
 
   return {
     ok: true,

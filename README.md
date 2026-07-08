@@ -3,150 +3,108 @@
 </p>
 
 <h1 align="center">agentqs</h1>
-<p align="center"><b>A local-first journal that turns your life data into one queryable record.</b></p>
-<p align="center">Capture notes, imports, sessions and metrics, then ask questions grounded in your own timeline.</p>
+<p align="center"><b>Use your data to unlock insights on your productivity, mental health and more.</b></p>
 
 ---
 
-agentqs is a private journal + data workspace. It keeps raw captures, daily CSVs,
-mentor sessions and a rebuildable SQLite cache on your machine, with optional AI
-providers only when you choose to connect them.
+There are thousands of products helping companies use their knowledge bases and analytics. Our most important data stays neglected - every person has millions of data points recorded, tracking on purpose or not.
 
-- ✅ **One daily record** — notes, files, sessions and source metrics land in dated CSVs
-- ✅ **Ask grounded questions** — Chat can query your record instead of guessing from a prompt
-- ✅ **Structure when you decide** — raw captures sit in the inbox until you structure them
-- ✅ **Local semantic search** — embeddings run on-device by default
-- ✅ **Graphs** — compare metrics, counts and timelines from the rebuilt record
-- ✅ **CLI, API and MCP** — use the same core from the app, terminal, Codex or Claude Code
-- ✅ **Bring your own model** — Anthropic, OpenAI, Gemini or compatible endpoints from Settings
-
-Runs on **your own server** with **your own data directory**. Your record is plain
-text and can live in a private git repo; derived databases and model caches stay
-out of git.
+agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your data in. It structures, indexes and embeds everything - then you learn from it with graphs, AI with skills, or voice sessions. Works out of the box in the web app, CLI, Slack or Telegram.
 
 ---
 
-## Set up in 4 steps
+## Quick start
 
-Create a local account, load demo data or start empty, connect sources, then ask
-questions from the browser or a CLI agent.
-
-| 1. Create account | 2. Chat | 3. Add data | 4. Configure |
-|---|---|---|---|
-| ![Create account](docs/images/setup.png) | ![Chat](docs/images/chat.png) | ![Data workspace](docs/images/data.png) | ![Settings](docs/images/settings.png) |
-| First visit creates the local login | Ask or log memos with `//` | Drop files, structure captures, connect sources | Add providers, local models, channels and sync settings |
-
-## Journal
-
-The Journal tab shows the rebuilt daily record as a table or timeline. The demo
-record is 100 days of sample data across sleep, steps, mood, focus, screen time,
-resting heart rate, workouts and commits.
-
-![Journal table](docs/images/journal.png)
-
-## Data
-
-The Data tab is the ingest surface:
-
-- Drop a file or folder into the pending inbox.
-- Press **Structure** for one item or **Structure all** for the inbox.
-- CSV/TSV with a date column maps directly into daily rows without an LLM.
-- Prose structuring needs an in-app AI provider unless you do the work from an
-  external CLI agent through the CLI/MCP tools.
-- Every capture appears in the Log so you can inspect structured, pending and
-  rejected items.
-
-Built-in source rows include GitHub, WHOOP, RescueTime, Google Calendar, Spotify,
-Oura, Fitbit, Strava, Last.fm, Toggl Track, Todoist, Trakt, Notion, Deezer,
-Swarm, Mastodon and Withings. Availability depends on the source: some use APIs,
-some use OAuth tokens, and some are local-file or browser-automation imports.
-
-## Chat
-
-Chat has three input modes:
-
-- Plain text asks the mentor about your record.
-- `// slept badly, late deploy` logs a raw memo into the inbox.
-- `/` runs commands.
-
-With an AI provider configured, the app can use the Vercel AI SDK agent to call
-record tools such as SQL over daily metrics, text search over memos/sessions and
-semantic search. Without a provider, local deterministic paths still work for
-basic record operations and some cross-source summaries.
-
-## Graphs
-
-The Graphs tab turns numeric metrics and activity counts into saved correlation
-and timeline views. Saved graph definitions live in `config.json`; the underlying
-record still stays in plain CSV/JSONL and can be rebuilt at any time.
-
-## CLI and MCP
-
-Install locally:
+<a href="https://flowengine.cloud/deploy/agentqs"><img src="https://flowengine.cloud/button.svg" alt="Deploy on FlowEngine" height="40"></a>
 
 ```bash
+git clone https://github.com/Ami3466/agentqs.git && cd agentqs
 npm install
-npm run build
-npm link
+npm run dev               # → http://localhost:3000
 ```
 
-Use the CLI directly:
+It's recommended to work directly on the repo with Claude Code / Codex or through the skill - so you don't need to spend API tokens. Ask it to start onboarding your accounts and manually import and structure the data it found locally, then set up API keys and automated data imports under the Data tab, structure the data and index it, then add the skills you want and start unlocking personal insights.
+
+## Features
+
+### Journal - your whole life in one table
+
+Every source lands in one daily record: sleep, steps, mood, focus, screen time, heart rate, workouts, commits. Table or timeline, built from plain CSVs you own.
+
+![Journal](docs/images/journal.png)
+
+### Chat - AI grounded in your record, with skills
+
+Ask anything - the agent answers from your actual data: SQL over metrics, text search over memos and sessions, semantic search over everything. `//` logs a memo, `/` runs commands.
+
+![Chat](docs/images/chat.png)
+
+### Data - ingest anything
+
+Drop a file or folder, hit **Structure**, it lands in your record. CSVs with a date column map directly - no LLM. Every capture shows in the log: structured, pending or rejected.
+
+![Data workspace](docs/images/data.png)
+
+### Graphs
+
+Correlate anything - sleep vs focus, screen time vs mood - and save the views.
+
+![Graphs](docs/images/graphs.png)
+
+### Voice sessions
+
+Talk instead of type. Memos are transcribed locally with Whisper and land in your record.
+
+![Voice memo](docs/images/voice.png)
+
+### CLI, API and MCP - every action, no API key
+
+Everything works from the terminal or any CLI agent:
 
 ```bash
-agentqs journal --table --limit 30
-agentqs import ./export.csv --name mood
-agentqs structure
-agentqs query "select date, value_num from daily where metric='mood'"
 agentqs chat "what changed this week?"
-agentqs log list --limit 20
-agentqs whisper status
-agentqs sources
-agentqs rebuild --verify
+agentqs import ./export.csv --name mood
+agentqs query "select date, value_num from daily where metric='mood'"
 ```
 
-Expose the same core to Claude Code:
+**No AI key? Use a CLI agent as the AI.** Everything the app does is reachable key-free: capture, import, sync, query, semantic recall (local embeddings), rebuild - and for the two flows that normally need a model, the agent does the reasoning itself:
+
+```bash
+agentqs inbox --json                      # pending captures, full text
+agentqs structure --id <id> --csv "date,mood,steps
+2026-01-05,8,14200"                       # the agent supplies the extracted CSV
+agentqs recall "days that felt burned out" # meaning-search, fully on-device
+```
+
+Expose it to Claude Code or Codex over MCP - the agent reads, writes and queries through local tools without spending your in-app API key (the repo's `CLAUDE.md` teaches these workflows automatically):
 
 ```bash
 claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'
 ```
 
-Codex, Claude Code and other CLI agents can operate agentqs through the CLI or
-MCP tools. In that setup, **agentqs itself does not need to spend your configured
-OpenAI/Anthropic/Gemini API key for the work the CLI agent is doing**; the agent
-reads, writes, imports, queries and edits through local tools. In-app provider
-usage only happens when you configure a provider in Settings and use web Chat,
-web Structure, channels, or another app path that explicitly calls that provider.
+### Slack and Telegram
 
-## Run Locally
+Connect a channel in Settings - log memos and ask your record questions from where you already are.
 
-```bash
-cp .env.example .env      # optional; providers can also be added in Settings
-npm install
-npm run build             # production compile/type check
-npm run dev               # http://localhost:3000
-```
+## Integrations
 
-On first visit, create the local account. The welcome dialog can seed generic
-demo data; it is sample data and is marked as demo data.
+**Connect by API or OAuth:** GitHub · WHOOP · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
 
-By default local data is written to `./data`, which is gitignored. To keep a real
-record outside this public repo, set `AGENTQS_DATA_DIR`:
+**Scrape or import from locked-in apps:** Google MyActivity (browser extension) · Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · any CSV, TSV, Markdown or text file
+
+Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
+
+## Deploy locally
+
+Keep your record outside the repo:
 
 ```bash
 export AGENTQS_DATA_DIR="$HOME/agentqs-data"
-npm run cli -- rebuild --verify
+npm run build
 npm run dev
 ```
 
-## Run in Docker or Cloud
-
-Build and run with Compose:
-
-```bash
-docker compose up --build
-```
-
-Or run an image directly:
+Or with Docker:
 
 ```bash
 docker run -d \
@@ -157,110 +115,23 @@ docker run -d \
   agentqs
 ```
 
-For cloud hosting, the important rule is the same as Docker: mount persistent
-storage at `/data` and set `AGENTQS_DATA_DIR=/data`. The container stores
-`config.json`, `record/`, SQLite caches, embeddings and thumbnails there. Use a
-stable `SESSION_SECRET` if you do not want sessions invalidated between deploys.
+Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`) and can live in a private git repo. Databases and embeddings are derived - `agentqs rebuild` recreates them.
 
-Remote cloud instances cannot read files on your laptop. For local-only sources
-such as browser history, iPhone backups or photos, run the CLI on the machine
-that has those files and sync the resulting private record directory separately.
+## Deploy on cloud
 
-## Real Data Test Fixture
+Scheduled syncs need a machine that's always on. [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`.
 
-This repo is public, so real journal data should stay outside it. The current
-validated external fixture is:
+<a href="https://flowengine.cloud/deploy/agentqs"><img src="https://flowengine.cloud/button.svg" alt="Deploy on FlowEngine" height="40"></a>
 
-- source repo: `/Users/example/Desktop/example-journal`
-- agentqs data dir: `/Users/example/Desktop/agentqs-example-data`
-
-Recreate the fixture without copying private data into this project:
-
-```bash
-cd /Users/example/Desktop
-git clone https://github.com/Ami3466/example-journal.git example-journal
-cd /Users/example/Desktop/agentqs
-export AGENTQS_DATA_DIR=/Users/example/Desktop/agentqs-example-data
-
-for f in \
-  /Users/example/Desktop/example-journal/data/productivity/*.csv \
-  /Users/example/Desktop/example-journal/data/iphone/*.csv \
-  /Users/example/Desktop/example-journal/data/whoop/*.csv \
-  /Users/example/Desktop/example-journal/data/sleep/*.csv \
-  /Users/example/Desktop/example-journal/data/browsing/*.csv \
-  /Users/example/Desktop/example-journal/data/calendar/*.csv \
-  /Users/example/Desktop/example-journal/data/journal/*.csv \
-  /Users/example/Desktop/example-journal/data/daily/*.csv
-do
-  [ -f "$f" ] && npm run cli -- import "$f" --name "$(basename "$f" .csv)"
-done
-
-for f in \
-  /Users/example/Desktop/example-journal/sessions/*.md \
-  /Users/example/Desktop/example-journal/logs/*.md \
-  /Users/example/Desktop/example-journal/data/notion-pages/*.md \
-  /Users/example/Desktop/example-journal/BACKGROUND.md \
-  /Users/example/Desktop/example-journal/PATTERNS.md
-do
-  [ -f "$f" ] && npm run cli -- import "$f" --name "$(basename "$f")"
-done
-
-npm run cli -- rebuild --verify
-npm run cli -- query "select source, count(*) as rows from daily group by source order by rows desc limit 10"
-```
-
-Expected shape after the import: tens of thousands of daily rows, with Markdown
-and non-date goal-tracker files left as pending inbox captures for later
-structure. Open the app against the fixture with the same `AGENTQS_DATA_DIR` and
-`npm run dev`.
-
-## Record format
-
-The plain-text record is the source of truth:
-
-```text
-record/
-  daily/<source>.csv   one wide CSV per source, first column date
-  inbox.jsonl          raw captures and structure status
-  sessions.jsonl       mentor/session summaries
-  photos.jsonl         photo metadata pointers, when photo import is used
-```
-
-SQLite databases, embedding indexes, model weights and thumbnails are derived
-files under `data/` and are rebuildable.
-
-## Useful Scripts
-
-```bash
-npm run rebuild
-npm run rebuild:verify
-npm run api:test
-npm run semantic:test
-npm run photos:test
-npm run agent:test
-npm run log:test
-```
-
-See `package.json` for the full test and importer list.
+Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 
 ## Good to know
 
-- **Private by default.** Data stays in your configured data directory. Model calls
-  only receive what you ask the app or agent to send.
-- **Local embeddings.** Semantic search uses a local model by default, so search
-  indexing does not need an AI API key.
-- **Token use is explicit.** Raw capture is local. Web Chat and prose Structure use
-  a provider only after you add one. CLI-agent workflows can avoid app-side API
-  usage by letting Codex or Claude Code do the reasoning through local tools.
-- **Demo data is disposable.** The sample record is for first-run exploration and
-  is cleared before real imports are mixed in.
-- **License is restricted.** Free to use and modify, but not to sell as a product
-  or hosted service.
+- **Private by default.** Data stays in your data directory. Model calls only get what you ask to send.
+- **Token use is explicit.** Capture and search are local. AI runs only when you chat, structure prose, or run a channel - CLI-agent workflows skip it entirely.
 
 ## License
 
 **Free to use. Not for sale.**
 
-agentqs is licensed under [MIT with the Commons Clause](LICENSE): use it,
-self-host it, change it and share it. You may **not** sell it or offer it as a
-paid product or service, including paid hosting or paid support built on it.
+agentqs is [MIT with the Commons Clause](LICENSE): use it, self-host it, change it, share it. You may **not** sell it or offer it as a paid product or service, including paid hosting or support built on it.

@@ -150,7 +150,7 @@ export function mentorTools(dbFile: string, used: Used) {
 
   const find_similar = tool({
     description:
-      "Semantic search over the user's memos and past sessions using the local embedding index — finds days that FELT like a described feeling or situation, even when they don't share the exact words (e.g. 'anxious, couldn't sleep' also surfaces a day they wrote 'wired and stressed'). " +
+      "Semantic search over the user's memos, past sessions, and imported daily journal text using the local embedding index - finds days that FELT like a described feeling or situation, even when they don't share the exact words (e.g. 'anxious, couldn't sleep' also surfaces a day they wrote 'wired and stressed'). " +
       "Use this for recall/vibe questions ('find days that felt like this', 'when have I felt this way', 'days like today'). It returns the closest days with a dated snippet. For exact keywords use search_notes; for numbers use query_daily.",
     inputSchema: z.object({
       query: z.string().describe("The feeling or situation to match, in natural language."),
@@ -161,7 +161,8 @@ export function mentorTools(dbFile: string, used: Used) {
         const vecFile = path.join(path.dirname(dbFile), "agentqs-vec.db");
         const hits = await semanticSearch(query, { vecFile, limit: Math.min(limit ?? 5, 10) });
         used.hits += hits.length;
-        for (const h of hits) used.sources.add(h.kind === "session" ? "sessions" : "memos");
+        for (const h of hits)
+          used.sources.add(h.kind === "session" ? "sessions" : h.kind === "daily_text" ? "daily journal text" : "memos");
         return { days: hits.map((h) => ({ date: h.date, snippet: h.snippet, score: h.score })) };
       } catch (e) {
         return { error: (e as Error).message, days: [] };

@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "AgentQS Google Activity Exporter",
+  "version": "0.5.3",
+  "description": "Exports authenticated Chrome data pages into local AgentQS.",
+  "permissions": [
+    "alarms",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://myactivity.google.com/*",
+    "https://timeline.google.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "AgentQS Importer",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://myactivity.google.com/*",
+        "https://timeline.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

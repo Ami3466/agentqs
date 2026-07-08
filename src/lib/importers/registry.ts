@@ -14,6 +14,7 @@ import { deezerPlugin } from "./deezer";
 import { swarmPlugin } from "./swarm";
 import { mastodonPlugin } from "./mastodon";
 import { withingsPlugin } from "./withings";
+import { granolaPlugin } from "./granola";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
@@ -41,6 +42,7 @@ export const PLUGINS: ImporterPlugin[] = [
   swarmPlugin,
   mastodonPlugin,
   withingsPlugin,
+  granolaPlugin,
 ];
 
 export function pluginById(id: string): ImporterPlugin | undefined {

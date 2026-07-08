@@ -42,14 +42,19 @@ interface VisitRow {
   url: string;
 }
 
-/** Roll raw (visit_time, url) rows up into the wide per-day daily table. */
-export function normalizeChromeVisits(rows: VisitRow[], from: string, to: string): DailyTable {
+interface UnixVisitRow {
+  t: number; // Unix microseconds
+  url: string;
+}
+
+/** Roll raw (timestamp, url) rows up into the wide per-day daily table. */
+function normalizeVisits(rows: Array<{ t: number; url: string }>, from: string, to: string, toUnixMs: (t: number) => number): DailyTable {
   const header = ["date", "visits", "pages", "domains"];
   const fromDay = from;
   const toDay = to;
   const perDay = new Map<string, { visits: number; pages: Set<string>; domains: Set<string> }>();
   for (const r of rows) {
-    const day = new Date(webkitToUnixMs(r.t)).toISOString().slice(0, 10);
+    const day = new Date(toUnixMs(r.t)).toISOString().slice(0, 10);
     if (day < fromDay || day > toDay) continue;
     const bucket =
       perDay.get(day) ?? { visits: 0, pages: new Set<string>(), domains: new Set<string>() };
@@ -66,6 +71,16 @@ export function normalizeChromeVisits(rows: VisitRow[], from: string, to: string
       return [day, String(b.visits), String(b.pages.size), String(b.domains.size)];
     });
   return { header, rows: outRows };
+}
+
+/** Roll Chrome SQLite rows up into the wide per-day daily table. */
+export function normalizeChromeVisits(rows: VisitRow[], from: string, to: string): DailyTable {
+  return normalizeVisits(rows, from, to, webkitToUnixMs);
+}
+
+/** Roll Google Takeout Chrome History rows up into the wide per-day daily table. */
+export function normalizeChromeTakeoutVisits(rows: UnixVisitRow[], from: string, to: string): DailyTable {
+  return normalizeVisits(rows, from, to, (us) => Math.floor(us / 1000));
 }
 
 /** Copy the (possibly locked) History DB to a temp dir and open it read-only. */
@@ -102,6 +117,8 @@ export async function readChromeHistory(
   from: string,
   to: string,
 ): Promise<FileImportResult> {
+  if (/\.json$/i.test(file)) return readChromeTakeoutHistory(file, from, to);
+
   const { db, cleanup } = await openHistoryCopy(file);
   try {
     const hasVisits = db
@@ -129,6 +146,45 @@ export async function readChromeHistory(
     db.close();
     cleanup();
   }
+}
+
+/** Read Google Takeout's Chrome/BrowserHistory.json export. */
+export async function readChromeTakeoutHistory(
+  file: string,
+  from: string,
+  to: string,
+): Promise<FileImportResult> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new Error(`${file} is not readable Google Takeout Chrome history JSON (${(e as Error).message})`);
+  }
+
+  const entries = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>)["Browser History"])
+      ? ((raw as Record<string, unknown>)["Browser History"] as unknown[])
+      : null;
+  if (!entries) {
+    throw new Error("expected Google Takeout Chrome history JSON with a 'Browser History' array");
+  }
+
+  const rows: UnixVisitRow[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const v = entry as Record<string, unknown>;
+    const url = typeof v.url === "string" ? v.url : "";
+    const rawTime = v.time_usec;
+    const t = typeof rawTime === "number" ? rawTime : typeof rawTime === "string" ? Number(rawTime) : NaN;
+    if (url && Number.isFinite(t)) rows.push({ t, url });
+  }
+
+  const table = normalizeChromeTakeoutVisits(rows, from, to);
+  return {
+    table,
+    meta: { visitsScanned: rows.length, daysWithData: table.rows.length, format: "takeout-json" },
+  };
 }
 
 /** Default `History` locations across platforms + the Docker read-only mount. */
@@ -159,7 +215,7 @@ function chromeDefaultPaths(): string[] {
 export const chromeImporter: FileImporter = {
   id: "chrome",
   name: "Chrome history",
-  detail: "browsing history · local file (agentqs import:file --source chrome)",
+  detail: "browsing history · local History DB or Google Takeout JSON",
   live: true,
   primaryMetric: "visits",
   unit: "visits",

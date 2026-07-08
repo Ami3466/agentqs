@@ -162,7 +162,7 @@ export function AutomationSetup({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <RefreshCw width={15} height={15} className="text-muted-fg" />
-          <p className="text-sm font-semibold text-fg">Automate a site without an API</p>
+          <p className="text-sm font-semibold text-fg">Custom scraping</p>
         </div>
         <button type="button" onClick={onCancel} className="rounded p-1 text-muted-fg hover:text-fg" aria-label="Cancel">
           <X width={16} height={16} />

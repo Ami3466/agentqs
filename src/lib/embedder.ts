@@ -60,11 +60,14 @@ async function loadNeural(): Promise<TextEmbedder | null> {
       dim: NEURAL_DIM,
       async embed(texts) {
         if (texts.length === 0) return [];
-        const out = await pipe(texts, { pooling: "mean", normalize: true });
-        const [n, d] = out.dims as [number, number];
-        const data = out.data as Float32Array;
         const res: Float32Array[] = [];
-        for (let i = 0; i < n; i++) res.push(Float32Array.from(data.subarray(i * d, i * d + d)));
+        const batchSize = Number(process.env.AGENTQS_EMBED_BATCH || 32);
+        for (let start = 0; start < texts.length; start += batchSize) {
+          const out = await pipe(texts.slice(start, start + batchSize), { pooling: "mean", normalize: true });
+          const [n, d] = out.dims as [number, number];
+          const data = out.data as Float32Array;
+          for (let i = 0; i < n; i++) res.push(Float32Array.from(data.subarray(i * d, i * d + d)));
+        }
         return res;
       },
     };

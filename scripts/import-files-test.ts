@@ -82,6 +82,26 @@ function seedChromeHistory(file: string): void {
   db.close();
 }
 
+/** Build a tiny Google Takeout Chrome/BrowserHistory.json export. */
+function seedChromeTakeout(file: string): void {
+  const unixUs = (iso: string) => Date.parse(iso) * 1000;
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      {
+        "Browser History": [
+          { url: "https://example.com/a", title: "A", time_usec: unixUs("2020-01-02T08:00:00Z") },
+          { url: "https://example.com/b", title: "B", time_usec: String(unixUs("2020-01-02T09:00:00Z")) },
+          { url: "https://news.ycombinator.com/item?id=2", title: "HN", time_usec: unixUs("2020-01-03T10:00:00Z") },
+          { url: "https://example.com/outside", title: "Old", time_usec: unixUs("2019-12-31T10:00:00Z") },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 /** Build a minimal iOS backup: Manifest.db (Files table) + Info.plist. */
 function seedIphoneBackup(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -111,6 +131,7 @@ function main(): void {
   const recordDir = path.join(root, "record");
   const dbFile = path.join(root, "agentqs.db");
   const history = path.join(root, "History");
+  const takeout = path.join(root, "BrowserHistory.json");
   const from = "2026-06-01";
   const to = "2026-06-30";
 
@@ -170,6 +191,28 @@ function main(): void {
   check("2026-06-12 → 1 visit", cell("2026-06-12", "visits") === 1);
   check("no chrome row outside the window", cell("2026-05-01", "visits") === null);
   db.close();
+
+  // ---- Google Takeout Chrome history --------------------------------------
+  console.log("\nChrome Google Takeout JSON → import:file command → record");
+  seedChromeTakeout(takeout);
+  const tOut = runCli("import-file.ts", [
+    "--source", "chrome",
+    "--path", takeout,
+    "--record", recordDir,
+    "--data", root,
+    "--from", "2020-01-01",
+    "--to", "2020-01-31",
+    "--rebuild",
+    "--json",
+  ]);
+  const tRes = JSON.parse(tOut) as {
+    cells: number;
+    daysWithData: number;
+    meta?: { visitsScanned?: number; format?: string };
+  };
+  check("Takeout JSON detected", tRes.meta?.format === "takeout-json", String(tRes.meta?.format));
+  check("Takeout imports all in-window years when requested", tRes.daysWithData === 2, `${tRes.daysWithData} days`);
+  check("Takeout JSON unix-microsecond timestamps parsed", tRes.cells === 6, `${tRes.cells} cells`);
 
   // ---- iPhone backup stub -------------------------------------------------
   console.log("\niPhone backup (stub) → snapshot row");

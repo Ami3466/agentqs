@@ -1,4 +1,4 @@
-export type GraphViewType = "correlation" | "timeline";
+export type GraphViewType = "correlation" | "timeline" | "candles";
 export type GraphRangePreset = "30" | "60" | "90" | "custom" | "all";
 
 export interface SavedGraph {
@@ -32,7 +32,8 @@ export function sanitizeSavedGraphs(input: unknown): SavedGraph[] {
     const name = cleanKey(v.name);
     const xKey = cleanKey(v.xKey);
     const yKey = cleanKey(v.yKey);
-    const view = v.view === "timeline" ? "timeline" : v.view === "correlation" ? "correlation" : "";
+    const view =
+      v.view === "timeline" ? "timeline" : v.view === "candles" ? "candles" : v.view === "correlation" ? "correlation" : "";
     const range =
       v.range === "30" || v.range === "60" || v.range === "90" || v.range === "custom" || v.range === "all"
         ? v.range

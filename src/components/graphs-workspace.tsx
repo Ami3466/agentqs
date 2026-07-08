@@ -25,6 +25,7 @@ interface SeriesDef {
 }
 
 type DraftGraph = Omit<SavedGraph, "id" | "name">;
+type ChartRow = { date: string; x?: number; y?: number };
 
 const RANGE_LABEL: Record<GraphRangePreset, string> = {
   "30": "Last 30 days",
@@ -58,13 +59,60 @@ function fmt(n: unknown): string {
     : "";
 }
 
+function fmtDate(date: unknown): string {
+  if (typeof date !== "string") return "";
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function fmtAxisDate(date: unknown): string {
+  if (typeof date !== "string") return "";
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, { year: "2-digit", month: "short" });
+}
+
+function fmtFullDate(date: unknown): string {
+  if (typeof date !== "string") return "";
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+const tooltipTheme = {
+  contentStyle: {
+    backgroundColor: "rgb(var(--card))",
+    borderColor: "rgb(var(--border))",
+    borderRadius: 8,
+    color: "rgb(var(--card-fg))",
+    boxShadow: "0 12px 30px rgb(0 0 0 / 0.18)",
+  },
+  labelStyle: {
+    color: "rgb(var(--fg))",
+    fontWeight: 600,
+  },
+  itemStyle: {
+    color: "rgb(var(--card-fg))",
+  },
+} as const;
+
 function defaultDraft(series: SeriesDef[]): DraftGraph {
+  const preferred =
+    series.find((s) => s.key === "metric:browser_history_scrape.events") ??
+    series.find((s) => s.key === "metric:google_activity_scrape.events") ??
+    series.find((s) => s.key === "metric:browser_history.visits") ??
+    series.find((s) => s.key === "metric:google_myactivity.visits") ??
+    series.find((s) => s.key === "metric:chrome.visits") ??
+    series[0];
   return {
-    xKey: series[0]?.key ?? "",
-    yKey: series[1]?.key ?? series[0]?.key ?? "",
-    view: "correlation",
-    range: "30",
-    startDate: shiftDate(todayIso(), -29),
+    xKey: preferred?.key ?? "",
+    yKey: "",
+    view: "timeline",
+    // Default to a bounded window — "all" on a lifetime import draws years of
+    // points into the preview before the user asked for them.
+    range: preferred ? "90" : "30",
+    startDate: preferred ? undefined : shiftDate(todayIso(), -29),
     endDate: todayIso(),
   };
 }
@@ -124,26 +172,32 @@ function rangeDates(graph: Pick<SavedGraph, "range" | "startDate" | "endDate">, 
 
 function chartRows(graph: DraftGraph | SavedGraph, series: SeriesDef[]) {
   const x = series.find((s) => s.key === graph.xKey);
-  const y = series.find((s) => s.key === graph.yKey);
+  // Data 2 is optional on every view: one pick = one series, two picks = both.
+  const y = graph.yKey ? series.find((s) => s.key === graph.yKey) : undefined;
   if (!x) return { rows: [], x, y };
-  const dates = [...new Set([...x.values.keys(), ...(y ? [...y.values.keys()] : [])])].sort();
-  const { start, end } = rangeDates(graph, dates);
-  const filtered = dates.filter((d) => d >= start && d <= end);
 
-  if (graph.view === "timeline") {
+  if (graph.view === "timeline" || graph.view === "candles") {
+    const dates = [...new Set([...x.values.keys(), ...(y ? [...y.values.keys()] : [])])].sort();
+    const { start, end } = rangeDates(graph, dates);
     return {
       x,
       y,
-      rows: filtered.map((date) => ({ date, x: x.values.get(date), y: y?.values.get(date) })),
+      rows: dates.filter((d) => d >= start && d <= end).map((date) => ({ date, x: x.values.get(date), y: y?.values.get(date) })),
     };
   }
 
+  // Scatter presets anchor to the last PAIRED day. Two series with different
+  // end dates (a journal that stopped vs live browsing) would otherwise window
+  // into a stretch where only one of them exists and plot nothing.
+  if (!y) return { rows: [], x, y };
+  const paired = [...x.values.keys()].filter((d) => y.values.get(d) != null).sort();
+  const { start, end } = rangeDates(graph, paired);
   return {
     x,
     y,
-    rows: filtered
-      .map((date) => ({ date, x: x.values.get(date), y: y?.values.get(date) }))
-      .filter((row): row is { date: string; x: number; y: number } => row.x != null && row.y != null),
+    rows: paired
+      .filter((d) => d >= start && d <= end)
+      .map((date) => ({ date, x: x.values.get(date) as number, y: y.values.get(date) as number })),
   };
 }
 
@@ -164,6 +218,118 @@ function correlation(rows: Array<{ x?: number; y?: number }>): number | null {
   }
   const den = Math.sqrt(dx * dy);
   return den ? num / den : null;
+}
+
+interface Candle {
+  date: string;
+  label: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  n: number;
+}
+
+function candleBucket(date: string, mode: "day" | "week" | "month"): string {
+  if (mode === "day") return date;
+  if (mode === "month") return date.slice(0, 7);
+  // Local time like every other date helper here — UTC would shift week
+  // boundaries by a day for anyone west of Greenwich.
+  const d = new Date(`${date}T00:00:00`);
+  const day = d.getDay() || 7;
+  d.setDate(d.getDate() - day + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function candleLabel(bucket: string, mode: "day" | "week" | "month"): string {
+  if (mode === "month") return `${bucket}-01`;
+  return bucket;
+}
+
+function buildCandles(rows: ChartRow[]): { mode: "day" | "week" | "month"; candles: Candle[] } {
+  const points = rows.filter((r): r is { date: string; x: number } => typeof r.x === "number" && Number.isFinite(r.x));
+  const mode = points.length > 730 ? "month" : points.length > 120 ? "week" : "day";
+  const buckets = new Map<string, number[]>();
+  for (const p of points) {
+    const key = candleBucket(p.date, mode);
+    const arr = buckets.get(key) ?? [];
+    arr.push(p.x);
+    buckets.set(key, arr);
+  }
+  const candles = [...buckets.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([bucket, values]) => ({
+    date: candleLabel(bucket, mode),
+    label: bucket,
+    open: values[0],
+    high: Math.max(...values),
+    low: Math.min(...values),
+    close: values[values.length - 1],
+    n: values.length,
+  }));
+  return { mode, candles };
+}
+
+function CandleSvg({ rows, label }: { rows: ChartRow[]; label: string }) {
+  const { mode, candles } = useMemo(() => buildCandles(rows), [rows]);
+  const width = 1000;
+  const height = 320;
+  const margin = { top: 16, right: 24, bottom: 48, left: 86 };
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+  if (!candles.length) {
+    return <div className="flex h-full items-center justify-center text-sm text-muted-fg">No numeric candles in this range.</div>;
+  }
+  const min = Math.min(...candles.map((c) => c.low));
+  const max = Math.max(...candles.map((c) => c.high));
+  const pad = Math.max((max - min) * 0.08, max === min ? Math.max(Math.abs(max) * 0.1, 1) : 0);
+  const lo = min - pad;
+  const hi = max + pad;
+  const y = (v: number) => margin.top + ((hi - v) / (hi - lo || 1)) * plotH;
+  const x = (i: number) => margin.left + (candles.length === 1 ? plotW / 2 : (i / (candles.length - 1)) * plotW);
+  const candleW = Math.max(3, Math.min(18, (plotW / Math.max(candles.length, 1)) * 0.58));
+  const yTicks = Array.from({ length: 5 }, (_, i) => lo + ((hi - lo) * i) / 4);
+  const xTicks = candles.filter((_, i) => i === 0 || i === candles.length - 1 || i % Math.max(1, Math.ceil(candles.length / 6)) === 0);
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full overflow-visible" role="img" aria-label={`${label} candlestick chart`}>
+      <rect x={margin.left} y={margin.top} width={plotW} height={plotH} fill="transparent" />
+      {yTicks.map((tick) => (
+        <g key={tick}>
+          <line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} stroke="rgb(var(--border))" strokeDasharray="4 4" />
+          <text x={margin.left - 10} y={y(tick) + 4} textAnchor="end" className="fill-muted-fg text-[11px]">
+            {fmt(tick)}
+          </text>
+        </g>
+      ))}
+      {xTicks.map((tick) => (
+        <text key={tick.label} x={x(candles.indexOf(tick))} y={height - 20} textAnchor="middle" className="fill-muted-fg text-[11px]">
+          {fmtAxisDate(tick.date)}
+        </text>
+      ))}
+      <text x={margin.left + plotW / 2} y={height - 4} textAnchor="middle" className="fill-muted-fg text-[12px] font-medium">
+        Date ({mode} candles)
+      </text>
+      <text transform={`translate(18 ${margin.top + plotH / 2}) rotate(-90)`} textAnchor="middle" className="fill-muted-fg text-[12px] font-medium">
+        {label}
+      </text>
+      {candles.map((c, i) => {
+        const cx = x(i);
+        const up = c.close >= c.open;
+        const bodyTop = y(Math.max(c.open, c.close));
+        const bodyBottom = y(Math.min(c.open, c.close));
+        const bodyH = Math.max(2, bodyBottom - bodyTop);
+        const color = up ? "rgb(22 163 74)" : "rgb(220 38 38)";
+        return (
+          <g key={c.label}>
+            <title>
+              {`${fmtFullDate(c.date)}\nopen ${fmt(c.open)}\nhigh ${fmt(c.high)}\nlow ${fmt(c.low)}\nclose ${fmt(c.close)}\n${c.n} day${c.n === 1 ? "" : "s"}`}
+            </title>
+            <line x1={cx} x2={cx} y1={y(c.high)} y2={y(c.low)} stroke={color} strokeWidth={1.5} />
+            <rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH} rx={1} fill={color} opacity={0.82} />
+          </g>
+        );
+      })}
+    </svg>
+  );
 }
 
 function SearchSelect({
@@ -280,9 +446,13 @@ function GraphCard({
   const title =
     "name" in graph
       ? graph.name
-      : graph.view === "timeline"
-        ? `${x?.label ?? "Series"} timeline`
-        : `${x?.label ?? "Series"} vs ${y?.label ?? "Series"}`;
+      : graph.view === "candles"
+        ? `${x?.label ?? "Series"} candles`
+        : graph.view === "correlation"
+          ? `${x?.label ?? "Series"} vs ${y?.label ?? "Series"}`
+          : y
+            ? `${x?.label ?? "Series"} + ${y.label}`
+            : `${x?.label ?? "Series"} timeline`;
 
   return (
     <Card className="overflow-hidden">
@@ -308,15 +478,25 @@ function GraphCard({
           <div className="flex h-full items-center justify-center text-sm text-muted-fg">Choose data to graph.</div>
         ) : rows.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-fg">No points in this time range.</div>
+        ) : graph.view === "candles" ? (
+          <CandleSvg rows={rows} label={x.label} />
         ) : graph.view === "timeline" ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
               <CartesianGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }} tickMargin={8} />
+              <XAxis
+                dataKey="date"
+                tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }}
+                tickFormatter={fmtDate}
+                tickMargin={8}
+                minTickGap={18}
+                interval="preserveStartEnd"
+              />
               <YAxis tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }} tickFormatter={fmt} width={46} />
               <Tooltip
+                {...tooltipTheme}
                 formatter={(value, name) => [fmt(value), name === "x" ? x.label : y?.label]}
-                labelFormatter={(label) => String(label)}
+                labelFormatter={(label) => fmtDate(label)}
               />
               <Legend />
               <Line type="monotone" dataKey="x" name={x.label} stroke="rgb(var(--accent))" strokeWidth={2} dot={false} connectNulls />
@@ -345,9 +525,10 @@ function GraphCard({
                 width={46}
               />
               <Tooltip
+                {...tooltipTheme}
                 cursor={{ strokeDasharray: "3 3" }}
                 formatter={(value, name) => [fmt(value), name === "x" ? x.label : y?.label]}
-                labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ""}
+                labelFormatter={(_, payload) => fmtDate(payload?.[0]?.payload?.date)}
               />
               <Scatter name={`${x.label} vs ${y?.label}`} data={rows} fill="rgb(var(--accent))" />
             </ScatterChart>
@@ -368,7 +549,8 @@ export function GraphsWorkspace() {
     let alive = true;
     (async () => {
       const [journal, saved] = await Promise.all([
-        fetch("/api/journal").then((r) => (r.ok ? (r.json() as Promise<JournalData>) : null)),
+        // Full history, numbers only — graphs never read the (huge) cell text.
+        fetch("/api/journal?days=all&numeric=1").then((r) => (r.ok ? (r.json() as Promise<JournalData>) : null)),
         fetch("/api/graphs")
           .then((r) => (r.ok ? (r.json() as Promise<{ graphs: SavedGraph[] }>) : { graphs: [] }))
           .catch(() => ({ graphs: [] as SavedGraph[] })),
@@ -388,7 +570,9 @@ export function GraphsWorkspace() {
 
   useEffect(() => {
     setDraft((prev) => {
-      if (prev.xKey && series.some((s) => s.key === prev.xKey)) return prev;
+      if (prev.xKey && series.some((s) => s.key === prev.xKey)) {
+        if (!prev.yKey || series.some((s) => s.key === prev.yKey)) return prev;
+      }
       return defaultDraft(series);
     });
   }, [series]);
@@ -417,8 +601,17 @@ export function GraphsWorkspace() {
     if (!x || (draft.view === "correlation" && !y)) return;
     const graph: SavedGraph = {
       ...draft,
+      // Candles chart a single series; every other view keeps whatever was picked.
+      yKey: draft.view === "candles" ? "" : draft.yKey,
       id: uid(),
-      name: draft.view === "timeline" ? `${x.label} timeline` : `${x.label} vs ${y?.label}`,
+      name:
+        draft.view === "candles"
+          ? `${x.label} candles`
+          : draft.view === "correlation"
+            ? `${x.label} vs ${y?.label}`
+            : y
+              ? `${x.label} + ${y.label}`
+              : `${x.label} timeline`,
     };
     void persistGraphs([graph, ...graphs]);
   };
@@ -444,30 +637,37 @@ export function GraphsWorkspace() {
     <div className="space-y-4">
       <Card className="p-2">
         <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={draft.view}
+            onChange={(e) => {
+              const view = e.target.value as GraphViewType;
+              // Candles chart one series; the other views keep both picks.
+              setDraft((g) => ({ ...g, view, yKey: view === "candles" ? "" : g.yKey }));
+            }}
+            className="h-8 w-full text-[13px] sm:w-[136px]"
+            aria-label="Graph type"
+          >
+            <option value="timeline">Lines</option>
+            <option value="candles">Candles</option>
+            <option value="correlation">Scatter</option>
+          </Select>
           <SearchSelect
             value={draft.xKey}
             options={series}
             onChange={(value) => setDraft((g) => ({ ...g, xKey: value }))}
-            placeholder="First data"
+            placeholder="Data 1"
             className="w-full sm:w-[240px] lg:flex-1"
           />
-          <SearchSelect
-            value={draft.yKey}
-            options={series}
-            onChange={(value) => setDraft((g) => ({ ...g, yKey: value }))}
-            placeholder="Second data"
-            allowEmpty={draft.view === "timeline"}
-            className="w-full sm:w-[240px] lg:flex-1"
-          />
-          <Select
-            value={draft.view}
-            onChange={(e) => setDraft((g) => ({ ...g, view: e.target.value as GraphViewType }))}
-            className="h-8 w-full text-[13px] sm:w-[132px]"
-            aria-label="View type"
-          >
-            <option value="correlation">Points</option>
-            <option value="timeline">Timeline</option>
-          </Select>
+          {draft.view !== "candles" ? (
+            <SearchSelect
+              value={draft.yKey}
+              options={series}
+              onChange={(value) => setDraft((g) => ({ ...g, yKey: value }))}
+              placeholder={draft.view === "correlation" ? "Data 2" : "Data 2 (optional)"}
+              allowEmpty
+              className="w-full sm:w-[240px] lg:flex-1"
+            />
+          ) : null}
           <Select
             value={draft.range}
             onChange={(e) => setDraft((g) => ({ ...g, range: e.target.value as GraphRangePreset }))}

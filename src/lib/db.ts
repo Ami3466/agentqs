@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
  * Bump SCHEMA_VERSION whenever the DDL below changes so a stale cache is
  * detectably out of date and gets rebuilt.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Full schema. Three record-backed tables (daily / raw_inbox / sessions), a
@@ -56,6 +56,19 @@ CREATE TABLE sessions (
   commitments TEXT                   -- JSON array of strings
 );
 CREATE INDEX sessions_date ON sessions(date);
+
+CREATE TABLE events (
+  id     TEXT PRIMARY KEY,
+  date   TEXT NOT NULL,              -- ISO day bucket
+  ts     TEXT NOT NULL,              -- exact event timestamp when available
+  source TEXT NOT NULL,              -- google_myactivity | google_timeline | ...
+  title  TEXT,
+  text   TEXT NOT NULL,              -- readable event detail
+  url    TEXT,
+  meta   TEXT                        -- JSON blob, source-specific
+);
+CREATE INDEX events_date   ON events(date);
+CREATE INDEX events_source ON events(source);
 
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,

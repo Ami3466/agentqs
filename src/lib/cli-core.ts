@@ -23,6 +23,7 @@ import {
   readInboxFromRecord,
   readRecord,
   recordHash,
+  removeEventsBySource,
   revertEditsFromAppliedMeta,
   updateInboxItems,
 } from "./record";
@@ -35,6 +36,7 @@ import { importPlugin, resolveCredential, windowDays, type FetchLike } from "./i
 import { pluginInstanceById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
+import { sourceBundleById } from "./source-bundles";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, structurePending } from "./structure-run";
 import { wipeDemoOnImport } from "./demo";
@@ -111,7 +113,7 @@ export function query(sql: string, limit = 200): QueryResult {
 // ---- journal --------------------------------------------------------------
 
 export function journal(opts: { limit?: number; source?: string } = {}) {
-  const data = readJournal();
+  const data = readJournal({ days: opts.limit && opts.limit > 0 ? opts.limit : "all" });
   const metrics = opts.source
     ? data.metrics.filter((m) => m.source === opts.source)
     : data.metrics;
@@ -134,6 +136,21 @@ export function journalEdit(edits: DailyEdit[]) {
 
 export function logItems(limit = 50) {
   return readInboxFromRecord(recordDir()).slice(-limit).reverse();
+}
+
+/** Pending captures with FULL text — what a key-free CLI agent reads before
+ *  supplying the structured CSV to `structure({id, csv})`. */
+export function inboxPending() {
+  const items = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending");
+  return { pending: items.length, items };
+}
+
+/** Local semantic recall (no API key): meaning-search over memos, sessions and
+ *  imported journal text via the on-device embedding index. */
+export async function recall(query: string, limit = 5) {
+  const { semanticSearch } = await import("./embeddings");
+  const hits = await semanticSearch(query, { limit });
+  return { query, hits };
 }
 
 export function logReject(id: string) {
@@ -236,31 +253,89 @@ export function setInterval(id: string, interval: string): { id: string; interva
   return { id, interval };
 }
 
-/** Remove an automated import: drop the source's daily/<id>.csv, forget its
- *  credential + sync time + schedule, and rebuild. The source falls back to the
- *  Connections catalog (not connected). This is the "remove" the Data tab exposes. */
-export function disconnectSource(id: string): { id: string; removed: boolean; dailyRows: number } {
-  const automation = isAutomation(id);
-  const known =
-    automation ||
-    id === "github" ||
-    id === "whoop" ||
-    Boolean(pluginInstanceById(id)) || // includes "<plugin>-<n>" extra accounts
-    Boolean(fileImporterById(id));
-  if (!known) {
-    throw new Error(
-      `Unknown source "${id}". Try: github, ${[...PLUGINS.map((p) => p.id), ...FILE_IMPORTERS.map((f) => f.id)].join(", ")}`,
+function dailySourceFile(rDir: string, id: string): string {
+  if (!/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error(`Invalid source id "${id}".`);
+  return path.join(rDir, "daily", `${id}.csv`);
+}
+
+function hasRecordBackedSource(rDir: string, id: string): boolean {
+  try {
+    const file = dailySourceFile(rDir, id);
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function graphKeyReferencesSource(key: string, id: string): boolean {
+  return key === `count:source:${id}` || key.startsWith(`metric:${id}.`);
+}
+
+function forgetSourceConfig(cfg: AppConfig, id: string): void {
+  if (cfg.sourceCreds) delete cfg.sourceCreds[id];
+  if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
+  if (cfg.sourceIntervals) delete cfg.sourceIntervals[id];
+  if (cfg.savedGraphs) {
+    cfg.savedGraphs = cfg.savedGraphs.filter(
+      (g) => !graphKeyReferencesSource(g.xKey, id) && !graphKeyReferencesSource(g.yKey, id),
     );
   }
-  const rDir = recordDir();
+}
+
+function removeDailySourceFile(rDir: string, id: string): void {
   try {
-    fs.rmSync(path.join(rDir, "daily", `${id}.csv`), { force: true });
+    fs.rmSync(dailySourceFile(rDir, id), { force: true });
   } catch {
     /* non-fatal — nothing to remove */
   }
+  // Events the source landed (extension scrapes write record/events.jsonl with
+  // source == daily source id) leave the record with it.
+  removeEventsBySource(id, { recordDir: rDir });
+}
+
+function forgetSourceConfigs(cfg: AppConfig, ids: string[]): void {
+  for (const sourceId of ids) forgetSourceConfig(cfg, sourceId);
+}
+
+/** Remove an import/source: drop record/daily/<id>.csv, forget credential + sync
+ *  time + schedule + saved graphs that point at it, and rebuild. This covers
+ *  registered integrations and generic record-backed imports discovered from CSV. */
+export function disconnectSource(id: string): { id: string; removed: boolean; dailyRows: number } {
+  const rDir = recordDir();
+  const automation = isAutomation(id);
+  const bundle = sourceBundleById(id);
+  const bundleSourceIds = bundle?.sourceIds(rDir) ?? [];
+  const recordBacked = hasRecordBackedSource(rDir, id);
+  const known =
+    automation ||
+    Boolean(bundle && bundleSourceIds.length) ||
+    id === "github" ||
+    id === "whoop" ||
+    Boolean(pluginInstanceById(id)) || // includes "<plugin>-<n>" extra accounts
+    Boolean(fileImporterById(id)) ||
+    recordBacked;
+  if (!known) {
+    throw new Error(
+      `Unknown source "${id}". Try a connected source or a record-backed import in record/daily/<source>.csv.`,
+    );
+  }
+  if (bundle) {
+    for (const sourceId of bundleSourceIds) removeDailySourceFile(rDir, sourceId);
+    const cfg = requireConfig();
+    forgetSourceConfigs(cfg, [id, ...bundleSourceIds]);
+    writeConfig(cfg);
+    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    return { id, removed: true, dailyRows };
+  }
+  removeDailySourceFile(rDir, id);
   // Automations carry their own record + secrets — removeAutomation clears them.
   if (automation) {
     removeAutomation(id);
+    const latest = readConfig();
+    if (latest) {
+      forgetSourceConfig(latest, id);
+      writeConfig(latest);
+    }
     const dailyRows = rebuild({ recordDir: rDir }).daily;
     return { id, removed: true, dailyRows };
   }
@@ -270,17 +345,13 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
     delete cfg.githubSyncedAt;
   } else if (id === "whoop") {
     delete cfg.whoopCreds;
-    if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt.whoop;
     try {
       fs.rmSync(whoopHrDir(rDir), { recursive: true, force: true }); // per-minute HR files
     } catch {
       /* non-fatal */
     }
-  } else {
-    if (cfg.sourceCreds) delete cfg.sourceCreds[id];
-    if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
   }
-  if (cfg.sourceIntervals) delete cfg.sourceIntervals[id];
+  forgetSourceConfig(cfg, id);
   writeConfig(cfg);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   return { id, removed: true, dailyRows };
@@ -450,8 +521,10 @@ export async function syncFileSource(opts: {
     );
   }
   const rDir = recordDir();
+  const takeoutJson = importer.id === "chrome" && /\.json$/i.test(filePath);
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
-  const summary = await importFile(importer, { path: filePath, from: win.from, to: win.to }, rDir);
+  const from = opts.days && opts.days > 0 ? win.from : takeoutJson ? "0001-01-01" : win.from;
+  const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   persistSync(importer.id, undefined, new Date().toISOString());
   return {
@@ -549,8 +622,8 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
 }
 
 /** Turn pending inbox captures into daily rows (CSV free, prose needs a key). */
-export async function structure(opts: { id?: string } = {}) {
-  return structurePending({ id: opts.id });
+export async function structure(opts: { id?: string; csv?: string } = {}) {
+  return structurePending({ id: opts.id, csv: opts.csv });
 }
 
 // ---- config ---------------------------------------------------------------

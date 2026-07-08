@@ -260,7 +260,7 @@ source
   .command("file <id>")
   .description("import a Tier-2 local file source: chrome | iphone")
   .option("-p, --path <file>", "explicit file/backup path")
-  .option("-d, --days <n>", "trailing window", (v) => parseInt(v, 10))
+  .option("-d, --days <n>", "trailing window; Chrome Takeout JSON defaults to all", (v) => parseInt(v, 10))
   .action(async (id: string, opts: { path?: string; days?: number }) => {
     try {
       const r = await core.syncFileSource({ id, path: opts.path, days: opts.days });
@@ -383,12 +383,44 @@ program
 
 program
   .command("structure")
-  .description("turn pending inbox captures into daily rows")
+  .description("turn pending inbox captures into daily rows (CSV free; prose via AI key OR --csv from a CLI agent)")
   .option("--id <id>", "structure one item")
-  .action(async (opts: { id?: string }) => {
+  .option("--csv <csv>", "key-free agent route: supply the extracted daily CSV yourself (requires --id)")
+  .option("--csv-file <path>", "like --csv but read the CSV from a file")
+  .action(async (opts: { id?: string; csv?: string; csvFile?: string }) => {
     try {
-      const r = await core.structure({ id: opts.id });
+      const csv = opts.csv ?? (opts.csvFile ? fs.readFileSync(opts.csvFile, "utf8") : undefined);
+      const r = await core.structure({ id: opts.id, csv });
       out(r, (d) => (d.ok ? `Structured ${d.structured}; ${d.pending} still pending.` : d.error));
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
+  .command("inbox")
+  .description("pending captures with full text (the input for `structure --id --csv`)")
+  .action(() => {
+    try {
+      out(core.inboxPending(), (d) =>
+        d.items.map((i: { id: string; ts: string; source: string; kind: string; text: string }) => `${i.id}  ${i.ts.slice(0, 10)}  ${i.source}/${i.kind}  ${i.text.slice(0, 80).replace(/\n/g, " ")}`).join("\n") ||
+        "Inbox empty.",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
+  .command("recall <query...>")
+  .description("semantic recall over memos/sessions/journal text — local embeddings, no AI key")
+  .option("-n, --limit <n>", "max hits", (v) => parseInt(v, 10))
+  .action(async (words: string[], opts: { limit?: number }) => {
+    try {
+      const r = await core.recall(words.join(" "), opts.limit);
+      out(r, (d) =>
+        d.hits.map((h: { date: string; kind: string; snippet: string }) => `${h.date}  [${h.kind}]  ${h.snippet}`).join("\n") || "No semantic matches.",
+      );
     } catch (e) {
       die(e);
     }
@@ -568,14 +600,11 @@ program
     }
     const here = path.dirname(fileURLToPath(import.meta.url));
     const root = path.join(here, "..");
-    const standalone = path.join(root, ".next", "standalone", "server.js");
-    const child = fs.existsSync(standalone)
-      ? spawn(process.execPath, [standalone], {
-          stdio: "inherit",
-          cwd: root,
-          env: { ...process.env, PORT: opts.port, HOSTNAME: process.env.HOSTNAME || "0.0.0.0" },
-        })
-      : spawn(path.join(root, "node_modules", ".bin", "next"), ["start", "-p", opts.port], { stdio: "inherit", cwd: root });
+    const child = spawn(path.join(root, "node_modules", ".bin", "next"), ["start", "-p", opts.port], {
+      stdio: "inherit",
+      cwd: root,
+      env: { ...process.env, HOSTNAME: process.env.HOSTNAME || "0.0.0.0" },
+    });
     child.on("exit", (code) => process.exit(code ?? 0));
   });
 
