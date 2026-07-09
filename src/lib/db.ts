@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
  * Bump SCHEMA_VERSION whenever the DDL below changes so a stale cache is
  * detectably out of date and gets rebuilt.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Full schema. Three record-backed tables (daily / raw_inbox / sessions), a
@@ -77,8 +77,8 @@ CREATE TABLE meta (
 
 -- Free, always-on keyword search over every text stream (Loop 4 uses this).
 CREATE VIRTUAL TABLE search USING fts5(
-  ref  UNINDEXED,                    -- 'session:<id>' | 'inbox:<id>'
-  kind UNINDEXED,                    -- session | inbox
+  ref  UNINDEXED,                    -- 'session:<id>' | 'inbox:<id>' | 'daily:…' | 'event:<id>'
+  kind UNINDEXED,                    -- session | inbox | daily | event
   body
 );
 `;
@@ -120,8 +120,16 @@ export function openReadonly(file: string): DB {
 }
 
 /** Create a fresh in-memory DB with the schema applied — the rebuild target. */
-export function createEmpty(): DB {
-  const db = new Database(":memory:");
+/** Fresh empty cache. With a path, the build is file-backed — SQLite's bounded
+ *  page cache instead of the whole DB in RAM, which a million-event record needs;
+ *  the file is a scratch build (the caller VACUUMs it into place and deletes it),
+ *  so durability pragmas are off. Without a path it stays in memory (tests). */
+export function createEmpty(atPath?: string): DB {
+  const db = new Database(atPath ?? ":memory:");
+  if (atPath) {
+    db.pragma("journal_mode = OFF");
+    db.pragma("synchronous = OFF");
+  }
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
   db.exec(SCHEMA_SQL);
   return db;

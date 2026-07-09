@@ -31,7 +31,7 @@ import {
   User,
   Wand,
 } from "@/components/icons";
-import { CliRow, CopyRow, KeyRow, PH, SYNC_CMD, mcpSnip, skillSnip } from "@/components/connect-api";
+import { CliRow, CopyRow, KeyRow, PH, SYNC_CMD, mcpSnip, scanPromptSnip, skillSnip } from "@/components/connect-api";
 import { Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
@@ -1037,10 +1037,22 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
 const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[] = [
   { method: "POST", path: "/api/chat", body: `{"message":"…"}`, desc: "Ask your record — grounded answer with sources." },
   { method: "POST", path: "/api/search", body: `{"query":"…","limit":5}`, desc: "Semantic search — closest days plus a ready answer." },
-  { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens." },
-  { method: "GET", path: "/api/journal", desc: "List journal entries." },
+  { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens. GET lists pending captures; DELETE discards one." },
+  { method: "POST", path: "/api/structure", body: `{"id":"…"}`, desc: "Structure a pending capture into daily rows with the configured AI (or pass all: true). CLI/MCP can supply the CSV instead — no key needed." },
+  { method: "POST", path: "/api/scan", body: `{}`, desc: "Find duplicated daily columns (one metric imported manually AND by a sync); findings queue as inbox notifications. GET lists open findings; fix: true merges them all." },
+  { method: "GET", path: "/api/journal", desc: "List journal entries (?days=30, ?numeric=1)." },
+  { method: "POST", path: "/api/journal/edit", body: `{"edits":[…]}`, desc: "Edit the daily table — set/clear cells, drop rows or columns." },
   { method: "GET", path: "/api/daily", desc: "The structured daily table." },
-  { method: "GET", path: "/api/graphs", desc: "Graph definitions and their data." },
+  { method: "GET", path: "/api/events", desc: "Raw timeline events (?start=YYYY-MM-DD&end=…&limit=500)." },
+  { method: "GET", path: "/api/log", desc: "Captured log items; POST /api/log/reject {\"id\":\"…\"} undoes an import." },
+  { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; DELETE disconnects." },
+  { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source with its service key and run a sync (github, whoop, notion, …)." },
+  { method: "GET", path: "/api/automations", desc: "Browser-import recipes. POST saves one; POST /api/automations/run replays it; DELETE removes it." },
+  { method: "GET", path: "/api/skills", desc: "Mentor skills. POST adds or edits one; DELETE removes it." },
+  { method: "GET", path: "/api/graphs", desc: "Saved graph definitions. POST replaces the saved set." },
+  { method: "GET", path: "/api/embeddings", desc: "Semantic index status. POST reindexes from the record." },
+  { method: "GET", path: "/api/photos", desc: "Photo record status. POST imports a folder; POST /api/photos/search finds photos by description." },
+  { method: "GET", path: "/api/channels/{channel}", desc: "Is the telegram / slack bot wired up? The platform webhook POSTs here." },
 ];
 
 /**
@@ -1139,13 +1151,14 @@ function ApiTab() {
       <Section
         title="Connect"
         icon={Terminal}
-        desc="Ready-made snippets with your key filled in — sync from the CLI, add the MCP server, or drop in the agent skill."
+        desc="Ready-made snippets with your key filled in — sync from the CLI, add the MCP server, drop in the agent skill, or hand an AI the column-scan cleanup prompt."
       >
         <div className="space-y-2">
           <CliRow code={SYNC_CMD} />
           <div className="flex gap-2">
             <CopyRow label="Copy mcp" code={mcpSnip(base, key)} className="flex-1" />
             <CopyRow label="Copy skill" code={skillSnip(base, key)} className="flex-1" />
+            <CopyRow label="Copy scan prompt" code={scanPromptSnip(base, key)} className="flex-1" />
           </div>
           <p className="text-xs text-muted-fg">
             or work directly in your forked repo — the record is plain files in your own git repo.

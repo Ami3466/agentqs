@@ -4,16 +4,22 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
 import { JournalSearch } from "./journal-search";
-import { cn } from "./ui";
+import { RangePicker, rangeStart } from "./range-picker";
+import { Button, Segmented, Select } from "./ui";
 import { Spinner, X } from "./icons";
+import type { GraphRangePreset } from "@/lib/graphs";
 import type { JournalData, JournalView } from "@/lib/journal";
 
 type Mode = "timeline" | "table";
 const MODE_KEY = "agentqs_journal_mode";
-const MODE_LABEL: Record<Mode, string> = { table: "Table", timeline: "Timeline" };
+const MODE_OPTIONS = [
+  { value: "table", label: "Table" },
+  { value: "timeline", label: "Timeline" },
+] as const;
 
-/** Type filter values: everything, one source's metrics, or just memos/sessions. */
-type TypeFilter = "all" | "memos" | "sessions" | `src:${string}`;
+/** Type filter values: everything, one source's metrics, one metric column
+ * (set by clicking a tag in the Timeline), or just memos/sessions. */
+type TypeFilter = "all" | "memos" | "sessions" | `src:${string}` | `met:${string}`;
 
 /** Dev recompiles briefly 404 API routes (see next.config.mjs watchOptions note),
  * and one failed fetch used to leave the Journal on "Loading…" forever. Retry a
@@ -48,8 +54,11 @@ export function JournalWorkspace() {
 
   // ---- filters (date range + data type) ----
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [range, setRange] = useState<GraphRangePreset>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const dateFrom = rangeStart(range, customFrom);
+  const dateTo = range === "custom" ? customTo : "";
   const filtersActive = typeFilter !== "all" || !!dateFrom || !!dateTo;
 
   const sources = useMemo(
@@ -73,6 +82,17 @@ export function JournalWorkspace() {
     } else if (typeFilter === "sessions") {
       days = days.filter((d) => d.sessions.length);
       if (mode === "timeline") days = days.map((d) => ({ ...d, values: {}, memos: [] }));
+    } else if (typeFilter.startsWith("met:")) {
+      const key = typeFilter.slice(4);
+      days = days.filter((d) => d.values[key] !== undefined);
+      if (mode === "timeline") {
+        days = days.map((d) => ({
+          ...d,
+          values: d.values[key] !== undefined ? { [key]: d.values[key] } : {},
+          memos: [],
+          sessions: [],
+        }));
+      }
     } else if (typeFilter.startsWith("src:")) {
       const src = typeFilter.slice(4);
       const keys = new Set(data.metrics.filter((m) => m.source === src).map((m) => m.key));
@@ -91,9 +111,19 @@ export function JournalWorkspace() {
 
   const clearFilters = () => {
     setTypeFilter("all");
-    setDateFrom("");
-    setDateTo("");
+    setRange("all");
+    setCustomFrom("");
+    setCustomTo("");
   };
+
+  /** The metric behind an active `met:` filter (label for the type select). */
+  const activeMetric = useMemo(
+    () =>
+      typeFilter.startsWith("met:")
+        ? (data?.metrics.find((m) => m.key === typeFilter.slice(4)) ?? null)
+        : null,
+    [typeFilter, data],
+  );
 
   // restore last-used view mode
   useEffect(() => {
@@ -135,9 +165,24 @@ export function JournalWorkspace() {
     }
   }, []);
 
+  /** Quiet refetch (column scanner merges): refresh the data in place without
+   * flipping `loading`, so the Table — and the scanner's result panel — stay
+   * mounted. */
+  const reload = useCallback(async () => {
+    const d = await fetchJournalRetrying(fullHistory ? "/api/journal?days=all" : "/api/journal?days=180");
+    if (d) setData(d);
+  }, [fullHistory]);
+
   const setModePersist = (m: Mode) => {
     setMode(m);
     localStorage.setItem(MODE_KEY, m);
+  };
+
+  /** A tag clicked in the Timeline: filter to it and jump to the Table, which
+   * shows every day logged under that source/metric. */
+  const drillToTable = (filter: TypeFilter) => {
+    setTypeFilter(filter);
+    setModePersist("table");
   };
 
   const persistViews = useCallback(async (next: JournalView[]) => {
@@ -166,31 +211,23 @@ export function JournalWorkspace() {
               (fullHistory || data.days.length >= data.totalDays ? "" : ` · showing last ${data.days.length.toLocaleString()}`)
             : " "}
         </p>
-        <div className="flex rounded-lg border border-border bg-card p-0.5 text-sm">
-          {(["table", "timeline"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setModePersist(m)}
-              className={cn(
-                "rounded-md px-3 py-1.5 font-medium transition-colors",
-                mode === m ? "bg-muted text-fg" : "text-muted-fg hover:text-fg",
-              )}
-            >
-              {MODE_LABEL[m]}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          options={MODE_OPTIONS}
+          value={mode}
+          onChange={setModePersist}
+          aria-label="View mode"
+        />
       </div>
 
       <JournalSearch />
 
       {data ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <select
+          <Select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
-            className="h-8 rounded-lg border border-border bg-card px-2 text-[13px] text-fg focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            aria-label="Data type"
+            className="h-8 w-full text-[13px] sm:w-[168px]"
           >
             <option value="all">All data</option>
             {sources.map((s) => (
@@ -200,34 +237,28 @@ export function JournalWorkspace() {
             ))}
             {hasMemos ? <option value="memos">Memos</option> : null}
             {hasSessions ? <option value="sessions">Sessions</option> : null}
-          </select>
-          <input
-            type="date"
-            value={dateFrom}
-            max={dateTo || undefined}
-            onChange={(e) => setDateFrom(e.target.value)}
-            aria-label="From date"
-            className="h-8 rounded-lg border border-border bg-card px-2 text-[13px] text-fg focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          />
-          <span className="text-[13px] text-muted-fg">to</span>
-          <input
-            type="date"
-            value={dateTo}
-            min={dateFrom || undefined}
-            onChange={(e) => setDateTo(e.target.value)}
-            aria-label="To date"
-            className="h-8 rounded-lg border border-border bg-card px-2 text-[13px] text-fg focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            {typeFilter.startsWith("met:") ? (
+              <option value={typeFilter}>
+                {activeMetric
+                  ? `${activeMetric.source} · ${activeMetric.metric}`
+                  : typeFilter.slice(4)}
+              </option>
+            ) : null}
+          </Select>
+          <RangePicker
+            value={range}
+            onChange={setRange}
+            startDate={customFrom}
+            endDate={customTo}
+            onStartDate={setCustomFrom}
+            onEndDate={setCustomTo}
           />
           {filtersActive ? (
             <>
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-card px-2.5 text-[13px] font-medium text-muted-fg transition-colors hover:bg-muted hover:text-fg"
-              >
+              <Button size="sm" variant="secondary" onClick={clearFilters}>
                 <X width={12} height={12} />
                 Clear
-              </button>
+              </Button>
               {filtered ? (
                 <span className="text-[11px] text-muted-fg">
                   {filtered.days.length.toLocaleString()} day
@@ -257,14 +288,20 @@ export function JournalWorkspace() {
           </button>
         </div>
       ) : mode === "timeline" ? (
-        <JournalTimeline data={filtered} />
+        <JournalTimeline
+          data={filtered}
+          onMetricClick={(key) => drillToTable(`met:${key}`)}
+          onSourceClick={(source) => drillToTable(`src:${source}`)}
+        />
       ) : (
         <JournalTable
           data={filtered}
           views={views}
           onViewsChange={persistViews}
           onData={setData}
+          onReload={() => void reload()}
           sourceFilter={typeFilter.startsWith("src:") ? typeFilter.slice(4) : null}
+          metricFilter={typeFilter.startsWith("met:") ? typeFilter.slice(4) : null}
           fullHistory={fullHistory || data.days.length >= data.totalDays}
           loadingFull={loadingFull}
           onLoadFullHistory={() => void loadFullHistory()}

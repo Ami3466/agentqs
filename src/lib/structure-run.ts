@@ -10,6 +10,7 @@ import { wipeDemoOnImport } from "./demo";
 import { recordDir } from "./paths";
 import { mergeDailyCsv, readInboxFromRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
 import { llmComplete } from "./llm";
+import { acceptColumnMerge, columnGuard, columnMergeOf, splitColumnKey } from "./column-scan";
 import {
   parseLlmCsv,
   proseExtractionSystem,
@@ -18,7 +19,7 @@ import {
   structureCsv,
 } from "./structure";
 
-export type StructureRoute = "csv" | "llm" | "agent";
+export type StructureRoute = "csv" | "llm" | "agent" | "merge";
 export type StructureStatus = "structured" | "empty" | "error";
 
 export interface StructureItemResult {
@@ -38,6 +39,8 @@ export interface StructureRunResult {
   results: StructureItemResult[];
   pending: number;
   dailyRows: number | null;
+  /** The column scanner's post-structure pass (see column-scan.ts). */
+  scan?: { autoMerged: number; findings: number; notified: number };
   error?: string;
 }
 
@@ -109,6 +112,43 @@ export async function structurePending(
   let mutated = false;
 
   for (const item of targets) {
+    // Scanner notifications ARE a type of structuring: instead of extracting a
+    // CSV, structuring one applies its column merge and saves the rule so the
+    // duplicate can't come back. Undo metadata mirrors a normal merge.
+    if (item.kind === "notification") {
+      const cm = columnMergeOf(item.meta);
+      if (!cm) {
+        results.push({ id: item.id, route: "merge", status: "empty", message: "Notification carries no merge action." });
+        continue;
+      }
+      const outcome = acceptColumnMerge(rDir, cm.from, cm.into);
+      if (outcome.applied.length) mutated = true;
+      patches.push({
+        id: item.id,
+        status: "structured",
+        meta: {
+          ...(item.meta && typeof item.meta === "object" ? item.meta : {}),
+          structuredAt: new Date().toISOString(),
+          via: "merge",
+          source: splitColumnKey(cm.into).source,
+          cells: outcome.moved,
+          applied: outcome.applied,
+        },
+      });
+      results.push({
+        id: item.id,
+        route: "merge",
+        status: "structured",
+        source: splitColumnKey(cm.into).source,
+        rowsAdded: outcome.moved,
+        metrics: [splitColumnKey(cm.into).metric],
+        dates: outcome.moved,
+        message: outcome.applied.length
+          ? `Merged ${cm.from} into ${cm.into}: ${outcome.moved} value${outcome.moved === 1 ? "" : "s"} moved, ${outcome.kept} conflict${outcome.kept === 1 ? "" : "s"} kept from ${cm.into}.`
+          : `${cm.from} is already gone — saved the rule so it stays merged into ${cm.into}.`,
+      });
+      continue;
+    }
     // Images never structure here — their body is a base64 data URL, not notes
     // (the Photos import owns pictures). Skip before burning an LLM call on it.
     if (item.kind === "image" || item.text.startsWith("data:")) {
@@ -195,6 +235,10 @@ export async function structurePending(
   }
 
   if (patches.length) updateInboxItems(patches, { recordDir: rDir });
+  // The post-structure column check: re-apply saved merge rules and queue a
+  // notification for any NEW duplicate the fresh rows just created — before the
+  // rebuild, so the cache already reflects both.
+  const guard = mutated ? columnGuard(rDir) : null;
   const rebuilt = mutated ? rebuild({ recordDir: rDir }) : null;
   const remaining = readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
 
@@ -204,5 +248,8 @@ export async function structurePending(
     results,
     pending: remaining,
     dailyRows: rebuilt?.daily ?? null,
+    ...(guard
+      ? { scan: { autoMerged: guard.autoMerged.length, findings: guard.findings.length, notified: guard.notified } }
+      : {}),
   };
 }

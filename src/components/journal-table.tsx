@@ -13,6 +13,7 @@ import {
 import type { JournalData, JournalDay, JournalView } from "@/lib/journal";
 import { Button, cn } from "./ui";
 import { Bookmark, GripVertical, Pencil, Plus, Spinner, X } from "./icons";
+import { ColumnScanner } from "./column-scanner";
 
 interface ColMeta {
   source?: string;
@@ -100,7 +101,9 @@ export function JournalTable({
   views,
   onViewsChange,
   onData,
+  onReload,
   sourceFilter = null,
+  metricFilter = null,
   fullHistory = true,
   loadingFull = false,
   onLoadFullHistory,
@@ -110,9 +113,14 @@ export function JournalTable({
   onViewsChange: (next: JournalView[]) => void;
   /** Receives the fresh journal returned by /api/journal/edit after a Save. */
   onData: (next: JournalData) => void;
+  /** Quiet refetch after the column scanner merged something (no loading flash). */
+  onReload?: () => void;
   /** Show only this source's columns — a display overlay, NOT persisted, so the
    * saved layout/views survive filtering. */
   sourceFilter?: string | null;
+  /** Show only this one metric column (a Timeline tag click). Same render-time
+   * overlay; forces the column visible even if the saved layout hid it. */
+  metricFilter?: string | null;
   /** false → only a recent window is loaded; the footer offers the full fetch. */
   fullHistory?: boolean;
   loadingFull?: boolean;
@@ -425,11 +433,15 @@ export function JournalTable({
   // The source filter hides other columns at render time only; the persisted
   // `columnVisibility` state stays what the user chose.
   const effectiveVisibility = useMemo<VisibilityState>(() => {
-    if (!sourceFilter) return columnVisibility;
+    if (!sourceFilter && !metricFilter) return columnVisibility;
     const v: VisibilityState = { ...columnVisibility };
-    for (const m of data.metrics) if (m.source !== sourceFilter) v[m.key] = false;
+    if (metricFilter) {
+      for (const m of data.metrics) v[m.key] = m.key === metricFilter;
+    } else {
+      for (const m of data.metrics) if (m.source !== sourceFilter) v[m.key] = false;
+    }
     return v;
-  }, [columnVisibility, sourceFilter, data.metrics]);
+  }, [columnVisibility, sourceFilter, metricFilter, data.metrics]);
 
   const table = useReactTable({
     data: visibleRows,
@@ -704,6 +716,9 @@ export function JournalTable({
       </div>
 
       {editError ? <p className="mb-2 text-xs text-destructive">{editError}</p> : null}
+
+      {/* column scanner — find + merge duplicated columns (manual vs auto imports) */}
+      {!editing && onReload ? <ColumnScanner onMerged={onReload} /> : null}
 
       {/* table */}
       <div className="scrollbar-thin overflow-x-auto rounded-xl border border-border">

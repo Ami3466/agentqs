@@ -49,6 +49,15 @@ export interface ChannelReplyPrefs {
   model?: string;
 }
 
+/** One accepted column merge: values written to `from` fold into `into` on every
+ *  future import, the automatic side winning conflicts — so a duplicate column
+ *  merged once can never split again. Keys are `source.metric`. */
+export interface ColumnMergeRule {
+  from: string;
+  into: string;
+  savedAt: string;
+}
+
 /** Channel links set from Settings (fall back to process.env when unset). */
 export interface ChannelsConfig {
   telegramBotToken?: string;
@@ -91,6 +100,7 @@ export interface AppConfig {
   apiKey?: string; // bearer token for the HTTP API over the wire (generated in Connect)
   demoSeeded?: boolean; // generic demo data is loaded; auto-wiped on the first real import
   autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)
+  columnMerges?: ColumnMergeRule[]; // accepted duplicate-column merges, re-applied on every import (column scanner)
 }
 
 /** Are semantic embeddings on at all? Default true — the Settings checkbox flips it off. */

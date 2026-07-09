@@ -235,6 +235,9 @@ export function readJournal(opts: ReadJournalOptions = {}): JournalData {
     }
 
     for (const it of inboxRaw) {
+      // Scanner notifications are app plumbing, not life captures — they live in
+      // the Inbox panel and the Log, never on the Journal as memos.
+      if (it.kind === "notification") continue;
       const date = (it.ts || "").slice(0, 10);
       if (!date || date < minDate) continue;
       ensure(date).memos.push({

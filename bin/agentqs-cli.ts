@@ -99,6 +99,32 @@ program
     }
   });
 
+// ---- column scanner ---------------------------------------------------------
+program
+  .command("scan")
+  .description("find duplicated/near-duplicate daily columns (manual vs auto imports) and queue merge notifications")
+  .option("--fix", "apply every suggested merge now and save the rules")
+  .action((opts: { fix?: boolean }) => {
+    try {
+      out(core.scan({ fix: opts.fix }), (d) => {
+        const lines: string[] = [];
+        for (const m of d.autoMerged) lines.push(`auto-merged ${m.from} → ${m.into} (${m.moved} moved, ${m.kept} conflicts kept)`);
+        for (const f of d.findings) {
+          const state = f.notificationStatus === "pending" ? "" : ` [${f.notificationStatus}]`;
+          lines.push(`${f.from.key} → ${f.into.key}${f.intoAuto ? " (auto wins)" : ""}  ${f.reason}${state}`);
+        }
+        for (const m of d.fixed) lines.push(`merged ${m.from} → ${m.into} (${m.moved} moved, ${m.kept} conflicts kept)`);
+        if (!lines.length) return "No duplicate columns found.";
+        if (d.findings.length && !d.fixed.length) {
+          lines.push(`\n${d.findings.length} finding${d.findings.length === 1 ? "" : "s"} queued as inbox notifications — structure one to merge, or rerun with --fix.`);
+        }
+        return lines.join("\n");
+      });
+    } catch (e) {
+      die(e);
+    }
+  });
+
 const log = program.command("log").description("inspect and reject captured log items");
 log
   .command("list", { isDefault: true })

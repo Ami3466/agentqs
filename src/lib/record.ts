@@ -271,24 +271,29 @@ function readInbox(dir: string): InboxItem[] {
     .sort((a, b) => cmp(a.ts, b.ts) || cmp(a.id, b.id));
 }
 
+/** Normalize one parsed events.jsonl object, or null when it isn't an event.
+ *  Shared by readEvents and the streaming rebuild so both agree on the shape. */
+function eventFromJsonlObject(o: Record<string, unknown>): EventItem | null {
+  const ts = String(o.ts ?? o.time ?? "");
+  const date = String(o.date ?? ts.slice(0, 10));
+  const e: EventItem = {
+    id: String(o.id),
+    date,
+    ts: ts || `${date}T00:00:00.000Z`,
+    source: String(o.source ?? "event"),
+    title: str(o.title),
+    text: String(o.text ?? o.action ?? o.title ?? ""),
+    url: str(o.url),
+    meta: o.meta ?? null,
+  };
+  return e.id && e.date && e.text ? e : null;
+}
+
 function readEvents(dir: string): EventItem[] {
   const raw = readJsonl(path.join(dir, "events.jsonl"));
   return raw
-    .map((o) => {
-      const ts = String(o.ts ?? o.time ?? "");
-      const date = String(o.date ?? ts.slice(0, 10));
-      return {
-        id: String(o.id),
-        date,
-        ts: ts || `${date}T00:00:00.000Z`,
-        source: String(o.source ?? "event"),
-        title: str(o.title),
-        text: String(o.text ?? o.action ?? o.title ?? ""),
-        url: str(o.url),
-        meta: o.meta ?? null,
-      };
-    })
-    .filter((e) => e.id && e.date && e.text)
+    .map(eventFromJsonlObject)
+    .filter((e): e is EventItem => e !== null)
     .sort((a, b) => cmp(a.date, b.date) || cmp(a.ts, b.ts) || cmp(a.id, b.id));
 }
 
@@ -658,6 +663,12 @@ export function appendEvents(
  *  a full rebuild per batch (a full rebuild re-parses the whole events.jsonl —
  *  far too heavy to run 100+ times per import). No-op when the cache doesn't
  *  exist yet; the next full rebuild converges the cache exactly. */
+/** One event's keyword-search body. The date + source lead so "2015" or "spotify"
+ *  match too. The fast-path SQL in rebuild() mirrors this expression exactly. */
+function eventSearchBody(e: EventItem): string {
+  return `${e.date} ${e.source}\n${e.title ? `${e.title}\n` : ""}${e.text}`;
+}
+
 export function insertEventsIntoCache(
   items: EventItem[],
   opts: { dataDir?: string } = {},
@@ -670,6 +681,9 @@ export function insertEventsIntoCache(
       const ins = db.prepare(
         "INSERT OR IGNORE INTO events (id,date,ts,source,title,text,url,meta) VALUES (?,?,?,?,?,?,?,?)",
       );
+      // FTS5 has no uniqueness, so a search row is added only when the events
+      // insert actually landed — otherwise re-posted batches would duplicate it.
+      const insSearch = db.prepare("INSERT INTO search (ref,kind,body) VALUES (?,?,?)");
       let n = 0;
       const tx = db.transaction(() => {
         for (const e of items) {
@@ -684,6 +698,7 @@ export function insertEventsIntoCache(
             e.meta == null ? null : JSON.stringify(e.meta),
           );
           n += r.changes;
+          if (r.changes > 0) insSearch.run(`event:${e.id}`, "event", eventSearchBody(e));
         }
       });
       tx();
@@ -831,7 +846,8 @@ export interface AppliedCell {
   d: string; // date
   m: string; // metric
   p: string | null; // value before this write (null = the cell didn't exist)
-  v?: string; // value this write set (absent on items structured before it was recorded)
+  v?: string; // value this write set ("" = the cell was cleared; absent on items structured before it was recorded)
+  s?: string; // source override — a column merge touches two sources, so cells carry their own
 }
 
 export interface DailyMergeResult {
@@ -972,11 +988,11 @@ export function revertEditsFromAppliedMeta(meta: unknown): DailyEdit[] {
   const edits: DailyEdit[] = [];
   for (const c of [...o.applied].reverse()) {
     if (!c || typeof c !== "object") continue;
-    const cell = c as { d?: unknown; m?: unknown; p?: unknown; v?: unknown };
+    const cell = c as { d?: unknown; m?: unknown; p?: unknown; v?: unknown; s?: unknown };
     if (typeof cell.d !== "string" || typeof cell.m !== "string" || typeof cell.v !== "string") continue;
     edits.push({
       op: "revertSet",
-      source: o.source,
+      source: typeof cell.s === "string" && cell.s ? cell.s : o.source,
       metric: cell.m,
       date: cell.d,
       value: typeof cell.p === "string" ? cell.p : "",
@@ -1193,13 +1209,50 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
     daily: readDailyFromRecord(rDir),
     inbox: readInboxFromRecord(rDir),
     sessions: readSessionsFromRecord(rDir),
-    events: copyEventsFrom ? [] : readEvents(rDir),
+    events: [], // never held in RAM — streamed into a staging table below
   };
   const hash = recordHash(rDir);
-  const eventRows = copyEventsFrom ? copiedEventRows : record.events.length;
 
-  const db = createEmpty();
+  // The build DB is file-backed: SQLite's bounded page cache instead of the whole
+  // cache in RAM (a million-event record OOMs an in-memory build). Events stream
+  // from events.jsonl into a staging table, and both the canonical `events` insert
+  // and the search index copy out of it in sorted order — so the full parse and
+  // the fast path run the exact same SQL.
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const buildPath = `${outPath}.build-${process.pid}`;
+  fs.rmSync(buildPath, { force: true });
+  const db = createEmpty(buildPath);
   if (copyEventsFrom) db.exec(`ATTACH DATABASE '${copyEventsFrom.replace(/'/g, "''")}' AS prev`);
+
+  let eventRows = copiedEventRows;
+  if (!copyEventsFrom) {
+    db.exec(
+      "CREATE TABLE events_stage (id TEXT, date TEXT, ts TEXT, source TEXT, title TEXT, text TEXT, url TEXT, meta TEXT)",
+    );
+    const insStage = db.prepare("INSERT INTO events_stage VALUES (?,?,?,?,?,?,?,?)");
+    if (fs.existsSync(eventsFile)) {
+      db.exec("BEGIN");
+      forEachFileLine(eventsFile, (line) => {
+        const t = line.trim();
+        if (t === "") return;
+        let o: Record<string, unknown>;
+        try {
+          o = JSON.parse(t) as Record<string, unknown>;
+        } catch {
+          return; // same skip-bad-lines semantics as readJsonl
+        }
+        const e = eventFromJsonlObject(o);
+        if (!e) return;
+        insStage.run(e.id, e.date, e.ts, e.source, e.title, e.text, e.url, e.meta == null ? null : JSON.stringify(e.meta));
+        eventRows += 1;
+        if (eventRows % 50_000 === 0) {
+          db.exec("COMMIT");
+          db.exec("BEGIN");
+        }
+      });
+      db.exec("COMMIT");
+    }
+  }
   const insertAll = db.transaction((rec: RecordData) => {
     const insDaily = db.prepare(
       "INSERT OR REPLACE INTO daily (date,source,metric,value_num,value_text) VALUES (?,?,?,?,?)",
@@ -1238,26 +1291,10 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
         JSON.stringify(s.commitments),
       );
 
-    if (copyEventsFrom) {
-      // Same canonical order the parse path inserts in, so both paths produce
-      // byte-identical caches (rebuild:verify asserts this).
-      db.exec("INSERT INTO events SELECT id,date,ts,source,title,text,url,meta FROM prev.events ORDER BY date, ts, id");
-    } else {
-      const insEvent = db.prepare(
-        "INSERT INTO events (id,date,ts,source,title,text,url,meta) VALUES (?,?,?,?,?,?,?,?)",
-      );
-      for (const e of rec.events)
-        insEvent.run(
-          e.id,
-          e.date,
-          e.ts,
-          e.source,
-          e.title,
-          e.text,
-          e.url,
-          e.meta == null ? null : JSON.stringify(e.meta),
-        );
-    }
+    // Same canonical order on both paths, so a fast-path build and a full parse
+    // produce byte-identical caches (rebuild:verify asserts this).
+    const eventsSrc = copyEventsFrom ? "prev.events" : "events_stage";
+    db.exec(`INSERT INTO events SELECT id,date,ts,source,title,text,url,meta FROM ${eventsSrc} ORDER BY date, ts, id`);
 
     const insSearch = db.prepare(
       "INSERT INTO search (ref,kind,body) VALUES (?,?,?)",
@@ -1277,6 +1314,16 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
       if (it.kind === "image") continue;
       insSearch.run(`inbox:${it.id}`, "inbox", it.text);
     }
+    // Events (imports, scrapes, listening history) join the same keyword index so
+    // search reaches the whole timeline. This SELECT must mirror eventSearchBody
+    // (the incremental insert path) exactly.
+    db.exec(
+      `INSERT INTO search (ref,kind,body)
+       SELECT 'event:' || id, 'event',
+              date || ' ' || source || char(10) ||
+              CASE WHEN title IS NOT NULL AND title != '' THEN title || char(10) ELSE '' END || text
+       FROM ${eventsSrc} ORDER BY date, ts, id`,
+    );
 
     const insMeta = db.prepare("INSERT INTO meta (key,value) VALUES (?,?)");
     insMeta.run("schema_version", String(SCHEMA_VERSION));
@@ -1289,11 +1336,11 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
   });
   insertAll(record);
   if (copyEventsFrom) db.exec("DETACH DATABASE prev");
+  else db.exec("DROP TABLE events_stage");
 
   // VACUUM into a sibling temp file, then rename over the old cache: readers
   // (the running app) never observe a missing or half-written DB, even when the
   // write takes seconds on a large record.
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   const tmpPath = `${outPath}.rebuild-${process.pid}`;
   for (const p of [tmpPath, `${outPath}-wal`, `${outPath}-shm`, `${outPath}-journal`])
     if (fs.existsSync(p)) fs.rmSync(p);
@@ -1301,6 +1348,7 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
     db.exec(`VACUUM INTO '${tmpPath.replace(/'/g, "''")}'`);
   } finally {
     db.close();
+    fs.rmSync(buildPath, { force: true });
   }
   fs.renameSync(tmpPath, outPath);
 
