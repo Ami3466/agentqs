@@ -1038,7 +1038,7 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "POST", path: "/api/chat", body: `{"message":"…"}`, desc: "Ask your record — grounded answer with sources." },
   { method: "POST", path: "/api/search", body: `{"query":"…","limit":5}`, desc: "Semantic search — closest days plus a ready answer." },
   { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens. GET lists pending captures; DELETE discards one." },
-  { method: "POST", path: "/api/structure", body: `{"id":"…"}`, desc: "Structure a pending capture into daily rows with the configured AI (or pass all: true). CLI/MCP can supply the CSV instead — no key needed." },
+  { method: "POST", path: "/api/structure", body: `{"id":"…"}`, desc: "Structure a pending capture into daily rows with the configured AI (or pass all: true). Pass csv with the extracted date,… rows to structure key-free — same contract as the CLI/MCP tool." },
   { method: "POST", path: "/api/scan", body: `{}`, desc: "Find duplicated daily columns (one metric imported manually AND by a sync); findings queue as inbox notifications. GET lists open findings; fix: true merges them all." },
   { method: "GET", path: "/api/journal", desc: "List journal entries (?days=30, ?numeric=1)." },
   { method: "POST", path: "/api/journal/edit", body: `{"edits":[…]}`, desc: "Edit the daily table — set/clear cells, drop rows or columns." },

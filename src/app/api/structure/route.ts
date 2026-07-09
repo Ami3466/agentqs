@@ -10,15 +10,17 @@ export const dynamic = "force-dynamic";
  * (clean CSV → direct column map, prose → LLM). One implementation backs this
  * route, the `agentqs structure` CLI, and the MCP tool.
  *
- * Body: `{ id }` structures one pending item; `{}` / `{ all: true }` drains all.
+ * Body: `{ id }` structures one pending item; `{}` / `{ all: true }` drains all;
+ * `{ id, csv }` is the key-free agent route — the caller did the reasoning and
+ * hands the exact `date,...` CSV to merge (same contract as the CLI/MCP tool).
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as { id?: string; all?: boolean };
-  const r = await structurePending({ id: body.id, all: body.all }); // wipes demo itself
+  const body = (await req.json().catch(() => ({}))) as { id?: string; all?: boolean; csv?: string };
+  const r = await structurePending({ id: body.id, all: body.all, csv: body.csv }); // wipes demo itself
   if (!r.ok) {
     return NextResponse.json({ error: r.error }, { status: r.error?.includes("isn't in") ? 404 : 400 });
   }
