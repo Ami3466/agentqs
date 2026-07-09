@@ -371,6 +371,14 @@ function eventDateFromFlat(parts: string[], fallback = new Date()): Date | null 
   return null;
 }
 
+/** Machine noise inside a raw activity item that must never become event text:
+ *  continuation/tracking tokens (long unbroken base64url blobs) and
+ *  protocol-relative asset URLs (product icons like //www.gstatic.com/...). */
+export function isGoogleOpaqueBlob(s: string): boolean {
+  if (s.startsWith("//")) return true;
+  return /^[A-Za-z0-9_=-]{40,}$/.test(s);
+}
+
 export function extractGoogleActivityApiEvents(
   items: unknown[],
   preset: GoogleScrapePreset,
@@ -394,6 +402,7 @@ export function extractGoogleActivityApiEvents(
       if (/^\d+$/.test(s)) return false;
       if (/^https?:\/\//i.test(s)) return false;
       if (/^https?:/i.test(s)) return false;
+      if (isGoogleOpaqueBlob(s)) return false;
       return true;
     });
     const title = useful[0] ?? url ?? "Google activity";

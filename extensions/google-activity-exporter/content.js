@@ -382,15 +382,24 @@
     form.set("f.req", JSON.stringify(envelope));
     if (api.at) form.set("at", api.at);
 
-    const res = await fetch(url.toString(), {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "x-same-domain": "1",
-      },
-      body: form.toString(),
-    });
+    let res;
+    try {
+      res = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "x-same-domain": "1",
+        },
+        body: form.toString(),
+      });
+    } catch (e) {
+      // Network-layer failure ("Failed to fetch": wifi blip, sleep/wake, transient
+      // DNS) — retry inline with backoff instead of tearing the whole run down.
+      const err = new Error(`Google RPC network error: ${e && e.message ? e.message : e}`);
+      err.retryable = true;
+      throw err;
+    }
     const text = await res.text();
     if (!res.ok) {
       // 401/403 mid-run = the Google session expired — user action needed.
