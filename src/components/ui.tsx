@@ -284,11 +284,31 @@ export function Checkbox({
   );
 }
 
-export function Badge({ children, title }: { children: ReactNode; title?: string }) {
+const BADGE_TONES = {
+  neutral: "border-border bg-muted text-muted-fg",
+  warning: "border-warning/30 bg-warning/10 text-warning",
+  accent: "border-accent/30 bg-accent/10 text-accent",
+} as const;
+
+export function Badge({
+  children,
+  title,
+  tone = "neutral",
+  className,
+}: {
+  children: ReactNode;
+  title?: string;
+  tone?: keyof typeof BADGE_TONES;
+  className?: string;
+}) {
   return (
     <span
       title={title}
-      className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg"
+      className={cn(
+        "inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        BADGE_TONES[tone],
+        className,
+      )}
     >
       {children}
     </span>

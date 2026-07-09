@@ -266,7 +266,13 @@ function duplicateFindings(cols: Map<string, ColStats>, cfg: AppConfig | null): 
         a.ref.source !== b.ref.source && sourceStem(a.ref.source) === sourceStem(b.ref.source);
       let reason = "";
       if (sameName && related) {
-        reason = `same metric from related sources (${a.ref.source} / ${b.ref.source})`;
+        // Carry the agreement evidence in the reason — it's the user's only
+        // signal for whether the merge is safe (this branch fires on the name
+        // match alone, even when the shared days disagree).
+        const evidence = overlap
+          ? `values agree on ${agreeCount} of ${overlap} shared days`
+          : "no shared days to compare";
+        reason = `same metric from related sources (${a.ref.source} / ${b.ref.source}); ${evidence}`;
       } else if (overlap >= 5 && agree >= 0.8 && agreeing.size >= 2) {
         // ≥5 shared days (3 coinciding counts is chance) that aren't one constant
         // (two all-zero columns "agree" perfectly and mean nothing).

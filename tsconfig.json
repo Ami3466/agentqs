@@ -39,7 +39,10 @@
     "tmp/e2e-dist/types/**/*.ts",
     ".next-scan-smoke/types/**/*.ts",
     ".next-validate/types/**/*.ts",
-    ".next-verify/types/**/*.ts"
+    ".next-verify/types/**/*.ts",
+    "tmp/dq-verify/types/**/*.ts",
+    ".next-launch-check/types/**/*.ts",
+    ".next-prod-smoke/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
