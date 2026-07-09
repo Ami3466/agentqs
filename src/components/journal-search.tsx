@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Sparkles, Spinner, Wand, X } from "./icons";
-import { cn } from "./ui";
+import { Badge } from "./ui";
 
 /**
  * "Find days that felt like this" — semantic search over the record, right on the
@@ -30,10 +30,14 @@ export function JournalSearch() {
   const [err, setErr] = useState("");
   const [ran, setRan] = useState("");
   const [disabled, setDisabled] = useState(false); // embeddings turned off in Settings
+  // Bumped by clear() so a response landing after the user dismissed the search
+  // can't resurrect results for a query that is no longer on screen.
+  const seq = useRef(0);
 
   async function run() {
     const query = q.trim();
     if (!query || busy) return;
+    const mySeq = ++seq.current;
     setBusy(true);
     setErr("");
     try {
@@ -43,6 +47,7 @@ export function JournalSearch() {
         body: JSON.stringify({ query, limit: 6 }),
       });
       const data = await res.json().catch(() => ({}));
+      if (seq.current !== mySeq) return;
       if (!res.ok) {
         setErr(data.error || "Search failed.");
         setHits(null);
@@ -52,8 +57,10 @@ export function JournalSearch() {
         setDisabled(Boolean(data.disabled));
       }
     } catch {
-      setErr("Could not reach search.");
-      setHits(null);
+      if (seq.current === mySeq) {
+        setErr("Could not reach search.");
+        setHits(null);
+      }
     } finally {
       setBusy(false);
     }
@@ -67,78 +74,86 @@ export function JournalSearch() {
   }
 
   function clear() {
+    seq.current++;
     setQ("");
     setHits(null);
     setErr("");
     setRan("");
   }
 
+  // A compact input that joins the Journal filter row; results wrap to their own
+  // full-width line below (the parent row is flex-wrap).
   return (
-    <div className="mb-4 rounded-xl border border-border bg-card p-3">
-      <div className="flex items-center gap-2 rounded-lg border border-input bg-bg px-2.5 py-1.5 focus-within:border-ring/60">
-        <Sparkles width={15} height={15} className="shrink-0 text-accent" />
+    <>
+      <div className="flex h-8 w-56 shrink-0 items-center gap-1.5 rounded-lg border border-input bg-bg px-2 focus-within:border-ring/60">
+        <Sparkles width={14} height={14} className="shrink-0 text-accent" />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Search by meaning"
-          className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-muted-fg/70"
+          title="Semantic search over memos, sessions and journal text — Enter to run"
+          className="min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-muted-fg/70"
         />
-        {q || hits ? (
+        {q || hits || err ? (
           <button
             type="button"
             onClick={clear}
             aria-label="Clear search"
-            className="shrink-0 rounded p-1 text-muted-fg transition-colors hover:text-fg"
+            className="shrink-0 rounded p-0.5 text-muted-fg transition-colors hover:text-fg"
           >
-            <X width={14} height={14} />
+            <X width={13} height={13} />
           </button>
         ) : null}
         <button
           type="button"
           onClick={() => void run()}
           disabled={!q.trim() || busy}
-          className={cn(
-            "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium transition-colors",
-            "bg-accent text-accent-fg hover:opacity-90 disabled:opacity-40",
-          )}
+          aria-label="Search"
+          title="Search (Enter)"
+          className="shrink-0 rounded p-0.5 text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
         >
           {busy ? <Spinner width={14} height={14} /> : <Wand width={14} height={14} />}
-          Search
         </button>
       </div>
 
-      {err ? <p className="mt-2 px-1 text-xs text-destructive">{err}</p> : null}
+      {err ? (
+        <div className="order-last basis-full">
+          <p className="px-1 text-xs text-destructive">{err}</p>
+        </div>
+      ) : null}
 
       {hits ? (
-        hits.length ? (
-          <div className="mt-3 space-y-1.5">
-            <p className="px-1 text-[11px] font-medium text-muted-fg">
-              Closest to <span className="text-fg">&ldquo;{ran}&rdquo;</span>
+        <div className="order-last basis-full">
+          {hits.length ? (
+            <div className="space-y-1.5">
+              <p className="px-1 text-[11px] font-medium text-muted-fg">
+                Closest to <span className="text-fg">&ldquo;{ran}&rdquo;</span>
+              </p>
+              {hits.map((h) => (
+                <div
+                  key={h.date + h.kind}
+                  className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2"
+                >
+                  <span className="mt-0.5 w-24 shrink-0 text-[13px] font-medium text-fg">
+                    {niceDate(h.date)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-muted-fg" title={h.snippet}>
+                    {h.snippet}
+                  </span>
+                  <Badge tone="accent" className="shrink-0">
+                    {Math.round(h.score * 100)}%
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-1 text-xs text-muted-fg">
+              {disabled ? "Semantic search is turned off in Settings — re-enable it to search by meaning." : "No matches."}
             </p>
-            {hits.map((h) => (
-              <div
-                key={h.date + h.kind}
-                className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2"
-              >
-                <span className="mt-0.5 w-24 shrink-0 text-[13px] font-medium text-fg">
-                  {niceDate(h.date)}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] text-muted-fg" title={h.snippet}>
-                  {h.snippet}
-                </span>
-                <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                  {Math.round(h.score * 100)}%
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="mt-2 px-1 text-xs text-muted-fg">
-            {disabled ? "Semantic search is turned off in Settings — re-enable it to search by meaning." : "No matches."}
-          </p>
-        )
+          )}
+        </div>
       ) : null}
-    </div>
+    </>
   );
 }

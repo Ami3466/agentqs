@@ -586,7 +586,11 @@ export function JournalTable({
           </div>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        {/* data-quality scan — duplicate columns, dead columns, messy values;
+            joins this row, findings list wraps to a full-width line below */}
+        {!editing && onReload ? <DataQualityPanel compact onChanged={onReload} /> : null}
+
+        <div className={cn("flex items-center gap-2", (editing || !onReload) && "ml-auto")}>
           {editing ? (
             <>
               {/* add a column */}
@@ -716,9 +720,6 @@ export function JournalTable({
       </div>
 
       {editError ? <p className="mb-2 text-xs text-destructive">{editError}</p> : null}
-
-      {/* data-quality scan — duplicate columns, dead columns, messy values */}
-      {!editing && onReload ? <DataQualityPanel compact onChanged={onReload} /> : null}
 
       {/* table */}
       <div className="scrollbar-thin overflow-x-auto rounded-xl border border-border">

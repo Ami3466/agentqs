@@ -43,6 +43,7 @@ import {
   transcribeMemo,
 } from "../src/lib/voice";
 import { decodeWavToMono16k, transcribeWhisper } from "../src/lib/whisper-local";
+import { modelsDir } from "../src/lib/embedder";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -165,9 +166,10 @@ async function main() {
 
   // ---- 1b. The built-in Whisper transcribes REAL speech --------------------
   // macOS `say` generates spoken audio; the tiny model transcribes it on-device.
-  // Uses the repo's data/models cache; skipped when the model isn't there unless
+  // Checks the same model cache transcribeWhisper reads (AGENTQS_MODELS_DIR,
+  // else the data dir's models/); skipped when the model isn't there unless
   // AGENTQS_WHISPER_E2E=1 opts into the one-time ~45 MB download.
-  const repoModels = path.join(process.cwd(), "data", "models");
+  const repoModels = modelsDir();
   const tinyOnDisk = fs.existsSync(path.join(repoModels, "Xenova", "whisper-tiny", "onnx"));
   if (process.platform === "darwin" && (tinyOnDisk || process.env.AGENTQS_WHISPER_E2E === "1")) {
     console.log("\nThe built-in local Whisper transcribes real speech (tiny model, on-device)…\n");
