@@ -1,9 +1,12 @@
+<div align="center">
 
 <img src="public/logo.svg" alt="agentqs" width="160" />
 
-# agentqs
+**The open-source pipeline for your personal data: 20+ apps synced into one local journal you can graph, chat with and learn from.**
 
-**Use your data to unlock insights on your productivity, mental health and more.**
+[Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
+
+</div>
 
 ---
 
@@ -11,39 +14,84 @@ There are thousands of products helping companies use their knowledge bases and 
 
 agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your data in. It structures, indexes and embeds everything - then you learn from it with graphs, AI with skills, or voice sessions. Works out of the box in the web app, CLI, Slack or Telegram.
 
----
-
 ## Quick start
 
-![Deploy on FlowEngine](https://flowengine.cloud/button.svg)```bash
+agentqs is a CLI-first platform: the recommended (and free) setup needs no API keys and no environment variables. Clone the repo and ask Claude Code or Codex to set everything up for you.
+
+```bash
 git clone https://github.com/Ami3466/agentqs.git && cd agentqs
 npm install
 npm run dev               # → http://localhost:3000
 ```
 
-It's recommended to work directly on the repo or with skill with Claude Code / Codex. Ask it to start onboarding your accounts and manually import and structure the data it found locally, then set up API keys and automated data imports, structure the data and index it, then add the skills you want and start unlocking personal insights.
+The agent can import and structure the data already on your machine, connect your accounts and set up syncs.
+
+If you want to interact with agentqs through external channels like Slack or Telegram, or build integrations on top of it, deploy it on the cloud.
+
+[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
 
 ## Features
 
-### Journal - your whole life in one table
+<table>
+  <tr>
+    <td width="25%"><a href="docs/images/data.png"><img src="docs/images/data.png" alt="Data" /></a></td>
+    <td width="25%"><a href="docs/images/journal.png"><img src="docs/images/journal.png" alt="Journal" /></a></td>
+    <td width="25%"><a href="docs/images/graphs.png"><img src="docs/images/graphs.png" alt="Graphs" /></a></td>
+    <td width="25%"><a href="docs/images/chat.png"><img src="docs/images/chat.png" alt="Chat" /></a></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><a href="#data"><b>Data</b></a><br/><sub>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</sub></td>
+    <td align="center" valign="top"><a href="#journal"><b>Journal</b></a><br/><sub>View your structured data. Edit and organize.</sub></td>
+    <td align="center" valign="top"><a href="#graphs"><b>Graphs</b></a><br/><sub>Lines and correlations across any data points. Save the views.</sub></td>
+    <td align="center" valign="top"><a href="#chat"><b>Chat</b></a><br/><sub>Add skills, chat with AI, or have a voice session.</sub></td>
+  </tr>
+</table>
 
-Every source lands in one daily record: sleep, steps, mood, focus, screen time, heart rate, workouts, commits. Table or timeline, built from plain CSVs you own. **Scan data** checks every column's quality: the same metric imported twice (manually and by a sync) gets merged - the auto-synced column wins, and a saved rule keeps future imports in one column - dead all-zero columns get dropped, and messy values (units, junk placeholders) get cleaned. Every fix is one click and undoable.
+### Journal
 
-![Journal](docs/images/journal.png)### Chat - AI grounded in your record, with skills
+One daily record of everything: sleep, steps, mood, focus, screen time, workouts, commits - plain CSVs you own, as a table or a timeline. **Scan data** keeps it clean: duplicate columns merge, dead columns drop, messy values get fixed. One click each, all undoable.
 
-Ask anything - the agent answers from your actual data: SQL over metrics, text search over memos and sessions, semantic search over everything. `//` logs a memo, `/` runs commands.
+### Data
 
-![Chat](docs/images/chat.png)### Data - ingest anything
+Connect a source, or drop any file and hit **Structure** - it lands in your record. Clean CSVs map instantly, no LLM. Every capture is logged: structured, pending or rejected, and everything is revertible.
 
-Drop a file or folder, hit **Structure**, it lands in your record. CSVs with a date column map directly - no LLM. Every capture shows in the log: structured, pending or rejected.
-
-![Data workspace](docs/images/data.png)### Graphs
+### Graphs
 
 Correlate anything - sleep vs focus, screen time vs mood - and save the views.
 
-![Graphs](docs/images/graphs.png)### CLI, API and MCP - every action, no API key
+### Chat
 
-Everything works from the terminal or any CLI agent:
+Answers come from your actual data: SQL over metrics, text search over memos and sessions, semantic search over everything. `//` logs a memo, `/` runs a command.
+
+### Skills
+
+Give the AI a persona - mentor, coach, therapist, or your own prompt. Skills run in chat or voice sessions, grounded in your record, and save their insights and commitments back to it.
+
+### Memos
+
+Text or voice, from the app, CLI or a channel. They land in your inbox - structure them into daily rows or keep them as searchable notes.
+
+### Channels
+
+Slack and Telegram: log memos and ask your record questions from where you already are.
+
+## Integrations / data pipelines
+
+**Connect by API or OAuth** - GitHub · WHOOP\* · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
+
+<sub>\* WHOOP connects through the unofficial app login (email + password) - it exports recovery, strain, sleep and per-minute heart rate.</sub>
+
+**Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.
+
+**Schedule scraping with Playwright** - for anything without an API: record the click-path to your data once, store the login, set an interval - it replays headless and lands like any other source. A Google MyActivity scraper ships out of the box.
+
+**Import files** - drop anything: Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file
+
+Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
+
+## CLI, API and MCP
+
+Every action, no API key. Everything works from the terminal or any CLI agent:
 
 ```bash
 agentqs chat "what changed this week?"
@@ -60,25 +108,15 @@ agentqs structure --id <id> --csv "date,mood,steps
 agentqs recall "days that felt burned out" # meaning-search, fully on-device
 ```
 
-Expose it to Claude Code or Codex over MCP - the agent reads, writes and queries through local tools without spending your in-app API key (the repo's `CLAUDE.md` teaches these workflows automatically):
+Expose it over MCP - the agent reads, writes and queries through local tools (the repo's `CLAUDE.md` teaches these workflows automatically):
 
 ```bash
 claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'
 ```
 
-### Slack and Telegram
+## Deploy
 
-Connect a channel in Settings - log memos and ask your record questions from where you already are.
-
-## Integrations
-
-**Connect by API or OAuth:** GitHub · WHOOP · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
-
-**Scrape or import from locked-in apps:** Google MyActivity (browser extension - checkpointed walks that survive restarts and resume on their own) · Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · any CSV, TSV, Markdown or text file
-
-Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
-
-## Deploy locally
+### Local
 
 Keep your record outside the repo:
 
@@ -88,24 +126,27 @@ npm run build
 npm run dev
 ```
 
-Or with Docker:
-
-```bash
-docker run -d \
-  -v ~/agentqs-data:/data \
-  -p 3000:3000 \
-  -e AGENTQS_DATA_DIR=/data \
-  -e SESSION_SECRET="$(openssl rand -hex 32)" \
-  agentqs
-```
-
 Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`) and can live in a private git repo. Databases and embeddings are derived - `agentqs rebuild` recreates them.
 
-## Deploy on cloud
+### Docker
 
-While the app is running it schedules its own syncs - set a source's interval and it happens, no setup. For times the app isn't open, one crontab line covers it: `0 * * * * agentqs sync --due` runs every source whose interval says it's due, browser scrapes included (copy it from Settings → API → Connect). `agentqs pipeline` shows the whole truth in one table: where each source's data comes from, credential provenance, what's scheduled, and whether the last run actually worked. [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`, syncs run around the clock.
+The repo ships a `docker-compose.yml` that builds the image, persists your record in a `/data` volume and passes provider keys through:
 
-![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
+```bash
+SESSION_SECRET=$(openssl rand -hex 32) docker compose up -d --build
+```
+
+Optional env: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` for chat and structuring. Local file sources (Chrome history, iPhone backups) only work when the container runs on the machine that holds the files - otherwise run the daemon there (`npm run daemon -- run --push`) and let the instance pull the record via git.
+
+### Cloud
+
+While the app is running it schedules its own syncs - set a source's interval and it happens, no setup. For times the app isn't open, one crontab line covers it: `0 * * * * agentqs sync --due` runs every source whose interval says it's due, browser scrapes included (copy it from Settings → API → Connect). `agentqs pipeline` shows the whole truth in one table: where each source's data comes from, credential provenance, what's scheduled, and whether the last run actually worked.
+
+[**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`, syncs run around the clock.
+
+[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
+
+Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 
 ## Good to know
 
