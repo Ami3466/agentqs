@@ -82,6 +82,7 @@ export async function GET() {
     detail: p.detail,
     source: p.dailySource,
     page: p.url,
+    retired: p.retired ?? null,
     status: dailyStatus(p.dailySource),
   }));
   const ping = extensionSeenAt();

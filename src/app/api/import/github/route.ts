@@ -28,8 +28,11 @@ export async function GET() {
   const cfg = readConfig();
   const file = githubCsvPath();
   const days = fs.existsSync(file) ? parseGithubCsv(fs.readFileSync(file, "utf8")) : [];
+  // connected ⇔ a stored token (the rule everywhere) — commit rows in the
+  // record are hasData, which must never present the source as connected.
   return NextResponse.json({
-    connected: days.length > 0,
+    connected: Boolean(resolveGithubToken()),
+    hasData: days.length > 0,
     hasToken: Boolean(resolveGithubToken()),
     syncedAt: cfg?.githubSyncedAt ?? null,
     total: days.reduce((n, d) => n + d.commits, 0),

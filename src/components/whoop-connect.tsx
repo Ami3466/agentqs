@@ -149,7 +149,7 @@ export function WhoopConnect({
         </div>
       </div>
 
-      {connected && status?.series.length ? (
+      {status?.series.length ? (
         <div className="mt-3 pl-12">
           <Sparkline
             points={status.series}

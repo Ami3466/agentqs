@@ -59,6 +59,10 @@ export interface GooglePresetDef {
   dailySource: string;
   /** false → the extension reads the visible DOM instead of the My Activity RPC feed. */
   rpc: boolean;
+  /** Set when Google removed the page this preset scraped. The Data tab keeps
+   *  showing landed data but renders this guidance INSTEAD of a dead Import
+   *  button (clicking through to a page Google redirects away is not a UI). */
+  retired?: string;
 }
 
 /**
@@ -85,7 +89,7 @@ export const GOOGLE_PRESETS: GooglePresetDef[] = [
   { id: "google_translate", label: "Translate", detail: "Google Translate history", url: "https://myactivity.google.com/product/translate?hl=en_GB", source: "google_translate_scrape", dailySource: "google_translate_scrape", rpc: true },
   { id: "google_discover", label: "Discover", detail: "Google Discover feed activity", url: "https://myactivity.google.com/product/discover?hl=en_GB", source: "google_discover_scrape", dailySource: "google_discover_scrape", rpc: true },
   { id: "google_gemini", label: "Gemini", detail: "Gemini Apps activity", url: "https://myactivity.google.com/product/gemini?hl=en_GB", source: "google_gemini_scrape", dailySource: "google_gemini_scrape", rpc: true },
-  { id: "google_timeline", label: "Timeline", detail: "Maps location history. Imports only the dates shown on the page: change dates and re-run", url: "https://timeline.google.com/maps/timeline", source: "google_timeline_scrape", dailySource: "google_timeline_scrape", rpc: false },
+  { id: "google_timeline", label: "Timeline", detail: "Maps location history", url: "https://timeline.google.com/maps/timeline", source: "google_timeline_scrape", dailySource: "google_timeline_scrape", rpc: false, retired: "Google moved Timeline into the Maps app on your phone — the web page now just redirects to Maps. Export it on the phone (Maps → Settings → Location → Export Timeline data) and drop the JSON into Data." },
 ];
 
 const PRESETS = Object.fromEntries(GOOGLE_PRESETS.map((p) => [p.id, p])) as Record<GoogleScrapePreset, GooglePresetDef>;
