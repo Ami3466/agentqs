@@ -16,6 +16,7 @@ import {
 import type { JournalData } from "@/lib/journal";
 import type { GraphRangePreset, GraphViewType, SavedGraph } from "@/lib/graphs";
 import { Button, Card, Input, Select, cn } from "./ui";
+import { RangePicker } from "./range-picker";
 import { Plus, Spinner, Trash } from "./icons";
 
 interface SeriesDef {
@@ -67,6 +68,7 @@ function fmtDate(date: unknown): string {
 }
 
 function fmtAxisDate(date: unknown): string {
+  if (typeof date === "number") return new Date(date).toLocaleDateString(undefined, { year: "numeric", month: "short" });
   if (typeof date !== "string") return "";
   const parsed = new Date(`${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
@@ -74,6 +76,7 @@ function fmtAxisDate(date: unknown): string {
 }
 
 function fmtFullDate(date: unknown): string {
+  if (typeof date === "number") return new Date(date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   if (typeof date !== "string") return "";
   const parsed = new Date(`${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
@@ -170,7 +173,10 @@ function rangeDates(graph: Pick<SavedGraph, "range" | "startDate" | "endDate">, 
   return { start: shiftDate(maxDate, -(days - 1)), end: maxDate };
 }
 
-function chartRows(graph: DraftGraph | SavedGraph, series: SeriesDef[]) {
+function chartRows(
+  graph: DraftGraph | SavedGraph,
+  series: SeriesDef[],
+): { rows: ChartRow[]; x: SeriesDef | undefined; y: SeriesDef | undefined } {
   const x = series.find((s) => s.key === graph.xKey);
   // Data 2 is optional on every view: one pick = one series, two picks = both.
   const y = graph.yKey ? series.find((s) => s.key === graph.yKey) : undefined;
@@ -186,10 +192,20 @@ function chartRows(graph: DraftGraph | SavedGraph, series: SeriesDef[]) {
     };
   }
 
+  // Scatter with one pick charts value vs time; presets anchor to its own days.
+  if (!y) {
+    const dates = [...x.values.keys()].sort();
+    const { start, end } = rangeDates(graph, dates);
+    return {
+      x,
+      y,
+      rows: dates.filter((d) => d >= start && d <= end).map((date) => ({ date, x: x.values.get(date) as number })),
+    };
+  }
+
   // Scatter presets anchor to the last PAIRED day. Two series with different
   // end dates (a journal that stopped vs live browsing) would otherwise window
   // into a stretch where only one of them exists and plot nothing.
-  if (!y) return { rows: [], x, y };
   const paired = [...x.values.keys()].filter((d) => y.values.get(d) != null).sort();
   const { start, end } = rangeDates(graph, paired);
   return {
@@ -442,6 +458,9 @@ function GraphCard({
   draft?: boolean;
 }) {
   const { rows, x, y } = useMemo(() => chartRows(graph, series), [graph, series]);
+  // Remount the chart when the picked series/range change — recharts keeps
+  // stale marks when only `data` swaps under it.
+  const chartKey = `${graph.view}:${graph.xKey}:${graph.yKey}:${graph.range}:${graph.startDate ?? ""}:${graph.endDate ?? ""}`;
   const r = graph.view === "correlation" ? correlation(rows) : null;
   const title =
     "name" in graph
@@ -449,7 +468,9 @@ function GraphCard({
       : graph.view === "candles"
         ? `${x?.label ?? "Series"} candles`
         : graph.view === "correlation"
-          ? `${x?.label ?? "Series"} vs ${y?.label ?? "Series"}`
+          ? y
+            ? `${x?.label ?? "Series"} vs ${y.label}`
+            : `${x?.label ?? "Series"} over time`
           : y
             ? `${x?.label ?? "Series"} + ${y.label}`
             : `${x?.label ?? "Series"} timeline`;
@@ -474,7 +495,7 @@ function GraphCard({
       </div>
 
       <div className="h-[320px] px-3 py-4">
-        {!x || (graph.view === "correlation" && !y) ? (
+        {!x ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-fg">Choose data to graph.</div>
         ) : rows.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-fg">No points in this time range.</div>
@@ -482,7 +503,7 @@ function GraphCard({
           <CandleSvg rows={rows} label={x.label} />
         ) : graph.view === "timeline" ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+            <LineChart key={chartKey} data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
               <CartesianGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
               <XAxis
                 dataKey="date"
@@ -492,22 +513,56 @@ function GraphCard({
                 minTickGap={18}
                 interval="preserveStartEnd"
               />
-              <YAxis tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }} tickFormatter={fmt} width={46} />
+              <YAxis yAxisId="left" tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }} tickFormatter={fmt} width={46} />
+              {y ? (
+                // Second series gets its own axis — two metrics rarely share a scale,
+                // and on one axis the smaller one flattens into a floor line.
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  tick={{ fill: "#2563eb", fontSize: 12 }}
+                  tickFormatter={fmt}
+                  width={46}
+                />
+              ) : null}
               <Tooltip
                 {...tooltipTheme}
-                formatter={(value, name) => [fmt(value), name === "x" ? x.label : y?.label]}
+                // Keep both series in the tooltip even when one has no value on
+                // the hovered day — dropping it reads as "the chart lost my data".
+                filterNull={false}
+                formatter={(value) => (typeof value === "number" ? fmt(value) : "–")}
                 labelFormatter={(label) => fmtDate(label)}
               />
               <Legend />
-              <Line type="monotone" dataKey="x" name={x.label} stroke="rgb(var(--accent))" strokeWidth={2} dot={false} connectNulls />
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey="x"
+                name={x.label}
+                stroke="rgb(var(--accent))"
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+                connectNulls
+              />
               {y ? (
-                <Line type="monotone" dataKey="y" name={y.label} stroke="#2563eb" strokeWidth={2} dot={false} connectNulls />
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="y"
+                  name={y.label}
+                  stroke="#2563eb"
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls
+                />
               ) : null}
             </LineChart>
           </ResponsiveContainer>
-        ) : (
+        ) : y ? (
           <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{ top: 8, right: 16, bottom: 12, left: 0 }}>
+            <ScatterChart key={chartKey} margin={{ top: 8, right: 16, bottom: 12, left: 0 }}>
               <CartesianGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
               <XAxis
                 type="number"
@@ -519,7 +574,7 @@ function GraphCard({
               <YAxis
                 type="number"
                 dataKey="y"
-                name={y?.label}
+                name={y.label}
                 tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }}
                 tickFormatter={fmt}
                 width={46}
@@ -527,10 +582,45 @@ function GraphCard({
               <Tooltip
                 {...tooltipTheme}
                 cursor={{ strokeDasharray: "3 3" }}
-                formatter={(value, name) => [fmt(value), name === "x" ? x.label : y?.label]}
+                formatter={(value) => (typeof value === "number" ? fmt(value) : "–")}
                 labelFormatter={(_, payload) => fmtDate(payload?.[0]?.payload?.date)}
               />
-              <Scatter name={`${x.label} vs ${y?.label}`} data={rows} fill="rgb(var(--accent))" />
+              <Scatter name={`${x.label} vs ${y.label}`} data={rows} fill="rgb(var(--accent))" isAnimationActive={false} />
+            </ScatterChart>
+          </ResponsiveContainer>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <ScatterChart key={chartKey} margin={{ top: 8, right: 16, bottom: 12, left: 0 }}>
+              <CartesianGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
+              <XAxis
+                type="number"
+                dataKey="t"
+                name="Date"
+                domain={["dataMin", "dataMax"]}
+                tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }}
+                tickFormatter={fmtAxisDate}
+                minTickGap={24}
+              />
+              <YAxis
+                type="number"
+                dataKey="x"
+                name={x.label}
+                tick={{ fill: "rgb(var(--muted-fg))", fontSize: 12 }}
+                tickFormatter={fmt}
+                width={46}
+              />
+              <Tooltip
+                {...tooltipTheme}
+                cursor={{ strokeDasharray: "3 3" }}
+                formatter={(value, name) => (name === "Date" ? [fmtFullDate(value), "Date"] : [fmt(value), x.label])}
+                labelFormatter={(_, payload) => fmtDate(payload?.[0]?.payload?.date)}
+              />
+              <Scatter
+                name={`${x.label} over time`}
+                data={rows.map((row) => ({ ...row, t: new Date(`${row.date}T00:00:00`).getTime() }))}
+                fill="rgb(var(--accent))"
+                isAnimationActive={false}
+              />
             </ScatterChart>
           </ResponsiveContainer>
         )}
@@ -598,7 +688,7 @@ export function GraphsWorkspace() {
   const saveDraft = () => {
     const x = series.find((s) => s.key === draft.xKey);
     const y = series.find((s) => s.key === draft.yKey);
-    if (!x || (draft.view === "correlation" && !y)) return;
+    if (!x) return;
     const graph: SavedGraph = {
       ...draft,
       // Candles chart a single series; every other view keeps whatever was picked.
@@ -608,7 +698,9 @@ export function GraphsWorkspace() {
         draft.view === "candles"
           ? `${x.label} candles`
           : draft.view === "correlation"
-            ? `${x.label} vs ${y?.label}`
+            ? y
+              ? `${x.label} vs ${y.label}`
+              : `${x.label} over time`
             : y
               ? `${x.label} + ${y.label}`
               : `${x.label} timeline`,
@@ -663,46 +755,24 @@ export function GraphsWorkspace() {
               value={draft.yKey}
               options={series}
               onChange={(value) => setDraft((g) => ({ ...g, yKey: value }))}
-              placeholder={draft.view === "correlation" ? "Data 2" : "Data 2 (optional)"}
+              placeholder="Data 2 (optional)"
               allowEmpty
               className="w-full sm:w-[240px] lg:flex-1"
             />
           ) : null}
-          <Select
+          <RangePicker
             value={draft.range}
-            onChange={(e) => setDraft((g) => ({ ...g, range: e.target.value as GraphRangePreset }))}
-            className="h-8 w-full text-[13px] sm:w-[142px]"
-            aria-label="Time range"
-          >
-            <option value="30">Last 30</option>
-            <option value="60">Last 60</option>
-            <option value="90">Last 90</option>
-            <option value="custom">Date range</option>
-            <option value="all">All time</option>
-          </Select>
-          {draft.range === "custom" ? (
-            <>
-              <Input
-                type="date"
-                value={draft.startDate ?? ""}
-                onChange={(e) => setDraft((g) => ({ ...g, startDate: e.target.value }))}
-                className="h-8 w-full text-[13px] sm:w-[142px]"
-                aria-label="Start date"
-              />
-              <Input
-                type="date"
-                value={draft.endDate ?? ""}
-                onChange={(e) => setDraft((g) => ({ ...g, endDate: e.target.value }))}
-                className="h-8 w-full text-[13px] sm:w-[142px]"
-                aria-label="End date"
-              />
-            </>
-          ) : null}
+            onChange={(range) => setDraft((g) => ({ ...g, range }))}
+            startDate={draft.startDate ?? ""}
+            endDate={draft.endDate ?? ""}
+            onStartDate={(v) => setDraft((g) => ({ ...g, startDate: v }))}
+            onEndDate={(v) => setDraft((g) => ({ ...g, endDate: v }))}
+          />
           <Button
             type="button"
             size="sm"
             onClick={saveDraft}
-            disabled={saving || !draft.xKey || (draft.view === "correlation" && !draft.yKey)}
+            disabled={saving || !draft.xKey}
             className="w-full sm:w-auto"
           >
             <Plus width={15} height={15} /> Save

@@ -119,8 +119,8 @@ export function mentorTools(dbFile: string, used: Used) {
 
   const search_notes = tool({
     description:
-      "Full-text keyword search over the user's memos and past mentor/therapy sessions (their own words — not the daily numbers). " +
-      "Use it for qualitative context: how they described a day, a commitment they made, a recurring theme. Returns short snippets.",
+      "Full-text keyword search over the user's memos, past mentor/therapy sessions, and their whole event timeline — searches, pages visited, videos watched, music, meetings (kind: event). " +
+      "Use it for qualitative context (how they described a day, a commitment they made) and for activity lookups ('when did I research X'). Returns short snippets.",
     inputSchema: z.object({
       query: z.string().describe("Keywords, e.g. 'sleep tired' or 'deploy shipped'."),
       limit: z.number().int().min(1).max(25).optional(),
@@ -134,10 +134,11 @@ export function mentorTools(dbFile: string, used: Used) {
         db = openReadonly(dbFile);
         const rows = db
           .prepare(
-            `SELECT ref, kind, snippet(search, 2, '[', ']', '…', 12) AS snippet
+            `SELECT ref, kind, snippet(search, 2, '[', ']', '…', 12) AS snippet,
+                    (SELECT e.date FROM events e WHERE search.kind = 'event' AND e.id = substr(search.ref, 7)) AS date
              FROM search WHERE search MATCH ? ORDER BY rank LIMIT ?`,
           )
-          .all(match, Math.min(limit ?? 8, 25)) as { ref: string; kind: string; snippet: string }[];
+          .all(match, Math.min(limit ?? 8, 25)) as { ref: string; kind: string; snippet: string; date: string | null }[];
         used.hits += rows.length;
         return { matches: rows };
       } catch (e) {
