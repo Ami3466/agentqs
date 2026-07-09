@@ -153,7 +153,7 @@ export function GithubConnect({
         </div>
       </div>
 
-      {connected && status?.series.length ? (
+      {status?.series.length ? (
         <div className="mt-3 pl-12">
           <Spark data={status.series} />
         </div>

@@ -8,7 +8,7 @@ import { SourceConnect } from "@/components/source-connect";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
-import { Button, cn, Input, TabBar } from "@/components/ui";
+import { Badge, Button, cn, Input, TabBar } from "@/components/ui";
 import { type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
@@ -34,6 +34,7 @@ type ChromeImporterStatus = {
     detail: string;
     source: string;
     page: string;
+    retired: string | null;
     status: GoogleImportStatus;
   }>;
 };
@@ -548,12 +549,16 @@ function GoogleImporterCard({
                   <p className="truncate text-[13px] font-medium text-fg">{item.label}</p>
                   <p className="truncate text-xs text-muted-fg">
                     {item.status.exists
-                      ? `${item.status.events.toLocaleString()} events · ${item.status.days.toLocaleString()} days` +
+                      ? (item.status.events > 0 ? `${item.status.events.toLocaleString()} events · ` : "") +
+                        `${item.status.days.toLocaleString()} days` +
                         (item.status.from ? ` · ${item.status.from} → ${item.status.to}` : "")
                       : item.detail}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
+                  {item.retired ? (
+                    <Badge title={item.retired}>phone export only</Badge>
+                  ) : (
                   <Button
                     size="sm"
                     variant={item.status.exists ? "ghost" : "secondary"}
@@ -571,6 +576,7 @@ function GoogleImporterCard({
                   >
                     {item.status.exists ? "Update" : "Import"}
                   </Button>
+                  )}
                   {item.status.exists ? (
                     <Button
                       size="sm"

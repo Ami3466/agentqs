@@ -43,7 +43,9 @@ function status() {
   const wc = cfg?.whoopCreds;
   const file = whoopCsvPath();
   const out = {
-    connected: false,
+    // connected ⇔ stored credentials (the rule everywhere); data rows are hasData.
+    connected: Boolean(wc?.email && (wc?.password || wc?.refreshToken)),
+    hasData: false,
     email: wc?.email ?? "",
     hasPassword: Boolean(wc?.password),
     hasCredential: Boolean(wc?.email && (wc?.password || wc?.refreshToken)),
@@ -59,7 +61,7 @@ function status() {
   const di = header.indexOf("date");
   const mi = header.indexOf("recovery");
   if (di < 0 || rows.length === 0) return out;
-  out.connected = true;
+  out.hasData = true;
   out.days = rows.filter((r) => (r[di] ?? "").trim() !== "").length;
   if (mi >= 0) {
     const series: Point[] = [];
