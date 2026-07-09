@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, Spinner, Wand, X } from "@/components/icons";
-import { ago, cn } from "@/components/ui";
+import { Bell, Inbox, ScanSearch, Spinner, Wand, X } from "@/components/icons";
+import { ago, Badge, cn } from "@/components/ui";
+import { runScan } from "./column-scanner";
 
 interface Item {
   id: string;
@@ -15,7 +16,7 @@ interface Item {
 interface StructResult {
   id: string;
   status: "structured" | "empty" | "error";
-  route: "csv" | "llm" | "agent";
+  route: "csv" | "llm" | "agent" | "merge";
   source?: string;
   rowsAdded?: number;
   message?: string;
@@ -38,6 +39,9 @@ export function InboxPanel({
   onChanged: () => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
+  // Column-scanner notifications — structuring one applies its merge instead of
+  // extracting a CSV, so they're their own section under the pending captures.
+  const [notes, setNotes] = useState<Item[]>([]);
   const [pending, setPending] = useState<number | null>(null);
   // A big backlog lives inside a fixed-height scrollable box with its own search —
   // it must never turn the page itself into an endless scroll.
@@ -52,9 +56,10 @@ export function InboxPanel({
   const load = useCallback(async () => {
     const res = await fetch("/api/inbox");
     if (!res.ok) return;
-    const data = (await res.json()) as { pending: number; items: Item[] };
+    const data = (await res.json()) as { pending: number; items: Item[]; notifications?: Item[] };
     setPending(data.pending);
     setItems(data.items);
+    setNotes(data.notifications ?? []);
   }, []);
 
   useEffect(() => {
@@ -101,6 +106,7 @@ export function InboxPanel({
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
         results?: StructResult[];
+        scan?: { autoMerged: number; findings: number; notified: number };
       };
       if (!res.ok) {
         say("error", data.error || "Structuring failed.");
@@ -108,14 +114,20 @@ export function InboxPanel({
       }
       const rs = data.results ?? [];
       const done = rs.filter((r) => r.status === "structured");
+      const merges = done.filter((r) => r.route === "merge");
       const cells = done.reduce((n, r) => n + (r.rowsAdded ?? 0), 0);
       const problem = rs.find((r) => r.status === "error" || r.status === "empty");
       if (done.length) {
         const srcs = [...new Set(done.map((r) => r.source))].filter(Boolean).join(", ");
-        say(
-          "ok",
-          `Structured ${done.length} item${done.length === 1 ? "" : "s"} → ${cells} daily row${cells === 1 ? "" : "s"} in ${srcs}.`,
-        );
+        let msg =
+          merges.length === done.length
+            ? merges[0]?.message ||
+              `Merged ${merges.length} duplicate column pair${merges.length === 1 ? "" : "s"}.`
+            : `Structured ${done.length} item${done.length === 1 ? "" : "s"} → ${cells} daily row${cells === 1 ? "" : "s"} in ${srcs}.`;
+        if (data.scan?.notified) {
+          msg += ` Scanner found ${data.scan.notified} duplicate column${data.scan.notified === 1 ? "" : "s"} — see Notifications below.`;
+        }
+        say("ok", msg);
       } else if (problem) {
         say("error", problem.message || "Nothing could be structured.");
       }
@@ -135,6 +147,22 @@ export function InboxPanel({
     } finally {
       setBusy(null);
     }
+  }
+
+  /** The column scanner, from the Data tab: new findings land as notifications below. */
+  async function scanColumns() {
+    setBusy("scan");
+    const r = await runScan();
+    if (r.error) say("error", r.error);
+    else {
+      const parts = [
+        r.findings.length ? `${r.findings.length} duplicate column${r.findings.length === 1 ? "" : "s"} found` : "No duplicate columns",
+        r.autoMerged ? `${r.autoMerged} saved rule${r.autoMerged === 1 ? "" : "s"} re-applied` : "",
+      ].filter(Boolean);
+      say("ok", `${parts.join(" · ")}.`);
+    }
+    setBusy(null);
+    onChanged();
   }
 
   const anyBusy = busy !== null;
@@ -166,6 +194,16 @@ export function InboxPanel({
             />
             Auto-structure
           </label>
+          <button
+            type="button"
+            onClick={() => void scanColumns()}
+            disabled={anyBusy}
+            title="Find duplicated daily columns (manual + auto imports)"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 text-[13px] font-medium text-muted-fg transition-colors hover:bg-muted hover:text-fg disabled:opacity-40"
+          >
+            {busy === "scan" ? <Spinner width={14} height={14} /> : <ScanSearch width={14} height={14} />}
+            Scan
+          </button>
           <button
             type="button"
             onClick={() => structure()}
@@ -248,6 +286,47 @@ export function InboxPanel({
           <code className="font-mono">&gt;&gt;</code> in Chat.
         </div>
       )}
+
+      {notes.length ? (
+        <div className="mt-4">
+          <div className="flex items-center gap-2">
+            <Bell width={14} height={14} className="text-muted-fg" />
+            <p className="text-sm font-semibold text-fg">Notifications</p>
+            <Badge>{notes.length}</Badge>
+          </div>
+          <ul className="scrollbar-thin mt-2 max-h-56 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border">
+            {notes.map((it) => (
+              <li key={it.id} className="flex items-center gap-2 px-3 py-1.5">
+                <p className="min-w-0 flex-1 truncate text-[13px] text-fg" title={it.text}>
+                  {it.text}
+                </p>
+                <span className="hidden shrink-0 text-[11px] text-muted-fg sm:inline">{ago(it.ts)}</span>
+                <span className="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => structure(it.id)}
+                    disabled={anyBusy}
+                    title="Apply this merge (undo from the Log)"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] font-medium text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
+                  >
+                    {busy === it.id ? <Spinner width={12} height={12} /> : <Wand width={12} height={12} />}
+                    Merge
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => discard(it.id)}
+                    disabled={anyBusy}
+                    title="Dismiss — never suggest this pair again"
+                    className="rounded p-0.5 text-muted-fg transition-colors hover:text-destructive disabled:opacity-40"
+                  >
+                    <X width={12} height={12} />
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

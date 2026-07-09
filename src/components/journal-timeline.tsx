@@ -39,25 +39,37 @@ const SKILL_TINT: Record<string, string> = {
   coach: "text-accent",
 };
 
+interface Chip {
+  key: string;
+  metric: string;
+  value: string;
+  numeric: boolean;
+}
+
 function DayCard({
   day,
   metricsByKey,
+  onMetricClick,
+  onSourceClick,
 }: {
   day: JournalDay;
   metricsByKey: Map<string, MetricColumn>;
+  onMetricClick?: (key: string) => void;
+  onSourceClick?: (source: string) => void;
 }) {
   const dt = localDate(day.date);
   const rel = relativeLabel(day.date);
   const [expanded, setExpanded] = useState(false);
 
   // Group metric cells by source for readable chip rows.
-  const bySource = new Map<string, Array<{ metric: string; value: string; numeric: boolean }>>();
+  const bySource = new Map<string, Chip[]>();
   for (const [key, cell] of Object.entries(day.values)) {
     const col = metricsByKey.get(key);
     const source = col?.source ?? key.split(".")[0];
     const metric = col?.metric ?? key.split(".").slice(1).join(".");
     const list = bySource.get(source) ?? [];
     list.push({
+      key,
       metric,
       value: cell.num != null ? String(cell.num) : cell.text,
       numeric: !!col?.numeric,
@@ -68,8 +80,7 @@ function DayCard({
   // Collapsed: spend a chip budget across the source groups, count the rest.
   let chipBudget = expanded ? Infinity : CHIPS_COLLAPSED;
   let hiddenChips = 0;
-  const chipGroups: Array<[string, Array<{ metric: string; value: string; numeric: boolean }>]> =
-    [];
+  const chipGroups: Array<[string, Chip[]]> = [];
   for (const [source, cells] of bySource) {
     if (chipBudget <= 0) {
       hiddenChips += cells.length;
@@ -108,11 +119,21 @@ function DayCard({
           <div className="space-y-1.5">
             {chipGroups.map(([source, cells]) => (
               <div key={source} className="flex flex-wrap items-center gap-1.5">
-                <span className="shrink-0 text-[11px] font-medium text-muted-fg">{source}</span>
+                <button
+                  type="button"
+                  onClick={() => onSourceClick?.(source)}
+                  title={`Show all ${source} days in the table`}
+                  className="shrink-0 text-[11px] font-medium text-muted-fg transition-colors hover:text-accent hover:underline"
+                >
+                  {source}
+                </button>
                 {cells.map((c) => (
-                  <span
-                    key={c.metric}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px]"
+                  <button
+                    key={c.key}
+                    type="button"
+                    onClick={() => onMetricClick?.(c.key)}
+                    title={`Show all days of ${c.metric} in the table`}
+                    className="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] transition-colors hover:border-accent/60 hover:bg-accent/10"
                   >
                     <span className="shrink-0 text-muted-fg">{c.metric}</span>
                     <span
@@ -124,7 +145,7 @@ function DayCard({
                     >
                       {c.value}
                     </span>
-                  </span>
+                  </button>
                 ))}
               </div>
             ))}
@@ -192,7 +213,16 @@ function DayCard({
   );
 }
 
-export function JournalTimeline({ data }: { data: JournalData }) {
+export function JournalTimeline({
+  data,
+  onMetricClick,
+  onSourceClick,
+}: {
+  data: JournalData;
+  /** Clicking a metric chip / source tag drills into the Table filtered to it. */
+  onMetricClick?: (key: string) => void;
+  onSourceClick?: (source: string) => void;
+}) {
   const metricsByKey = useMemo(
     () => new Map(data.metrics.map((m) => [m.key, m])),
     [data.metrics],
@@ -216,7 +246,13 @@ export function JournalTimeline({ data }: { data: JournalData }) {
   return (
     <div className="space-y-3">
       {days.map((day) => (
-        <DayCard key={day.date} day={day} metricsByKey={metricsByKey} />
+        <DayCard
+          key={day.date}
+          day={day}
+          metricsByKey={metricsByKey}
+          onMetricClick={onMetricClick}
+          onSourceClick={onSourceClick}
+        />
       ))}
       {remaining > 0 ? (
         <div className="flex justify-center pt-1">

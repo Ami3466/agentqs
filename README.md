@@ -1,9 +1,9 @@
-<p align="center">
-  <img src="public/logo.svg" alt="agentqs" width="160" />
-</p>
 
-<h1 align="center">agentqs</h1>
-<p align="center"><b>Use your data to unlock insights on your productivity, mental health and more.</b></p>
+<img src="public/logo.svg" alt="agentqs" width="160" />
+
+# agentqs
+
+**Use your data to unlock insights on your productivity, mental health and more.**
 
 ---
 
@@ -15,49 +15,33 @@ agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your
 
 ## Quick start
 
-<a href="https://flowengine.cloud/deploy/agentqs"><img src="https://flowengine.cloud/button.svg" alt="Deploy on FlowEngine" height="40"></a>
-
-```bash
+![Deploy on FlowEngine](https://flowengine.cloud/button.svg)```bash
 git clone https://github.com/Ami3466/agentqs.git && cd agentqs
 npm install
 npm run dev               # → http://localhost:3000
 ```
 
-It's recommended to work directly on the repo with Claude Code / Codex or through the skill - so you don't need to spend API tokens. Ask it to start onboarding your accounts and manually import and structure the data it found locally, then set up API keys and automated data imports under the Data tab, structure the data and index it, then add the skills you want and start unlocking personal insights.
+It's recommended to work directly on the repo or with skill with Claude Code / Codex. Ask it to start onboarding your accounts and manually import and structure the data it found locally, then set up API keys and automated data imports, structure the data and index it, then add the skills you want and start unlocking personal insights.
 
 ## Features
 
 ### Journal - your whole life in one table
 
-Every source lands in one daily record: sleep, steps, mood, focus, screen time, heart rate, workouts, commits. Table or timeline, built from plain CSVs you own.
+Every source lands in one daily record: sleep, steps, mood, focus, screen time, heart rate, workouts, commits. Table or timeline, built from plain CSVs you own. **Scan columns** finds the same metric imported twice (manually and by a sync) living in two columns and merges them - the auto-synced column wins, and a saved rule keeps future imports in one column.
 
-![Journal](docs/images/journal.png)
-
-### Chat - AI grounded in your record, with skills
+![Journal](docs/images/journal.png)### Chat - AI grounded in your record, with skills
 
 Ask anything - the agent answers from your actual data: SQL over metrics, text search over memos and sessions, semantic search over everything. `//` logs a memo, `/` runs commands.
 
-![Chat](docs/images/chat.png)
-
-### Data - ingest anything
+![Chat](docs/images/chat.png)### Data - ingest anything
 
 Drop a file or folder, hit **Structure**, it lands in your record. CSVs with a date column map directly - no LLM. Every capture shows in the log: structured, pending or rejected.
 
-![Data workspace](docs/images/data.png)
-
-### Graphs
+![Data workspace](docs/images/data.png)### Graphs
 
 Correlate anything - sleep vs focus, screen time vs mood - and save the views.
 
-![Graphs](docs/images/graphs.png)
-
-### Voice sessions
-
-Talk instead of type. Memos are transcribed locally with Whisper and land in your record.
-
-![Voice memo](docs/images/voice.png)
-
-### CLI, API and MCP - every action, no API key
+![Graphs](docs/images/graphs.png)### CLI, API and MCP - every action, no API key
 
 Everything works from the terminal or any CLI agent:
 
@@ -121,9 +105,7 @@ Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`
 
 Scheduled syncs need a machine that's always on. [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`.
 
-<a href="https://flowengine.cloud/deploy/agentqs"><img src="https://flowengine.cloud/button.svg" alt="Deploy on FlowEngine" height="40"></a>
-
-Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
+![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 
 ## Good to know
 

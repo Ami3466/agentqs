@@ -9,7 +9,20 @@ import { cn } from "./ui";
 export const PH = "AQS_KEY_HERE";
 export const SYNC_CMD = "agentqs sync --source github";
 export const skillSnip = (b: string, k: string) =>
-  `---\nname: agentqs\ndescription: Query the agentqs life-record.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}`;
+  `---\nname: agentqs\ndescription: Query the agentqs life-record.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}   - POST /api/scan {}`;
+
+/** Ready-to-paste prompt: hands an AI the column-scanner endpoints plus the
+ *  merge-vs-dismiss criteria, so it can drive the cleanup decisions. */
+export const scanPromptSnip = (b: string, k: string) =>
+  [
+    "Help me clean duplicate columns in my agentqs daily record.",
+    `API ${b}, header: authorization: Bearer ${k}`,
+    "- GET /api/scan → open findings. POST /api/scan {} → re-scan (also re-applies saved merge rules).",
+    '- Each finding: {from, into, reason, overlap, agree, notificationId}. `into` is the column that survives (the auto-synced side).',
+    '- Merge: POST /api/structure {"id":"<notificationId>"} — moves unique days into `into`, keeps `into` on conflicts, saves a rule so future imports stay merged. Undo: POST /api/log/reject {"id":"<notificationId>"}.',
+    "- Dismiss: DELETE /api/inbox?id=<notificationId> — never suggested again.",
+    "Decide per finding: MERGE when both columns are really one metric imported twice (related sources, or values matching on most shared days). DISMISS when they are different metrics that merely correlate. Ask me before merging text/journal columns or anything you are unsure about.",
+  ].join("\n");
 export const mcpSnip = (b: string, k: string) =>
   `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}'`;
 

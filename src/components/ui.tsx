@@ -85,6 +85,50 @@ export const Input = forwardRef<
 ));
 Input.displayName = "Input";
 
+// ---- Segmented ------------------------------------------------------------
+
+/** Segmented button group — the standard picker for a handful of exclusive
+ * choices (view modes, time ranges). `sm` lines up with h-8 filter controls. */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  size = "md",
+  className,
+  "aria-label": ariaLabel,
+}: {
+  options: ReadonlyArray<{ value: T; label: string }>;
+  value: T;
+  onChange: (v: T) => void;
+  size?: "sm" | "md";
+  className?: string;
+  "aria-label"?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={cn("flex shrink-0 rounded-lg border border-border bg-card p-0.5", className)}
+    >
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          aria-pressed={value === o.value}
+          className={cn(
+            "rounded-md font-medium transition-colors",
+            size === "sm" ? "h-[26px] px-2.5 text-[13px]" : "px-3 py-1.5 text-sm",
+            value === o.value ? "bg-muted text-fg" : "text-muted-fg hover:text-fg",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ---- Select ---------------------------------------------------------------
 
 export const Select = forwardRef<

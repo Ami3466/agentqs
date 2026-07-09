@@ -39,6 +39,14 @@ import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, structurePending } from "./structure-run";
+import {
+  acceptColumnMerge,
+  applySavedMerges,
+  columnGuard,
+  dropMergeRuleFor,
+  type ColumnFinding,
+  type MergeOutcome,
+} from "./column-scan";
 import { wipeDemoOnImport } from "./demo";
 import {
   isAutomation,
@@ -163,6 +171,9 @@ export function logReject(id: string) {
     const result = applyDailyEdits(revertEditsFromAppliedMeta(item.meta), { recordDir: rDir });
     reverted = result.sets + result.clears;
   }
+  // Rejecting a column merge must also forget its rule, or the next import would
+  // silently redo what the user just undid.
+  dropMergeRuleFor(item.meta);
   updateInboxItems(
     [{ id, status: "discarded", meta: { ...(item.meta && typeof item.meta === "object" ? item.meta : {}), rejectedAt: new Date().toISOString() } }],
     { recordDir: rDir },
@@ -416,6 +427,7 @@ export async function syncSource(opts: {
     const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
     if (!token && !fetchImpl) throw new Error("GitHub needs a token — pass --credential or set GITHUB_TOKEN.");
     const s = await importGithub({ token, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    applySavedMerges(rDir); // keep accepted column merges merged on every sync
     const dailyRows = rebuild({ recordDir: rDir }).daily;
     persistSync("github", opts.credential, now);
     return {
@@ -437,6 +449,7 @@ export async function syncSource(opts: {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
     const s = await importWhoop({ creds: creds!, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    applySavedMerges(rDir);
     const dailyRows = rebuild({ recordDir: rDir }).daily;
     const c2 = readConfig();
     if (c2) {
@@ -461,6 +474,7 @@ export async function syncSource(opts: {
     throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${instanceId} <cred>'.`);
   }
   const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir, instanceId);
+  applySavedMerges(rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   persistSync(instanceId, opts.credential, now);
   return {
@@ -525,6 +539,7 @@ export async function syncFileSource(opts: {
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
   const from = opts.days && opts.days > 0 ? win.from : takeoutJson ? "0001-01-01" : win.from;
   const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
+  applySavedMerges(rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   persistSync(importer.id, undefined, new Date().toISOString());
   return {
@@ -591,6 +606,9 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
       }],
       { recordDir: rDir },
     );
+    // A dropped CSV is structuring too — run the column check so a manual
+    // re-import folds into accepted merges and new duplicates get notified.
+    columnGuard(rDir);
     const dailyRows = rebuild({ recordDir: rDir }).daily;
     return {
       inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source,
@@ -624,6 +642,61 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
 /** Turn pending inbox captures into daily rows (CSV free, prose needs a key). */
 export async function structure(opts: { id?: string; csv?: string } = {}) {
   return structurePending({ id: opts.id, csv: opts.csv });
+}
+
+// ---- column scanner ---------------------------------------------------------
+
+export interface ScanResult {
+  findings: ColumnFinding[];
+  autoMerged: MergeOutcome[];
+  notified: number;
+  fixed: MergeOutcome[];
+  dailyRows: number | null;
+}
+
+/**
+ * Scan the daily record for duplicate / near-duplicate columns (a metric imported
+ * manually AND automatically living in two columns). Re-applies saved merge rules,
+ * queues each new finding as an inbox notification (structuring one applies the
+ * merge), and with `fix` applies every suggested merge right away.
+ */
+export function scan(opts: { fix?: boolean } = {}): ScanResult {
+  const rDir = recordDir();
+  const guard = columnGuard(rDir);
+  const fixed: MergeOutcome[] = [];
+  if (opts.fix) {
+    const inbox = readInboxFromRecord(rDir);
+    for (const f of guard.findings) {
+      const outcome = acceptColumnMerge(rDir, f.from.key, f.into.key);
+      fixed.push(outcome);
+      const item = inbox.find((i) => i.id === f.notificationId);
+      updateInboxItems(
+        [{
+          id: f.notificationId,
+          status: "structured",
+          meta: {
+            ...(item?.meta && typeof item.meta === "object" ? item.meta : {}),
+            structuredAt: new Date().toISOString(),
+            via: "merge",
+            source: f.into.source,
+            cells: outcome.moved,
+            applied: outcome.applied,
+          },
+        }],
+        { recordDir: rDir },
+      );
+      f.notificationStatus = "structured";
+    }
+  }
+  const mutated = guard.autoMerged.length > 0 || guard.notified > 0 || fixed.length > 0;
+  const rebuilt = mutated ? rebuild({ recordDir: rDir }) : null;
+  return {
+    findings: guard.findings,
+    autoMerged: guard.autoMerged,
+    notified: guard.notified,
+    fixed,
+    dailyRows: rebuilt?.daily ?? null,
+  };
 }
 
 // ---- config ---------------------------------------------------------------

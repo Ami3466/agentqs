@@ -43,6 +43,10 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
 ### Everything else (already key-free)
 
 - `agentqs import <file>` - land any file; clean CSV structures instantly.
+- `agentqs scan [--fix]` - find duplicate daily columns (one metric imported
+  manually AND by a sync). Findings queue as inbox notifications (kind
+  `notification`); structuring one applies the merge - the auto-synced column
+  wins - and saves a rule so future imports stay merged. MCP tool: `scan`.
 - `agentqs source file chrome|iphone` - local file importers.
 - `agentqs sync <source> --credential <key>` - API sources use THEIR OWN service keys.
 - `agentqs rebuild` - rebuild the SQLite cache from the record (deterministic).
@@ -53,5 +57,5 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
 - The record is the source of truth; the DB is a rebuildable cache. Never edit the
   DB directly - write through the CLI/core so undo metadata stays correct.
 - `npm run rebuild:verify` must stay green (byte-identical rebuilds).
-- Tests: `npm run files:test`, `npx tsx scripts/google-activity-extension-test.ts`.
+- Tests: `npm run files:test`, `npm run scan:test`, `npx tsx scripts/google-activity-extension-test.ts`.
 - Typecheck with `npx tsc --noEmit`; build with `npm run build`.

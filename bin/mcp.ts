@@ -131,6 +131,19 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "scan",
+    {
+      title: "Scan for duplicate columns",
+      description:
+        "Find duplicated / near-duplicate daily columns — the same metric imported manually AND automatically living in two columns. " +
+        "Each finding is queued as an inbox notification; `structure {id}` on it applies the merge (the auto-synced column wins and a rule keeps it merged). " +
+        "Pass fix=true to apply every suggested merge immediately.",
+      inputSchema: { fix: z.boolean().optional() },
+    },
+    async ({ fix }) => guard(() => core.scan({ fix })),
+  );
+
+  server.registerTool(
     "recall",
     {
       title: "Semantic recall (local, no key)",
