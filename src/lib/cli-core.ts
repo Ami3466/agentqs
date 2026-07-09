@@ -40,12 +40,13 @@ import { sourceBundleById } from "./source-bundles";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, structurePending } from "./structure-run";
 import {
-  acceptColumnMerge,
+  acceptQualityAction,
   applySavedMerges,
   columnGuard,
   dropMergeRuleFor,
-  type ColumnFinding,
   type MergeOutcome,
+  type QualityFinding,
+  type QualityOutcome,
 } from "./column-scan";
 import { wipeDemoOnImport } from "./demo";
 import {
@@ -644,31 +645,36 @@ export async function structure(opts: { id?: string; csv?: string } = {}) {
   return structurePending({ id: opts.id, csv: opts.csv });
 }
 
-// ---- column scanner ---------------------------------------------------------
+// ---- data-quality scanner -----------------------------------------------------
 
 export interface ScanResult {
-  findings: ColumnFinding[];
+  findings: QualityFinding[];
   autoMerged: MergeOutcome[];
   notified: number;
-  fixed: MergeOutcome[];
+  fixed: Array<QualityOutcome & { kind: QualityFinding["kind"]; key: string }>;
   dailyRows: number | null;
 }
 
 /**
- * Scan the daily record for duplicate / near-duplicate columns (a metric imported
- * manually AND automatically living in two columns). Re-applies saved merge rules,
- * queues each new finding as an inbox notification (structuring one applies the
- * merge), and with `fix` applies every suggested merge right away.
+ * Scan the daily record for quality issues: duplicate / near-duplicate columns
+ * (merge), dead all-zero columns (drop), messy numeric values (clean). Re-applies
+ * saved merge rules, queues each new finding as an inbox notification (structuring
+ * one applies the fix), and with `fix` applies every suggested fix right away.
  */
 export function scan(opts: { fix?: boolean } = {}): ScanResult {
   const rDir = recordDir();
   const guard = columnGuard(rDir);
-  const fixed: MergeOutcome[] = [];
+  const fixed: ScanResult["fixed"] = [];
   if (opts.fix) {
     const inbox = readInboxFromRecord(rDir);
     for (const f of guard.findings) {
-      const outcome = acceptColumnMerge(rDir, f.from.key, f.into.key);
-      fixed.push(outcome);
+      if (f.notificationStatus !== "pending") continue; // dismissed stays dismissed
+      const action =
+        f.kind === "merge"
+          ? ({ type: "merge", from: f.key, into: f.into! } as const)
+          : ({ type: f.kind, key: f.key } as const);
+      const outcome = acceptQualityAction(rDir, action);
+      fixed.push({ ...outcome, kind: f.kind, key: f.key });
       const item = inbox.find((i) => i.id === f.notificationId);
       updateInboxItems(
         [{
@@ -677,9 +683,9 @@ export function scan(opts: { fix?: boolean } = {}): ScanResult {
           meta: {
             ...(item?.meta && typeof item.meta === "object" ? item.meta : {}),
             structuredAt: new Date().toISOString(),
-            via: "merge",
-            source: f.into.source,
-            cells: outcome.moved,
+            via: f.kind,
+            source: outcome.source,
+            cells: outcome.cells,
             applied: outcome.applied,
           },
         }],

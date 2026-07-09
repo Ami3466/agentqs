@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -1161,6 +1162,30 @@ export interface RebuildResult {
   events: number;
 }
 
+/** iCloud "Optimize Mac Storage" evicts file contents (BSD `dataless` flag);
+ *  reading one blocks in the kernel until materialization, which can stall
+ *  forever. A rebuild that would hang silently must instead fail loudly with
+ *  the recovery command. Never blocks the rebuild when the check itself fails. */
+function assertNoDatalessFiles(rDir: string): void {
+  if (process.platform !== "darwin") return;
+  let out = "";
+  try {
+    out = execFileSync("/usr/bin/find", [rDir, "-flags", "+dataless"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+  } catch {
+    return;
+  }
+  const files = out.split("\n").filter(Boolean);
+  if (!files.length) return;
+  throw new Error(
+    `${files.length} record file(s) are iCloud-evicted (dataless) and would hang the rebuild: ` +
+      `${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}. ` +
+      `Materialize them first: brctl download '${rDir}' (verify with: find '${rDir}' -flags +dataless)`,
+  );
+}
+
 /**
  * Rebuild the SQLite cache from the record, deterministically. Builds in memory
  * with a fixed insertion order, then `VACUUM INTO` a fresh file for a canonical
@@ -1168,7 +1193,11 @@ export interface RebuildResult {
  */
 export function rebuild(opts: RebuildOptions = {}): RebuildResult {
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
-  const outPath = opts.dbPath ?? dbPath(opts.dataDir);
+  // The cache always lands beside the record it was built from (record is
+  // <dataDir>/record) — a caller passing a temp recordDir must never overwrite
+  // the real data dir's cache with the temp record's contents.
+  const outPath = opts.dbPath ?? dbPath(opts.dataDir ?? path.dirname(rDir));
+  assertNoDatalessFiles(rDir);
 
   // events.jsonl can reach hundreds of MB; parsing it dominates every rebuild.
   // When it is byte-identical to what the previous cache was built from (stamped

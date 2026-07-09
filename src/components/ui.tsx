@@ -53,7 +53,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center rounded-lg font-medium transition-colors",
+        // whitespace-nowrap: a button label is always ONE line — tight flex rows
+        // must truncate their text, never wrap their buttons.
+        "inline-flex items-center justify-center whitespace-nowrap rounded-lg font-medium transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
         "disabled:opacity-50 disabled:pointer-events-none",
         VARIANTS[variant],
@@ -117,12 +119,48 @@ export function Segmented<T extends string>({
           onClick={() => onChange(o.value)}
           aria-pressed={value === o.value}
           className={cn(
-            "rounded-md font-medium transition-colors",
+            "whitespace-nowrap rounded-md font-medium transition-colors",
             size === "sm" ? "h-[26px] px-2.5 text-[13px]" : "px-3 py-1.5 text-sm",
             value === o.value ? "bg-muted text-fg" : "text-muted-fg hover:text-fg",
           )}
         >
           {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---- TabBar ---------------------------------------------------------------
+
+/** Card-header tab strip with per-tab counts (Sources, Data inbox). One line,
+ *  never wraps. Use Segmented for plain exclusive choices without counts. */
+export function TabBar<T extends string>({
+  tabs,
+  value,
+  onChange,
+}: {
+  tabs: ReadonlyArray<{ value: T; label: string; count?: number }>;
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="inline-flex shrink-0 rounded-lg border border-border bg-muted p-0.5 text-[13px]">
+      {tabs.map((t) => (
+        <button
+          key={t.value}
+          type="button"
+          onClick={() => onChange(t.value)}
+          aria-pressed={value === t.value}
+          className={cn(
+            "inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors",
+            value === t.value ? "bg-card text-fg shadow-sm" : "text-muted-fg hover:text-fg",
+          )}
+        >
+          {t.label}
+          {t.count != null ? (
+            <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-fg">{t.count}</span>
+          ) : null}
         </button>
       ))}
     </div>

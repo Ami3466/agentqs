@@ -6,8 +6,9 @@ import { pendingFindings } from "@/lib/column-scan";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Open findings (pending scanner notifications) — pure read, no scan. This is
- *  what the scanner panels render on mount, so results survive navigation. */
+/** Open data-quality findings (pending scanner notifications) — pure read, no
+ *  scan. This is what the quality panels render on mount, so results survive
+ *  navigation. */
 export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -16,11 +17,12 @@ export async function GET() {
 }
 
 /**
- * The column scanner (Journal → Table → "Scan", Data → Inbox → "Scan"). Re-applies
- * saved merge rules, finds duplicate / near-duplicate daily columns, and queues
- * each new finding as an inbox notification — structuring that notification (the
- * normal /api/structure route) applies the merge. Same core as `agentqs scan`.
- * `{fix: true}` applies every suggested merge immediately.
+ * The data-quality scan (Journal → Table → "Scan data", Data → Data quality →
+ * "Scan"). Re-applies saved merge rules, then checks every daily column for
+ * duplicates (merge), dead all-zero columns (drop) and messy values (clean), and
+ * queues each new finding as an inbox notification — structuring that
+ * notification (the normal /api/structure route) applies the fix. Same core as
+ * `agentqs scan`. `{fix: true}` applies every open fix immediately.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {

@@ -8,7 +8,7 @@ import { SourceConnect } from "@/components/source-connect";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
-import { Button, cn, Input } from "@/components/ui";
+import { Button, cn, Input, TabBar } from "@/components/ui";
 import { type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
@@ -316,16 +316,14 @@ export function SourcesPanel({
   return (
     <div ref={rootRef} className="scroll-mt-4">
       <div className="border-b border-border p-4">
-        <div className="inline-flex rounded-lg border border-border bg-muted p-0.5 text-[13px]">
-          <TabButton active={tab === "connections"} onClick={() => setTab("connections")}>
-            Connections
-            <TabCount>{connections.filter((s) => s.connected).length}</TabCount>
-          </TabButton>
-          <TabButton active={tab === "automated"} onClick={() => setTab("automated")}>
-            Automated imports
-            <TabCount>{automatedCount}</TabCount>
-          </TabButton>
-        </div>
+        <TabBar<Tab>
+          tabs={[
+            { value: "connections", label: "Connections", count: connections.filter((s) => s.connected).length },
+            { value: "automated", label: "Automated imports", count: automatedCount },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
       </div>
 
       {autoMsg ? (
@@ -445,37 +443,6 @@ export function SourcesPanel({
         </>
       )}
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium transition-colors",
-        active ? "bg-card text-fg shadow-sm" : "text-muted-fg hover:text-fg",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function TabCount({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-fg">
-      {children}
-    </span>
   );
 }
 

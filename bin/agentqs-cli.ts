@@ -99,24 +99,27 @@ program
     }
   });
 
-// ---- column scanner ---------------------------------------------------------
+// ---- data-quality scanner -----------------------------------------------------
 program
   .command("scan")
-  .description("find duplicated/near-duplicate daily columns (manual vs auto imports) and queue merge notifications")
-  .option("--fix", "apply every suggested merge now and save the rules")
+  .description("scan data quality: duplicate daily columns, dead all-zero columns, messy values — findings queue as fix notifications")
+  .option("--fix", "apply every open fix now (merges also save their rule)")
   .action((opts: { fix?: boolean }) => {
     try {
       out(core.scan({ fix: opts.fix }), (d) => {
         const lines: string[] = [];
+        let open = 0;
         for (const m of d.autoMerged) lines.push(`auto-merged ${m.from} → ${m.into} (${m.moved} moved, ${m.kept} conflicts kept)`);
         for (const f of d.findings) {
+          if (f.notificationStatus === "pending") open++;
           const state = f.notificationStatus === "pending" ? "" : ` [${f.notificationStatus}]`;
-          lines.push(`${f.from.key} → ${f.into.key}${f.intoAuto ? " (auto wins)" : ""}  ${f.reason}${state}`);
+          const target = f.kind === "merge" ? `${f.key} → ${f.into}${f.intoAuto ? " (auto wins)" : ""}` : f.key;
+          lines.push(`${f.kind}  ${target}  ${f.reason}${state}`);
         }
-        for (const m of d.fixed) lines.push(`merged ${m.from} → ${m.into} (${m.moved} moved, ${m.kept} conflicts kept)`);
-        if (!lines.length) return "No duplicate columns found.";
-        if (d.findings.length && !d.fixed.length) {
-          lines.push(`\n${d.findings.length} finding${d.findings.length === 1 ? "" : "s"} queued as inbox notifications — structure one to merge, or rerun with --fix.`);
+        for (const m of d.fixed) lines.push(m.summary);
+        if (!lines.length) return "No data-quality issues found.";
+        if (open && !d.fixed.length) {
+          lines.push(`\n${open} finding${open === 1 ? "" : "s"} queued as inbox notifications — structure one to apply its fix, or rerun with --fix.`);
         }
         return lines.join("\n");
       });
@@ -180,9 +183,23 @@ program
   .option("-c, --credential <c>", "API key / token for this run")
   .option("-d, --days <n>", "trailing window", (v) => parseInt(v, 10))
   .option("--fixture <file>", "offline: JSON body to feed the importer")
-  .action(async (positional: string | undefined, opts: { source?: string; credential?: string; days?: number; fixture?: string }) => {
+  .option("--due", "only sources whose schedule says so — the crontab mode (API sources + browser automations)")
+  .action(async (positional: string | undefined, opts: { source?: string; credential?: string; days?: number; fixture?: string; due?: boolean }) => {
     const source = positional ?? opts.source;
     try {
+      if (opts.due) {
+        const { syncDue } = await import("../src/lib/sync-due");
+        const r = await syncDue();
+        out(r, () =>
+          [
+            `Due ${r.due} — synced ${r.synced.length}, failed ${r.failed.length}, skipped ${r.skipped.length}.`,
+            ...r.synced.map((s) => `  ✓ ${s.id} (${s.kind})`),
+            ...r.failed.map((s) => `  ✗ ${s.id} (${s.kind}): ${s.error}`),
+          ].join("\n"),
+        );
+        if (r.failed.length) process.exitCode = 1;
+        return;
+      }
       const r = source
         ? await core.syncSource({ id: source, credential: opts.credential, days: opts.days, fixture: opts.fixture })
         : await core.syncAll(opts.days);

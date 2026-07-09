@@ -13,13 +13,14 @@ export async function GET() {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
   const inbox = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending");
-  // Scanner notifications (kind "notification") get their own section under the
-  // inbox — structuring one applies its column merge instead of extracting a CSV.
+  // Scanner notifications (kind "notification") are data-quality findings — they
+  // live on the Data quality tab (GET /api/scan), not in the capture queue, so
+  // `pending` counts captures only.
   const notifications = inbox.filter((i) => i.kind === "notification");
   const captures = inbox.filter((i) => i.kind !== "notification");
   const wire = (i: (typeof inbox)[number]) => ({ id: i.id, ts: i.ts, source: i.source, kind: i.kind, text: i.text });
   return NextResponse.json({
-    pending: inbox.length,
+    pending: captures.length,
     // The panel renders these in a fixed-height searchable box, so a real backlog
     // is fine to ship - cap only to keep a pathological inbox from megabyte payloads.
     items: captures.slice(-200).reverse().map(wire),

@@ -13,7 +13,7 @@ import {
 import type { JournalData, JournalDay, JournalView } from "@/lib/journal";
 import { Button, cn } from "./ui";
 import { Bookmark, GripVertical, Pencil, Plus, Spinner, X } from "./icons";
-import { ColumnScanner } from "./column-scanner";
+import { DataQualityPanel } from "./data-quality";
 
 interface ColMeta {
   source?: string;
@@ -717,8 +717,8 @@ export function JournalTable({
 
       {editError ? <p className="mb-2 text-xs text-destructive">{editError}</p> : null}
 
-      {/* column scanner — find + merge duplicated columns (manual vs auto imports) */}
-      {!editing && onReload ? <ColumnScanner onMerged={onReload} /> : null}
+      {/* data-quality scan — duplicate columns, dead columns, messy values */}
+      {!editing && onReload ? <DataQualityPanel compact onChanged={onReload} /> : null}
 
       {/* table */}
       <div className="scrollbar-thin overflow-x-auto rounded-xl border border-border">
