@@ -13,12 +13,17 @@ interface Capability {
 }
 
 /**
- * The in-chat live voice session toggle — a stub wired for ElevenLabs
- * Conversational AI. Config-gated: with no ElevenLabs key/agent it explains what
- * to set; when configured, starting it mints a real signed URL the ElevenLabs
- * widget connects to (premium voice + turn-taking, Claude as the brain, key
- * points written back to the record). Distinct from the global voice memo.
+ * The in-chat live voice session toggle — wired for ElevenLabs Conversational AI
+ * or Gemini Live, whichever Settings → Voice picks. Config-gated: unconfigured it
+ * explains what to set; configured, starting it mints real credentials (an
+ * ElevenLabs signed URL, or a single-use Gemini ephemeral token) the audio
+ * widget connects with. Distinct from the global voice memo.
  */
+const PROVIDER_LABEL: Record<string, string> = {
+  elevenlabs: "ElevenLabs",
+  "google-live": "Gemini Live",
+};
+
 export function VoiceSession() {
   const [cap, setCap] = useState<Capability | null>(null);
   const [open, setOpen] = useState(false);
@@ -63,8 +68,9 @@ export function VoiceSession() {
         setError(data.error || "Could not start the voice session.");
         return;
       }
-      // Stub: the ElevenLabs Conversational AI widget would mount against
-      // data.signedUrl here. We flip to an active indicator.
+      // Stub: the audio widget would mount against the minted credential here —
+      // data.signedUrl (ElevenLabs) or data.token (Gemini Live). We flip to an
+      // active indicator.
       setActive(true);
     } catch {
       setError("Could not reach the voice session endpoint.");
@@ -78,12 +84,14 @@ export function VoiceSession() {
     setError("");
   }
 
+  const provider = PROVIDER_LABEL[cap?.provider ?? ""] ?? "ElevenLabs";
+
   return (
     <div className="static shrink-0 sm:relative" ref={ref}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        title="Live voice session (ElevenLabs)"
+        title={`Live voice session (${provider})`}
         className={cn(
           "inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium transition-colors",
           active
@@ -108,7 +116,7 @@ export function VoiceSession() {
             <Waveform width={14} height={14} className="text-accent" />
             <span className="text-[13px] font-semibold text-fg">Live voice session</span>
             <span className="ml-auto rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              ElevenLabs
+              {provider}
             </span>
           </div>
 
@@ -119,8 +127,8 @@ export function VoiceSession() {
                   <Check width={13} height={13} /> Session active
                 </div>
                 <p className="text-[12px] text-muted-fg">
-                  The ElevenLabs Conversational AI widget streams audio here — Claude is the brain,
-                  and key points write back to the record on close.
+                  The {provider} audio widget streams here — key points write back to the record on
+                  close.
                 </p>
                 <button
                   type="button"
@@ -134,21 +142,21 @@ export function VoiceSession() {
               <div>
                 <p className="text-[12px] text-muted-fg">
                   Talk it out in real time — premium voice + turn-taking, grounded in the record.
-                  Claude stays the brain; ElevenLabs handles the voice.
+                  Pick ElevenLabs or Gemini Live under Settings → Voice.
                 </p>
                 <p className="mt-2 rounded-lg border border-border bg-muted px-2.5 py-2 text-[12px] text-muted-fg">
                   {cap.reason}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
                   <Gate ok={cap.keyConfigured} label="API key" />
-                  <Gate ok={cap.agentConfigured} label="Agent id" />
+                  {cap.provider === "elevenlabs" ? <Gate ok={cap.agentConfigured} label="Agent id" /> : null}
                 </div>
               </div>
             ) : (
               <div>
                 <p className="text-[12px] text-muted-fg">
-                  Start a real-time voice conversation. Claude reasons over the record; ElevenLabs
-                  speaks and listens with natural turn-taking.
+                  Start a real-time voice conversation grounded in the record — {provider} speaks
+                  and listens with natural turn-taking.
                 </p>
                 {error ? (
                   <p className="mt-2 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[12px] text-destructive">

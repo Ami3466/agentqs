@@ -22,6 +22,12 @@ import path from "path";
  *   - openai        — OpenAI Whisper (whisper-1) over HTTP, used when nothing
  *                     local is set but an OpenAI key is available. The cloud
  *                     fallback.
+ *   - elevenlabs    — ElevenLabs Scribe over HTTP; enabled by the same key the
+ *                     live voice session uses, so picking ElevenLabs in Settings
+ *                     makes the mic work with no extra setup.
+ *   - gemini        — Gemini audio understanding over HTTP (generateContent with
+ *                     inline audio); enabled by a Google provider key or the
+ *                     Google Live voice key.
  *
  * Server-only (spawns processes, touches the fs). The API route builds the env
  * from config + process.env; nothing here reads config, so it stays pure and
@@ -49,6 +55,10 @@ export interface SttEnv {
   whisperLang?: string; // spoken language for the built-in model (default "en")
   openaiKey?: string; // OPENAI_API_KEY, or the config key when provider=openai
   openaiModel?: string; // default whisper-1
+  elevenLabsKey?: string; // ELEVENLABS_API_KEY, or the Settings voice key when provider=elevenlabs
+  geminiKey?: string; // GEMINI_API_KEY/GOOGLE_API_KEY, a Google provider key, or the Google Live voice key
+  geminiModel?: string; // default gemini-flash-latest (GEMINI_STT_MODEL overrides)
+  prefer?: "" | "elevenlabs" | "google-live"; // the Settings voice provider — wins among cloud backends
   fetchImpl?: typeof fetch; // injectable for tests
 }
 
@@ -175,28 +185,123 @@ export function openaiWhisperBackend(
   };
 }
 
+// ---- ElevenLabs Scribe backend (HTTP) --------------------------------------
+
+export function elevenLabsSttBackend(apiKey: string, fetchImpl: typeof fetch = fetch): SttBackend {
+  return {
+    id: "elevenlabs",
+    label: "ElevenLabs Scribe",
+    async transcribe({ audio, mime, filename, signal }) {
+      const form = new FormData();
+      const blob = new Blob([audio as unknown as BlobPart], { type: mime || "audio/webm" });
+      form.append("file", blob, filename || `memo${extFor(mime, filename)}`);
+      form.append("model_id", "scribe_v1");
+      const res = await fetchImpl("https://api.elevenlabs.io/v1/speech-to-text", {
+        method: "POST",
+        headers: { "xi-api-key": apiKey },
+        body: form,
+        signal,
+      });
+      const text = await res.text();
+      let json: unknown = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        /* surfaced below */
+      }
+      if (!res.ok) {
+        const j = json as { detail?: { message?: string } | string };
+        const msg = (typeof j.detail === "object" ? j.detail?.message : j.detail) || text || res.statusText;
+        throw new Error(`ElevenLabs ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+      }
+      return String((json as { text?: unknown }).text ?? "").trim();
+    },
+  };
+}
+
+// ---- Gemini audio backend (HTTP) -------------------------------------------
+
+export function geminiSttBackend(
+  apiKey: string,
+  model = "gemini-flash-latest",
+  fetchImpl: typeof fetch = fetch,
+): SttBackend {
+  return {
+    id: "gemini",
+    label: `Gemini (${model})`,
+    async transcribe({ audio, mime, signal }) {
+      const res = await fetchImpl(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: "POST",
+          headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: "Transcribe this audio verbatim. Reply with ONLY the transcript — no preamble, no quotes." },
+                  { inline_data: { mime_type: mime || "audio/webm", data: audio.toString("base64") } },
+                ],
+              },
+            ],
+          }),
+          signal,
+        },
+      );
+      const text = await res.text();
+      let json: unknown = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        /* surfaced below */
+      }
+      if (!res.ok) {
+        const j = json as { error?: { message?: string } };
+        throw new Error(`Gemini ${res.status}: ${j.error?.message || text || res.statusText}`);
+      }
+      const parts = (json as { candidates?: { content?: { parts?: { text?: string }[] } }[] }).candidates?.[0]
+        ?.content?.parts;
+      return (parts ?? [])
+        .map((p) => p.text ?? "")
+        .join("")
+        .trim();
+    },
+  };
+}
+
 // ---- Resolution + description --------------------------------------------
 
 /** Pick the active backend from the environment. A local binary is an explicit
  *  opt-in and always wins; then the built-in Whisper installed from Settings;
- *  otherwise an OpenAI key enables the cloud fallback; otherwise there's no STT
- *  and the mic surfaces a setup hint. */
+ *  then the cloud backends — the Settings voice provider (ElevenLabs / Google
+ *  Live) is an explicit pick and beats the key-presence fallbacks (OpenAI, then
+ *  ElevenLabs, then Gemini); otherwise there's no STT and the mic surfaces a
+ *  setup hint. */
 export function resolveSttBackend(env: SttEnv): SttBackend | null {
+  const f = env.fetchImpl ?? fetch;
   if (env.whisperBin && env.whisperBin.trim()) {
     return localWhisperBackend(env.whisperBin.trim(), splitArgs(env.whisperArgs));
   }
   if (env.whisperModel && env.whisperModel.trim()) {
     return whisperModelBackend(env.whisperModel.trim(), env.whisperLang?.trim());
   }
+  const elevenlabs = env.elevenLabsKey?.trim()
+    ? elevenLabsSttBackend(env.elevenLabsKey.trim(), f)
+    : null;
+  const gemini = env.geminiKey?.trim()
+    ? geminiSttBackend(env.geminiKey.trim(), env.geminiModel?.trim() || "gemini-flash-latest", f)
+    : null;
+  if (env.prefer === "elevenlabs" && elevenlabs) return elevenlabs;
+  if (env.prefer === "google-live" && gemini) return gemini;
   if (env.openaiKey && env.openaiKey.trim()) {
-    return openaiWhisperBackend(env.openaiKey.trim(), env.openaiModel?.trim() || "whisper-1", env.fetchImpl ?? fetch);
+    return openaiWhisperBackend(env.openaiKey.trim(), env.openaiModel?.trim() || "whisper-1", f);
   }
-  return null;
+  return elevenlabs ?? gemini;
 }
 
 export interface SttStatus {
   ready: boolean;
-  backend: string | null; // "local" | "whisper-local" | "openai" | null
+  backend: string | null; // "local" | "whisper-local" | "openai" | "elevenlabs" | "gemini" | null
   label: string;
 }
 
@@ -207,7 +312,8 @@ export function describeStt(env: SttEnv): SttStatus {
   return {
     ready: false,
     backend: null,
-    label: "No speech-to-text configured — install Whisper under Settings → Voice memos, or add an OpenAI key.",
+    label:
+      "No speech-to-text configured — install Whisper under Settings → Voice memos, pick a voice provider (ElevenLabs / Google Live), or add an OpenAI key.",
   };
 }
 
@@ -221,42 +327,63 @@ export async function transcribeMemo(input: TranscribeInput, env: SttEnv): Promi
   return { text, backend: backend.id };
 }
 
-// ---- Live voice session (ElevenLabs Conversational AI) --------------------
+// ---- Live voice session (ElevenLabs Conversational AI / Gemini Live) ------
 
 /**
- * The in-chat live voice session is ElevenLabs Conversational AI — premium voice
- * + turn-taking, with the agent's brain configured to Claude in the ElevenLabs
- * dashboard, and key points written back to the record. It's config-gated: the
- * toggle stays a stub until both an API key and an agent id are present. This is
- * the real capability probe the UI + the session route share.
+ * The in-chat live voice session — premium voice + turn-taking, with key points
+ * written back to the record. Two providers, picked in Settings → Voice:
+ *
+ *   - elevenlabs  — Conversational AI; needs an API key + an agent id (the
+ *                   agent's brain is configured to Claude in the ElevenLabs
+ *                   dashboard). The server mints a signed URL to connect to.
+ *   - google-live — Gemini Live; needs only a Gemini API key (a Google provider
+ *                   key can be linked). The server mints a single-use ephemeral
+ *                   token the browser uses as its API key, so the real key
+ *                   never leaves this machine.
+ *
+ * Config-gated: the toggle stays a stub until the provider's requirements are
+ * present. This is the real capability probe the UI + the session route share.
  */
 export interface SessionEnv {
+  provider?: "" | "elevenlabs" | "google-live"; // Settings voice provider; "" falls back to elevenlabs env vars
   elevenLabsKey?: string; // ELEVENLABS_API_KEY
   elevenLabsAgentId?: string; // ELEVENLABS_AGENT_ID
+  googleKey?: string; // Gemini API key (Settings voice key, a linked Google provider, or GEMINI_API_KEY)
+  googleModel?: string; // Live model, default gemini-2.5-flash-native-audio-preview-09-2025
   fetchImpl?: typeof fetch;
 }
 
 export interface SessionStatus {
   enabled: boolean;
-  provider: "elevenlabs";
+  provider: "elevenlabs" | "google-live";
   keyConfigured: boolean;
-  agentConfigured: boolean;
+  agentConfigured: boolean; // ElevenLabs only; always true for Google Live
   reason: string; // why it's disabled (empty when enabled)
 }
 
 export function describeSession(env: SessionEnv): SessionStatus {
+  if (env.provider === "google-live") {
+    const keyConfigured = Boolean(env.googleKey && env.googleKey.trim());
+    return {
+      enabled: keyConfigured,
+      provider: "google-live",
+      keyConfigured,
+      agentConfigured: true,
+      reason: keyConfigured ? "" : "Add a Gemini API key under Settings → Voice to enable the live voice session.",
+    };
+  }
   const keyConfigured = Boolean(env.elevenLabsKey && env.elevenLabsKey.trim());
   const agentConfigured = Boolean(env.elevenLabsAgentId && env.elevenLabsAgentId.trim());
   const enabled = keyConfigured && agentConfigured;
   const missing: string[] = [];
-  if (!keyConfigured) missing.push("ELEVENLABS_API_KEY");
-  if (!agentConfigured) missing.push("ELEVENLABS_AGENT_ID");
+  if (!keyConfigured) missing.push("an API key");
+  if (!agentConfigured) missing.push("an agent id");
   return {
     enabled,
     provider: "elevenlabs",
     keyConfigured,
     agentConfigured,
-    reason: enabled ? "" : `Set ${missing.join(" + ")} to enable the live voice session.`,
+    reason: enabled ? "" : `Add ${missing.join(" + ")} under Settings → Voice to enable the live voice session.`,
   };
 }
 
@@ -291,4 +418,42 @@ export async function elevenLabsSignedUrl(env: SessionEnv): Promise<string> {
   const url = (json as { signed_url?: unknown }).signed_url;
   if (typeof url !== "string" || !url) throw new Error("ElevenLabs did not return a signed URL.");
   return url;
+}
+
+/**
+ * Mint a single-use ephemeral token for Gemini Live. Real wiring — POSTs the
+ * v1alpha auth_tokens create (the endpoint the official GenAI SDKs call); the
+ * returned `name` is what the browser passes as its API key when opening the
+ * Live WebSocket, so the real Gemini key never reaches the client. Throws when
+ * unconfigured (the caller returns a config-gated 501) or on an upstream error.
+ */
+export async function geminiLiveToken(env: SessionEnv): Promise<{ token: string; model: string }> {
+  const status = describeSession(env);
+  if (env.provider !== "google-live" || !status.enabled) {
+    throw new Error(status.reason || "The live voice session is not configured for Gemini.");
+  }
+  const fetchImpl = env.fetchImpl ?? fetch;
+  const model = env.googleModel?.trim() || "gemini-2.5-flash-native-audio-preview-09-2025";
+  const res = await fetchImpl("https://generativelanguage.googleapis.com/v1alpha/auth_tokens", {
+    method: "POST",
+    headers: { "x-goog-api-key": env.googleKey!.trim(), "content-type": "application/json" },
+    body: JSON.stringify({
+      uses: 1,
+      expireTime: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    }),
+  });
+  const text = await res.text();
+  let json: unknown = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    /* surfaced below */
+  }
+  if (!res.ok) {
+    const j = json as { error?: { message?: string } };
+    throw new Error(`Gemini ${res.status}: ${j.error?.message || text || res.statusText}`);
+  }
+  const token = (json as { name?: unknown }).name;
+  if (typeof token !== "string" || !token) throw new Error("Gemini did not return an ephemeral token.");
+  return { token, model };
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { effectiveProviders, readConfig } from "@/lib/config";
+import { effectiveProviders, linkedApiKey, readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import { appendInboxItem, readRecord, rebuild } from "@/lib/record";
 import { autoStructureNewItem } from "@/lib/structure-run";
@@ -15,20 +15,34 @@ const MAX_BYTES = 25 * 1024 * 1024; // 25 MB (also OpenAI Whisper's file cap)
 
 /** Build the STT environment from process.env + config. WHISPER_BIN wins; then the
  *  built-in Whisper installed from Settings (only while its weights are actually on
- *  disk, so the mic capability stays truthful); then an OpenAI key — from a
- *  dedicated env var or an added OpenAI provider account — as the cloud fallback. */
+ *  disk, so the mic capability stays truthful); then the cloud backends — the
+ *  Settings voice provider's key (ElevenLabs / Google Live) makes the mic work with
+ *  no extra setup, and an OpenAI or Google provider key stays the fallback. */
 function sttEnv(): SttEnv {
   const cfg = readConfig();
-  const openaiAcct = effectiveProviders(cfg).find((p) => p.type === "openai" && p.apiKey);
-  const openaiKey = process.env.OPENAI_API_KEY || openaiAcct?.apiKey || "";
-  const installed = cfg?.voice?.whisperModel || "";
+  const providers = effectiveProviders(cfg);
+  const openaiAcct = providers.find((p) => p.type === "openai" && p.apiKey);
+  const googleAcct = providers.find((p) => p.type === "google" && p.apiKey);
+  const voice = cfg?.voice;
+  const voiceKey = linkedApiKey(cfg, voice?.providerId, voice?.apiKey);
+  const installed = voice?.whisperModel || "";
   return {
     whisperBin: process.env.WHISPER_BIN || "",
     whisperArgs: process.env.WHISPER_ARGS || "",
     whisperModel: installed && whisperInstalled(installed) ? installed : "",
-    whisperLang: cfg?.voice?.whisperLang || "en",
-    openaiKey,
+    whisperLang: voice?.whisperLang || "en",
+    openaiKey: process.env.OPENAI_API_KEY || openaiAcct?.apiKey || "",
     openaiModel: process.env.WHISPER_MODEL || "whisper-1",
+    elevenLabsKey:
+      (voice?.provider === "elevenlabs" ? voiceKey : "") || process.env.ELEVENLABS_API_KEY || "",
+    geminiKey:
+      (voice?.provider === "google-live" ? voiceKey : "") ||
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      googleAcct?.apiKey ||
+      "",
+    geminiModel: process.env.GEMINI_STT_MODEL || "",
+    prefer: voice?.provider || "",
   };
 }
 
