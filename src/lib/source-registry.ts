@@ -15,7 +15,8 @@ import type { AppConfig } from "./config";
 import { recordDir } from "./paths";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { PLUGINS } from "./importers/registry";
-import { resolveCredential } from "./importers/plugin";
+import { connectionState } from "./importers/plugin";
+import { readSyncRuns } from "./sync-runs";
 import { FILE_IMPORTERS } from "./importers/files/registry";
 import { listAutomations } from "./automation";
 import type { AutomationRecipe } from "./automation-types";
@@ -29,6 +30,15 @@ import {
   type Interval,
   type SourceView,
 } from "./sources";
+
+/** Latest sync attempt for a source from the run ledger, as SourceView fields.
+ *  Read per row but the ledger is one small JSON — cache it per buildSources
+ *  pass via the module-level snapshot below. */
+let runsSnapshot: ReturnType<typeof readSyncRuns> | null = null;
+function lastRunFields(id: string): { lastRunOk: boolean | null; lastRunError: string | null } {
+  const run = (runsSnapshot ?? readSyncRuns()).runs[id];
+  return { lastRunOk: run ? run.ok : null, lastRunError: run?.error ?? null };
+}
 
 function intervalFor(cfg: AppConfig | null, id: string): Interval {
   const raw = cfg?.sourceIntervals?.[id];
@@ -149,7 +159,7 @@ function coverageForFiles(files: string[]): { files: number; from: string | null
 function githubRow(cfg: AppConfig | null, dir: string): SourceView {
   const file = path.join(dir, "daily", "github.csv");
   const days = fs.existsSync(file) ? parseGithubCsv(fs.readFileSync(file, "utf8")) : [];
-  const connected = days.length > 0;
+  const hasData = days.length > 0;
   const lastSync = cfg?.githubSyncedAt ?? fileMtimeISO(file);
   const interval = intervalFor(cfg, "github");
   const hasToken = Boolean(resolveGithubToken());
@@ -158,13 +168,16 @@ function githubRow(cfg: AppConfig | null, dir: string): SourceView {
     name: "GitHub",
     kind: "api",
     detail: "commits per day",
-    connected,
+    connected: hasToken,
+    hasData,
     interval,
     lastSync,
     stale: false,
-    due: connected && hasToken && isDue(lastSync, interval),
+    due: hasToken && isDue(lastSync, interval),
     syncEndpoint: "/api/import/github",
     live: true,
+    credentialOrigin: hasToken ? (process.env.GITHUB_TOKEN ? "env" : "saved") : null,
+    ...lastRunFields("github"),
   };
 }
 
@@ -174,7 +187,7 @@ function githubRow(cfg: AppConfig | null, dir: string): SourceView {
  *  re-auth; DUE (server-side auto-sync) only then. */
 function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
   const file = path.join(dir, "daily", "whoop.csv");
-  const connected = hasRows(file);
+  const hasData = hasRows(file);
   const lastSync = cfg?.sourceSyncedAt?.whoop ?? fileMtimeISO(file);
   const interval = intervalFor(cfg, "whoop");
   const wc = cfg?.whoopCreds;
@@ -184,13 +197,16 @@ function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
     name: "WHOOP",
     kind: "api",
     detail: "per-minute HR, HRV, recovery, sleep, strain",
-    connected,
+    connected: hasCred,
+    hasData,
     interval,
     lastSync,
     stale: false,
-    due: connected && hasCred && isDue(lastSync, interval),
+    due: hasCred && isDue(lastSync, interval),
     syncEndpoint: "/api/import/whoop",
     live: true,
+    credentialOrigin: hasCred ? "saved" : null,
+    ...lastRunFields("whoop"),
   };
 }
 
@@ -205,24 +221,30 @@ function pluginRow(
   instanceId: string = plugin.id,
 ): SourceView {
   const file = path.join(dir, "daily", `${instanceId}.csv`);
-  const connected = hasRows(file);
   const lastSync = cfg?.sourceSyncedAt?.[instanceId] ?? fileMtimeISO(file);
   const interval = intervalFor(cfg, instanceId);
-  const hasCred = Boolean(resolveCredential(plugin, undefined, cfg, instanceId));
+  // connected = the user AUTHORIZED syncing (saved/env credential, or an
+  // opted-in detected app token). Data presence is a separate fact (hasData):
+  // an import landing rows must never present the source as connected.
+  const state = connectionState(plugin, cfg, instanceId, file);
   const suffix = instanceId !== plugin.id ? instanceId.slice(plugin.id.length + 1) : "";
   return {
     id: instanceId,
     name: suffix ? `${plugin.name} · account ${suffix}` : plugin.name,
     kind: "api",
     detail: plugin.detail,
-    connected,
+    connected: state.connected,
     interval,
     lastSync,
     stale: false,
-    due: plugin.live && connected && hasCred && isDue(lastSync, interval),
+    due: plugin.live && state.connected && isDue(lastSync, interval),
     syncEndpoint: plugin.live ? `/api/import/${instanceId}` : null,
     live: plugin.live,
     plugin: true,
+    credentialOrigin: state.credentialOrigin === "explicit" ? "saved" : state.credentialOrigin,
+    hasData: state.hasData,
+    detectedApp: state.detectedApp,
+    ...lastRunFields(instanceId),
   };
 }
 
@@ -378,6 +400,7 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
  *  record has rows for it; unknown CSVs are surfaced as removable record imports,
  *  not as fake automations. */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
+  runsSnapshot = readSyncRuns(); // one ledger read per pass, not per row
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
   const owned = new Set<string>(["github", "whoop"]);
   for (const plugin of PLUGINS) {

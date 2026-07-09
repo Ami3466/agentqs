@@ -207,7 +207,8 @@ export function JournalWorkspace() {
       <div className="mb-4 flex items-center justify-between gap-4">
         <p className="text-sm text-muted-fg">
           {data
-            ? `${data.totalDays.toLocaleString()} day${data.totalDays === 1 ? "" : "s"} · ${data.totalCells.toLocaleString()} data point${data.totalCells === 1 ? "" : "s"}` +
+            ? `${data.totalDays.toLocaleString()} day${data.totalDays === 1 ? "" : "s"} · ${(data.totalCells + (data.totalEvents || 0)).toLocaleString()} data points` +
+              ((data.totalEvents || 0) > 0 ? ` (${data.totalEvents.toLocaleString()} events · ${data.totalCells.toLocaleString()} daily)` : "") +
               (fullHistory || data.days.length >= data.totalDays ? "" : ` · showing last ${data.days.length.toLocaleString()}`)
             : " "}
         </p>
@@ -219,15 +220,14 @@ export function JournalWorkspace() {
         />
       </div>
 
-      <JournalSearch />
-
       {data ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
+          <JournalSearch />
           <Select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
             aria-label="Data type"
-            className="h-8 w-full text-[13px] sm:w-[168px]"
+            className="h-8 w-[168px] text-[13px]"
           >
             <option value="all">All data</option>
             {sources.map((s) => (

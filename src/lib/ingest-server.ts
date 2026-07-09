@@ -1,5 +1,7 @@
+import fs from "fs";
 import http from "http";
-import { ingestGoogleActivityApiItems, isGooglePreset } from "./google-web-scraper";
+import path from "path";
+import { extensionPingFile, ingestGoogleActivityApiItems, isGooglePreset } from "./google-web-scraper";
 
 /**
  * Standalone ingest listener — a bare Node http server OUTSIDE the Next router.
@@ -16,6 +18,19 @@ import { ingestGoogleActivityApiItems, isGooglePreset } from "./google-web-scrap
  */
 
 export const INGEST_PATH = "/api/automations/google-activity-extension";
+export const INGEST_PING_PATH = `${INGEST_PATH}/ping`;
+
+/** Stamp the extension heartbeat file the Data tab reads ("extension installed"
+ *  vs "nothing listening"). Shared by the Next ping route and this listener, so
+ *  the extension can rotate ping targets exactly like batch posts. */
+export function recordExtensionPing(version: unknown): void {
+  const file = extensionPingFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ seenAt: new Date().toISOString(), version: typeof version === "string" ? version : "" }),
+  );
+}
 
 /** Keep in sync with EXTRA_BASES in extensions/google-activity-exporter/content.js. */
 export function ingestPort(): number {
@@ -83,6 +98,13 @@ export function runIngest(body: IngestBody): { status: number; payload: unknown 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 let server: http.Server | null = null;
+let listening = false;
+
+/** True when THIS process owns the ingest port — doubles as the machine-wide
+ *  "I run the scheduler" lock (port binding is the mutex). */
+export function ingestServerActive(): boolean {
+  return listening;
+}
 
 /** Idempotent. EADDRINUSE is expected (another agentqs process already listens —
  *  one working sink is all the extension needs) and only logged. */
@@ -92,7 +114,7 @@ export function startIngestServer(): void {
     const origin = req.headers.origin ?? null;
     const cors = ingestCorsHeaders(origin);
     const url = (req.url || "").split("?")[0];
-    if (url !== INGEST_PATH) {
+    if (url !== INGEST_PATH && url !== INGEST_PING_PATH) {
       res.writeHead(404, { "content-type": "application/json", ...cors });
       res.end(JSON.stringify({ error: "Not found." }));
       return;
@@ -126,11 +148,22 @@ export function startIngestServer(): void {
     });
     req.on("end", () => {
       if (res.writableEnded) return;
-      let body: IngestBody = {};
+      let body: IngestBody & { version?: unknown } = {};
       try {
-        body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as IngestBody;
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as IngestBody & { version?: unknown };
       } catch {
         /* unparseable body fails preset validation below */
+      }
+      if (url === INGEST_PING_PATH) {
+        try {
+          recordExtensionPing(body.version);
+          res.writeHead(200, { "content-type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(500, { "content-type": "application/json", ...cors });
+          res.end(JSON.stringify({ error: (e as Error).message }));
+        }
+        return;
       }
       const { status, payload } = runIngest(body);
       res.writeHead(status, { "content-type": "application/json", ...cors });
@@ -150,10 +183,12 @@ export function startIngestServer(): void {
       console.warn(`agentqs ingest listener failed: ${e.message}`);
     }
     server = null;
+    listening = false;
   });
   // localhost-only: this port accepts unauthenticated (origin-gated) writes and
   // must never be reachable from the network.
   srv.listen(ingestPort(), "127.0.0.1", () => {
+    listening = true;
     console.log(`agentqs ingest listener on http://127.0.0.1:${ingestPort()}${INGEST_PATH} (immune to dev recompiles)`);
   });
   server = srv;

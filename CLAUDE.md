@@ -51,9 +51,21 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
   column and save a rule so future imports stay merged. MCP tool: `scan`.
 - `agentqs source file chrome|iphone` - local file importers.
 - `agentqs sync <source> --credential <key>` - API sources use THEIR OWN service keys.
+- THE connection rule: connected ⇔ a stored credential (user-saved or env).
+  Data in the record NEVER implies connected. A detected desktop-app login
+  (Granola) is a hint only — it never syncs; the Data tab's "Connect (use
+  detected app)" imports it as a saved credential. There is NO keyless connect
+  on any surface (CLI/MCP/API); never mark or treat a source as connected
+  without a stored key.
 - `agentqs sync --due` - the crontab mode: runs every source whose interval
   (`agentqs source interval <id> hourly|daily|weekly`, or set in Data) says it's
   due - API sources AND browser automations. One crontab line = auto scraping.
+- `agentqs pipeline` - the data-pipeline truth table: per source, how data
+  arrives, credential provenance (`saved` = user-connected, `discovered` =
+  auto-detected from a local desktop app), schedule, scheduler presence
+  (launchd/crontab), last run outcome (failures included, from the sync-run
+  ledger) and landed coverage. Answer "is X actually connected/working?" from
+  here, never from row presence. MCP tool: `pipeline`; API: GET `/api/pipeline`.
 - `agentqs rebuild` - rebuild the SQLite cache from the record (deterministic).
 - `agentqs journal | sources | automation | photos | skill | config` - see `--help`.
 
@@ -62,5 +74,5 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
 - The record is the source of truth; the DB is a rebuildable cache. Never edit the
   DB directly - write through the CLI/core so undo metadata stays correct.
 - `npm run rebuild:verify` must stay green (byte-identical rebuilds).
-- Tests: `npm run files:test`, `npm run scan:test`, `npx tsx scripts/google-activity-extension-test.ts`.
+- Tests: `npm run files:test`, `npm run scan:test`, `npm run extension:test`.
 - Typecheck with `npx tsc --noEmit`; build with `npm run build`.

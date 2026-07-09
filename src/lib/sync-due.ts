@@ -2,6 +2,7 @@ import { readConfig } from "./config";
 import { recordDir } from "./paths";
 import { buildSources } from "./source-registry";
 import type { SourceView } from "./sources";
+import { recordDueRun } from "./sync-runs";
 
 /**
  * The cron entrypoint for automated scraping: run every source whose schedule
@@ -49,6 +50,7 @@ export function dueSources(dir: string = recordDir()): SourceView[] {
 }
 
 export async function syncDue(runners?: DueRunners, dir: string = recordDir()): Promise<SyncDueSummary> {
+  recordDueRun(); // scheduler heartbeat: proves cron/launchd sweeps reach the app
   const run = runners ?? (await defaultRunners());
   const scheduled = dueSources(dir);
   const synced: DueResult[] = [];

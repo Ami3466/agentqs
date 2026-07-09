@@ -32,11 +32,13 @@ import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken } from "./importers/github";
 import { importWhoop, whoopFixtureFetch, whoopHrDir, type WhoopCreds } from "./importers/whoop";
-import { importPlugin, resolveCredential, windowDays, type FetchLike } from "./importers/plugin";
+import { importPlugin, resolveCredential, resolveCredentialWithOrigin, resolveSyncCredential, windowDays, type FetchLike } from "./importers/plugin";
 import { pluginInstanceById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
+import { recordSyncRun } from "./sync-runs";
+import { pipelineReport } from "./pipeline";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, structurePending } from "./structure-run";
 import {
@@ -132,6 +134,7 @@ export function journal(opts: { limit?: number; source?: string } = {}) {
     days,
     totalDays: data.totalDays,
     totalCells: data.totalCells,
+    totalEvents: data.totalEvents,
     sources: [...new Set(data.metrics.map((m) => m.source))].sort(),
   };
 }
@@ -221,6 +224,12 @@ export function sources() {
   return buildSources(readConfig());
 }
 
+/** The pipeline truth table: origin, credential provenance, schedule,
+ *  scheduler presence, last run outcome and landed data per source. */
+export function pipeline() {
+  return pipelineReport();
+}
+
 /** Save an API source's credential (Tier-1 plugin). This is "connect a source".
  *  An instance id ("spotify-2") connects an EXTRA account of the same source. */
 export function connectSource(id: string, credential: string): { id: string; saved: boolean } {
@@ -228,6 +237,7 @@ export function connectSource(id: string, credential: string): { id: string; sav
   if (!plugin && id !== "github") {
     throw new Error(`Unknown API source "${id}". Try: github, ${PLUGINS.map((p) => p.id).join(", ")}`);
   }
+  // The one rule: connected ⇔ a stored credential. There is NO keyless connect.
   if (!credential || !credential.trim()) throw new Error("Pass a credential to connect.");
   const cfg = requireConfig();
   if (id === "github") {
@@ -237,6 +247,20 @@ export function connectSource(id: string, credential: string): { id: string; sav
   }
   writeConfig(cfg);
   return { id, saved: true };
+}
+
+/** Import a DETECTED desktop app's login as this source's saved credential —
+ *  the explicit "Connect (use detected app)" action. The token lands in
+ *  sourceCreds like any pasted key: visible provenance, revoked by disconnect.
+ *  Never called implicitly; without it a detected login syncs NOTHING. */
+export function connectDetectedApp(id: string): { id: string; saved: boolean } {
+  const inst = pluginInstanceById(id);
+  if (!inst) throw new Error(`Unknown API source "${id}".`);
+  const { credential, origin } = resolveCredentialWithOrigin(inst.plugin, undefined, readConfig(), inst.instanceId);
+  if (origin !== "discovered" || !credential) {
+    throw new Error(`No ${inst.plugin.name} desktop login detected on this machine.`);
+  }
+  return connectSource(id, credential);
 }
 
 /** Connect WHOOP via the unofficial app login — stores email + password (config
@@ -418,6 +442,24 @@ export async function syncSource(opts: {
   days?: number;
   fixture?: string;
 }): Promise<SyncResult> {
+  // Every attempt lands in the run ledger — success and failure — so the
+  // pipeline report and the Data tab can tell a broken sync from a healthy one.
+  try {
+    const result = await syncSourceInner(opts);
+    recordSyncRun(opts.id, true);
+    return result;
+  } catch (e) {
+    recordSyncRun(opts.id, false, (e as Error).message);
+    throw e;
+  }
+}
+
+async function syncSourceInner(opts: {
+  id: string;
+  credential?: string;
+  days?: number;
+  fixture?: string;
+}): Promise<SyncResult> {
   const rDir = recordDir();
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
   const cfg = readConfig();
@@ -469,10 +511,16 @@ export async function syncSource(opts: {
     throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const { plugin, instanceId } = inst;
-  const credential = resolveCredential(plugin, opts.credential, cfg, instanceId);
+  // Gated: a discovered desktop-app token only syncs after the user opted in.
+  const credential = resolveSyncCredential(plugin, opts.credential, cfg, instanceId);
   const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
   if (plugin.requiresCredential && !credential && !fetchImpl) {
-    throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${instanceId} <cred>'.`);
+    const detected = Boolean(resolveCredential(plugin, undefined, cfg, instanceId));
+    throw new Error(
+      detected
+        ? `${plugin.name} desktop app detected but not connected. Run 'agentqs source connect ${instanceId}' to approve using its login, or pass --credential.`
+        : `${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${instanceId} <cred>'.`,
+    );
   }
   const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir, instanceId);
   applySavedMerges(rDir);
@@ -503,7 +551,7 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
         ? Boolean(resolveGithubToken())
         : id === "whoop"
           ? Boolean(cfg?.whoopCreds?.email && (cfg.whoopCreds.password || cfg.whoopCreds.refreshToken))
-          : Boolean(resolveCredential(pluginInstanceById(id)!.plugin, undefined, cfg, id));
+          : Boolean(resolveSyncCredential(pluginInstanceById(id)!.plugin, undefined, cfg, id));
     if (!hasCred) {
       skipped.push({ id, reason: "no credential" });
       continue;
@@ -521,6 +569,21 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
 
 /** Import a Tier-2 local file source (Chrome history, iPhone backup). */
 export async function syncFileSource(opts: {
+  id: string;
+  path?: string;
+  days?: number;
+}): Promise<SyncResult> {
+  try {
+    const result = await syncFileSourceInner(opts);
+    recordSyncRun(opts.id, true);
+    return result;
+  } catch (e) {
+    recordSyncRun(opts.id, false, (e as Error).message);
+    throw e;
+  }
+}
+
+async function syncFileSourceInner(opts: {
   id: string;
   path?: string;
   days?: number;

@@ -1,3 +1,4 @@
+import fs from "fs";
 import { readConfig, type AppConfig } from "../config";
 import {
   appendEvents,
@@ -98,21 +99,85 @@ export function resolveCredential(
   cfg: AppConfig | null = readConfig(),
   credKey: string = plugin.id,
 ): string | undefined {
-  if (explicit && explicit.trim()) return explicit.trim();
+  return resolveCredentialWithOrigin(plugin, explicit, cfg, credKey).credential;
+}
+
+/** Where a credential comes from. "discovered" = auto-detected from the source's
+ *  local desktop app — the user never pasted anything, and the UI must say so
+ *  instead of presenting the source as if the user connected it. */
+export type CredentialOrigin = "explicit" | "env" | "saved" | "discovered";
+
+export function resolveCredentialWithOrigin(
+  plugin: ImporterPlugin,
+  explicit?: string,
+  cfg: AppConfig | null = readConfig(),
+  credKey: string = plugin.id,
+): { credential?: string; origin: CredentialOrigin | null } {
+  if (explicit && explicit.trim()) return { credential: explicit.trim(), origin: "explicit" };
   const isBase = credKey === plugin.id;
   if (isBase && plugin.envKey && process.env[plugin.envKey]) {
-    return process.env[plugin.envKey];
+    return { credential: process.env[plugin.envKey], origin: "env" };
   }
   const saved = cfg?.sourceCreds?.[credKey]?.trim();
-  if (saved) return saved;
+  if (saved) return { credential: saved, origin: "saved" };
   if (isBase && plugin.discoverCredential) {
     try {
-      return plugin.discoverCredential()?.trim() || undefined;
+      const discovered = plugin.discoverCredential()?.trim();
+      if (discovered) return { credential: discovered, origin: "discovered" };
     } catch {
-      return undefined; // a desktop app that isn't installed/signed in is not an error
+      /* a desktop app that isn't installed/signed in is not an error */
     }
   }
-  return undefined;
+  return { origin: null };
+}
+
+/**
+ * The connection model — the one hard rule: CONNECTED ⇔ A STORED CREDENTIAL
+ * (user-saved or env). Nothing else can flip it — not landed data, not a
+ * discoverable desktop-app login, not any CLI/MCP/API call without a key.
+ *   hasData     — rows exist in the record (imports count; says NOTHING about auth)
+ *   detectedApp — a local desktop app's login is discoverable; a UI hint ONLY.
+ *                 Connecting it means IMPORTING that token as a saved credential
+ *                 (visible, revocable) — never using it silently.
+ */
+export interface ConnectionState {
+  hasData: boolean;
+  credentialOrigin: CredentialOrigin | null;
+  detectedApp: boolean; // discoverable local-app token exists (hint, not auth)
+  connected: boolean;
+}
+
+export function connectionState(
+  plugin: ImporterPlugin,
+  cfg: AppConfig | null,
+  instanceId: string = plugin.id,
+  dailyFile?: string,
+): ConnectionState {
+  const { origin } = resolveCredentialWithOrigin(plugin, undefined, cfg, instanceId);
+  const connected = origin === "saved" || origin === "env";
+  let hasData = false;
+  if (dailyFile) {
+    try {
+      const raw = fs.readFileSync(dailyFile, "utf8");
+      hasData = raw.trim().split("\n").length > 1;
+    } catch {
+      /* no file — no data */
+    }
+  }
+  return { hasData, credentialOrigin: origin, detectedApp: origin === "discovered", connected };
+}
+
+/** Credential for actually RUNNING a sync: explicit arg, env, or saved config.
+ *  A discovered desktop-app token NEVER syncs — it must first be imported as a
+ *  saved credential through an explicit connect. */
+export function resolveSyncCredential(
+  plugin: ImporterPlugin,
+  explicit?: string,
+  cfg: AppConfig | null = readConfig(),
+  credKey: string = plugin.id,
+): string | undefined {
+  const { credential, origin } = resolveCredentialWithOrigin(plugin, explicit, cfg, credKey);
+  return origin === "discovered" ? undefined : credential;
 }
 
 export interface PluginImportSummary extends DailyMergeResult {

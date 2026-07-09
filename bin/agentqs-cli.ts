@@ -14,6 +14,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Command } from "commander";
+import { loadEnvConfig } from "@next/env";
+// The Next server loads .env/.env.local (AGENTQS_DATA_DIR lives there); the CLI
+// and MCP must resolve the SAME store or the app splits across two data dirs.
+loadEnvConfig(process.cwd(), undefined, { info: () => undefined, error: () => undefined });
 import * as core from "../src/lib/cli-core";
 
 const program = new Command();
@@ -177,6 +181,45 @@ program
   });
 
 program
+  .command("pipeline")
+  .description("the data-pipeline truth table: origin, credential provenance, schedule, last run, landed data")
+  .action(() => {
+    try {
+      out(core.pipeline(), (r: any) => {
+        const rows = r.sources
+          .filter((s: any) => s.connected || s.scheduled || s.lastRun)
+          .map((s: any) => {
+            const cred = s.connected
+              ? s.credentialOrigin
+                ? `cred: ${s.credentialOrigin}`
+                : "data present (no credential)"
+              : s.detectedApp
+                ? "NOT connected — app login detected (Connect in Data imports it as a credential)"
+                : s.hasData
+                  ? "NOT connected — imported data only"
+                  : "not connected";
+            const sched = s.scheduled ? `every ${s.interval}` : "manual";
+            const run = s.lastRun
+              ? `last run ${s.lastRun.at.slice(0, 16)} ${s.lastRun.ok ? "ok" : `FAILED: ${s.lastRun.error ?? ""}`}`
+              : "no ledgered run";
+            const data = s.data.events || s.data.days
+              ? `${s.data.events ? `${s.data.events.toLocaleString()} events` : `${s.data.days.toLocaleString()} days`}${s.data.from ? ` · ${s.data.from} → ${s.data.to}` : ""}`
+              : "no data";
+            return `${s.connected ? "●" : "○"} ${s.id.padEnd(24)} ${s.origin.padEnd(10)} ${sched.padEnd(12)} ${cred.padEnd(32)} ${run}\n${" ".repeat(26)}${data}`;
+          });
+        const sch = r.scheduler;
+        return [
+          ...rows,
+          "",
+          `scheduler: launchd ${sch.launchd ? "installed" : "—"} · crontab ${sch.crontab ? "installed" : "—"} · last sync --due sweep: ${sch.lastDueRunAt ?? "never recorded (ledger is new; check scheduler logs)"}`,
+        ].join("\n");
+      });
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
   .command("sync [source]")
   .description("run an API source now (omit source to sync all connected)")
   .option("--source <id>", "source id (alternative to the positional arg)")
@@ -267,7 +310,7 @@ const source = program.command("source").description("manage sources (connect, s
 
 source
   .command("connect <id> <credential>")
-  .description("save an API source's credential")
+  .description("save an API source's credential (connected always means a stored key)")
   .action((id: string, credential: string) => {
     try {
       out(core.connectSource(id, credential), (d) => `Connected ${d.id}.`);

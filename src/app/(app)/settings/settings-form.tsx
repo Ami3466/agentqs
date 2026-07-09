@@ -1047,6 +1047,7 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "GET", path: "/api/events", desc: "Raw timeline events (?start=YYYY-MM-DD&end=…&limit=500)." },
   { method: "GET", path: "/api/log", desc: "Captured log items; POST /api/log/reject {\"id\":\"…\"} undoes an import." },
   { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; DELETE disconnects." },
+  { method: "GET", path: "/api/pipeline", desc: "Pipeline truth table: per-source origin, credential provenance, schedule, last run outcome, coverage." },
   { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source with its service key and run a sync (github, whoop, notion, …)." },
   { method: "GET", path: "/api/automations", desc: "Browser-import recipes. POST saves one; POST /api/automations/run replays it; DELETE removes it." },
   { method: "GET", path: "/api/skills", desc: "Mentor skills. POST adds or edits one; DELETE removes it." },

@@ -78,9 +78,10 @@ export interface JournalData {
   days: JournalDay[]; // newest first
   totalDays: number;
   totalCells: number; // non-empty daily cells across the visible (up-to-today) days
+  totalEvents: number; // event-layer rows (activity, browsing, plays) — the bulk of a lifetime record
 }
 
-const EMPTY: JournalData = { metrics: [], days: [], totalDays: 0, totalCells: 0 };
+const EMPTY: JournalData = { metrics: [], days: [], totalDays: 0, totalCells: 0, totalEvents: 0 };
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -128,6 +129,14 @@ export function readJournal(opts: ReadJournalOptions = {}): JournalData {
     const totals = db
       .prepare("SELECT COUNT(DISTINCT date) AS days, COUNT(*) AS cells FROM daily WHERE date <= ?")
       .get(today) as { days: number; cells: number };
+    // Daily cells alone understate a lifetime record by ~10x (a day of browsing is
+    // one cell but hundreds of events), so the header reports both layers.
+    let totalEvents = 0;
+    try {
+      totalEvents = (db.prepare("SELECT COUNT(*) AS n FROM events WHERE date <= ?").get(today) as { n: number }).n;
+    } catch {
+      /* pre-events cache — the journal still renders */
+    }
     const colRows = db
       .prepare(
         `SELECT source, metric, COUNT(*) - COUNT(value_num) AS nonNumeric
@@ -260,7 +269,7 @@ export function readJournal(opts: ReadJournalOptions = {}): JournalData {
       .filter((d) => d.date <= today) // hide future-dated events
       .sort((a, b) => cmp(b.date, a.date)); // newest first
 
-    return { metrics, days: ordered, totalDays: totals.days, totalCells: totals.cells };
+    return { metrics, days: ordered, totalDays: totals.days, totalCells: totals.cells, totalEvents };
   } catch {
     return EMPTY; // stale/older schema
   } finally {
