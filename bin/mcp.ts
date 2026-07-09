@@ -133,11 +133,12 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     "scan",
     {
-      title: "Scan for duplicate columns",
+      title: "Scan data quality",
       description:
-        "Find duplicated / near-duplicate daily columns — the same metric imported manually AND automatically living in two columns. " +
-        "Each finding is queued as an inbox notification; `structure {id}` on it applies the merge (the auto-synced column wins and a rule keeps it merged). " +
-        "Pass fix=true to apply every suggested merge immediately.",
+        "Scan the daily record for quality issues: duplicate columns (the same metric imported manually AND automatically), dead all-zero columns, " +
+        "and messy numeric values (units, thousands separators, junk placeholders). " +
+        "Each finding is queued as an inbox notification; `structure {id}` on it applies the fix (merges keep the auto-synced column and save a rule). " +
+        "Pass fix=true to apply every open fix immediately.",
       inputSchema: { fix: z.boolean().optional() },
     },
     async ({ fix }) => guard(() => core.scan({ fix })),

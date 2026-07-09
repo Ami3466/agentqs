@@ -27,7 +27,7 @@ It's recommended to work directly on the repo or with skill with Claude Code / C
 
 ### Journal - your whole life in one table
 
-Every source lands in one daily record: sleep, steps, mood, focus, screen time, heart rate, workouts, commits. Table or timeline, built from plain CSVs you own. **Scan columns** finds the same metric imported twice (manually and by a sync) living in two columns and merges them - the auto-synced column wins, and a saved rule keeps future imports in one column.
+Every source lands in one daily record: sleep, steps, mood, focus, screen time, heart rate, workouts, commits. Table or timeline, built from plain CSVs you own. **Scan data** checks every column's quality: the same metric imported twice (manually and by a sync) gets merged - the auto-synced column wins, and a saved rule keeps future imports in one column - dead all-zero columns get dropped, and messy values (units, junk placeholders) get cleaned. Every fix is one click and undoable.
 
 ![Journal](docs/images/journal.png)### Chat - AI grounded in your record, with skills
 
@@ -103,7 +103,7 @@ Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`
 
 ## Deploy on cloud
 
-Scheduled syncs need a machine that's always on. [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`.
+Scheduled syncs need a machine that's always on. On your own machine one crontab line does it - `0 * * * * agentqs sync --due` runs every source whose interval says it's due, browser scrapes included (copy it from Settings → API → Connect). [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`.
 
 ![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 

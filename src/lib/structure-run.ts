@@ -10,7 +10,7 @@ import { wipeDemoOnImport } from "./demo";
 import { recordDir } from "./paths";
 import { mergeDailyCsv, readInboxFromRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
 import { llmComplete } from "./llm";
-import { acceptColumnMerge, columnGuard, columnMergeOf, splitColumnKey } from "./column-scan";
+import { acceptQualityAction, columnGuard, qualityActionOf } from "./column-scan";
 import {
   parseLlmCsv,
   proseExtractionSystem,
@@ -19,7 +19,7 @@ import {
   structureCsv,
 } from "./structure";
 
-export type StructureRoute = "csv" | "llm" | "agent" | "merge";
+export type StructureRoute = "csv" | "llm" | "agent" | "fix";
 export type StructureStatus = "structured" | "empty" | "error";
 
 export interface StructureItemResult {
@@ -113,15 +113,16 @@ export async function structurePending(
 
   for (const item of targets) {
     // Scanner notifications ARE a type of structuring: instead of extracting a
-    // CSV, structuring one applies its column merge and saves the rule so the
-    // duplicate can't come back. Undo metadata mirrors a normal merge.
+    // CSV, structuring one applies its data-quality fix (merge the duplicate,
+    // drop the dead column, clean the messy values). Undo metadata mirrors a
+    // normal merge.
     if (item.kind === "notification") {
-      const cm = columnMergeOf(item.meta);
-      if (!cm) {
-        results.push({ id: item.id, route: "merge", status: "empty", message: "Notification carries no merge action." });
+      const action = qualityActionOf(item.meta);
+      if (!action) {
+        results.push({ id: item.id, route: "fix", status: "empty", message: "Notification carries no fix action." });
         continue;
       }
-      const outcome = acceptColumnMerge(rDir, cm.from, cm.into);
+      const outcome = acceptQualityAction(rDir, action);
       if (outcome.applied.length) mutated = true;
       patches.push({
         id: item.id,
@@ -129,23 +130,21 @@ export async function structurePending(
         meta: {
           ...(item.meta && typeof item.meta === "object" ? item.meta : {}),
           structuredAt: new Date().toISOString(),
-          via: "merge",
-          source: splitColumnKey(cm.into).source,
-          cells: outcome.moved,
+          via: action.type,
+          source: outcome.source,
+          cells: outcome.cells,
           applied: outcome.applied,
         },
       });
       results.push({
         id: item.id,
-        route: "merge",
+        route: "fix",
         status: "structured",
-        source: splitColumnKey(cm.into).source,
-        rowsAdded: outcome.moved,
-        metrics: [splitColumnKey(cm.into).metric],
-        dates: outcome.moved,
-        message: outcome.applied.length
-          ? `Merged ${cm.from} into ${cm.into}: ${outcome.moved} value${outcome.moved === 1 ? "" : "s"} moved, ${outcome.kept} conflict${outcome.kept === 1 ? "" : "s"} kept from ${cm.into}.`
-          : `${cm.from} is already gone — saved the rule so it stays merged into ${cm.into}.`,
+        source: outcome.source,
+        rowsAdded: outcome.cells,
+        metrics: [outcome.metric],
+        dates: outcome.cells,
+        message: outcome.summary,
       });
       continue;
     }

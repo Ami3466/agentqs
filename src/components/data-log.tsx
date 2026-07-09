@@ -194,7 +194,7 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
                         → <span className="font-medium text-fg">{s.source}</span>
                         {s.cells != null ? ` · ${s.cells} cell${s.cells === 1 ? "" : "s"}` : ""}
                         {s.metrics.length ? ` · ${s.metrics.join(", ")}` : ""}
-                        {s.via ? ` · via ${s.via === "llm" ? "AI" : "CSV"}` : ""}
+                        {s.via ? ` · via ${s.via === "llm" ? "AI" : s.via === "csv" || s.via === "agent" ? "CSV" : s.via}` : ""}
                       </p>
                     ) : null}
                     {s && s.applied.length ? (

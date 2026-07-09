@@ -1,13 +1,17 @@
 #!/usr/bin/env tsx
 /**
- * Ships-when proof for the column scanner.
+ * Ships-when proof for the data-quality scanner.
  *
  *   MAIN: the same metric imported manually AND automatically (two daily columns)
  *   is detected, merged into the automatic column with full undo metadata, and a
  *   saved rule folds any manual re-import straight back — the duplicate can never
  *   split again. Rejecting the merge restores both columns AND drops the rule.
+ *   PLUS: dead all-zero columns get drop findings, messy numeric values (units,
+ *   separators, junk placeholders) get clean findings — both applied through the
+ *   same structure-a-notification path, both revertible, and text columns are
+ *   never touched.
  *
- * Drives the production core end to end — scanColumns/columnGuard/structurePending
+ * Drives the production core end to end — scanQuality/columnGuard/structurePending
  * against a temp data dir, plus the real `agentqs scan` / `log reject` CLIs as
  * subprocesses. No network, no LLM. Run: npm run scan:test
  */
@@ -16,7 +20,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { mergeDailyCsv, readInboxFromRecord } from "../src/lib/record";
-import { applySavedMerges, columnGuard, pendingFindings, scanColumns } from "../src/lib/column-scan";
+import { applySavedMerges, columnGuard, pendingFindings, scanQuality, type QualityFinding } from "../src/lib/column-scan";
 import { structurePending } from "../src/lib/structure-run";
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-scan-"));
@@ -65,7 +69,7 @@ fs.writeFileSync(
 );
 
 // ---- 1. detection: manual + auto import of the same metric -----------------
-console.log("\nscanColumns — manual vs auto duplicate");
+console.log("\nscanQuality — manual vs auto duplicate");
 mergeDailyCsv(rDir, "chrome_manual", {
   header: ["date", "visits"],
   rows: [
@@ -82,10 +86,11 @@ mergeDailyCsv(rDir, "chrome_auto", {
   ],
 });
 
-let findings = scanColumns(rDir);
+let findings = scanQuality(rDir);
 check("finds exactly the duplicate pair", findings.length === 1, JSON.stringify(findings.map((f) => f.id)));
 const f = findings[0];
-check("auto-synced side wins", f.from.key === "chrome_manual.visits" && f.into.key === "chrome_auto.visits");
+check("it is a merge finding", f.kind === "merge");
+check("auto-synced side wins", f.key === "chrome_manual.visits" && f.into === "chrome_auto.visits");
 check("reason names related sources", f.reason.includes("related sources"));
 
 // ---- 2. guard queues ONE notification, idempotently -------------------------
@@ -101,8 +106,8 @@ check(
   "pendingFindings rebuilds the finding from the record (persistent scanner list)",
   persisted.length === 1 &&
     persisted[0].notificationId === f.notificationId &&
-    persisted[0].into.key === "chrome_auto.visits" &&
-    persisted[0].fromCells === 3 &&
+    persisted[0].into === "chrome_auto.visits" &&
+    persisted[0].cells === 3 &&
     persisted[0].intoAuto,
 );
 
@@ -110,7 +115,7 @@ check(
 console.log("\nstructurePending — notification = merge");
 const res = await structurePending({ id: f.notificationId });
 const r0 = res.results[0];
-check("routes as merge and structures", r0?.route === "merge" && r0?.status === "structured");
+check("routes as fix and structures", r0?.route === "fix" && r0?.status === "structured");
 check("moved the two auto-missing days", r0?.rowsAdded === 2);
 const autoCsv = readCsv("chrome_auto") ?? "";
 check("auto column has the union of dates", ["2026-06-30,90", "2026-07-01,100", "2026-07-03,1048"].every((s) => autoCsv.includes(s)));
@@ -144,7 +149,7 @@ check("manual column restored", ["2026-06-30,90", "2026-07-01,100", "2026-07-02,
 const autoAfter = readCsv("chrome_auto") ?? "";
 check("auto column back to its own days (+ the later fold)", autoAfter.includes("2026-07-02,239") && autoAfter.includes("2026-07-04,500") && !autoAfter.includes("2026-07-01,100"));
 check("rule dropped from config", (config().columnMerges ?? []).length === 0);
-findings = scanColumns(rDir);
+findings = scanQuality(rDir);
 check("pair is findable again, notification stays discarded", findings.length === 1 && columnGuard(rDir).findings[0].notificationStatus === "discarded");
 
 // ---- 6. value-duplicate detection + `agentqs scan --fix` ---------------------
@@ -172,8 +177,83 @@ mergeDailyCsv(rDir, "fitness", {
 const scan1 = runCli(["scan"]);
 check("CLI scan flags the value duplicate", scan1.findings.some((x: any) => x.reason.includes("values match")));
 const fixed = runCli(["scan", "--fix"]);
-check("--fix merges every finding", fixed.fixed.length >= 1 && runCli(["scan"]).findings.length === 0);
+check("--fix applies the open finding", fixed.fixed.length === 1 && fixed.fixed[0].summary.includes("Merged"));
+check("--fix leaves the rejected pair alone (dismissed stays dismissed)",
+  runCli(["scan"]).findings.every((x: any) => x.notificationStatus !== "pending"));
 check("one steps column survived", (readCsv("steps_watch") === null) !== (readCsv("fitness") === null));
+
+// ---- 7. dead column: all values 0/blank → drop finding, fix deletes, reject restores
+console.log("\ndrop — dead all-zero column");
+mergeDailyCsv(rDir, "legacy_tracker", {
+  header: ["date", "old_counter"],
+  rows: [
+    ["2026-07-01", "0"],
+    ["2026-07-02", "0"],
+    ["2026-07-03", "n/a"],
+    ["2026-07-04", "0"],
+    ["2026-07-05", "0"],
+    ["2026-07-06", "0"],
+  ],
+});
+const g3 = columnGuard(rDir);
+const dead = g3.findings.find((x) => x.kind === "drop" && x.key === "legacy_tracker.old_counter");
+check("dead column gets a pending drop finding", dead != null && dead.notificationStatus === "pending" && dead.cells === 6, JSON.stringify(g3.findings));
+const dropRes = await structurePending({ id: dead!.notificationId });
+check("structuring the drop deletes the column", dropRes.results[0]?.status === "structured" && readCsv("legacy_tracker") === null);
+runCli(["log", "reject", dead!.notificationId]);
+const legacyCsv = readCsv("legacy_tracker") ?? "";
+check("reject restores the dead column", legacyCsv.includes("2026-07-01,0") && legacyCsv.includes("2026-07-03,n/a"));
+
+// ---- 8. messy values: units/separators/junk in a numeric column → clean finding
+console.log("\nclean — messy numeric values (via the CLI)");
+mergeDailyCsv(rDir, "bodyweight", {
+  header: ["date", "weight"],
+  rows: [
+    ["2026-07-01", "72"],
+    ["2026-07-02", "73"],
+    ["2026-07-03", "74"],
+    ["2026-07-04", "72 kg"], // unit-wrapped → 72
+    ["2026-07-05", "n/a"], // junk → cleared
+    ["2026-07-06", "1,072"], // thousands separator → 1072
+  ],
+});
+const scan2 = runCli(["scan"]);
+const messy = scan2.findings.find((x: any) => x.kind === "clean" && x.key === "bodyweight.weight");
+check("messy column gets a pending clean finding (3 dirty cells)", messy != null && messy.notificationStatus === "pending" && messy.cells === 3);
+const fixed2 = runCli(["scan", "--fix"]);
+check("--fix cleans it", fixed2.fixed.some((x: any) => x.kind === "clean" && x.summary.includes("Cleaned bodyweight.weight")));
+const weightCsv = readCsv("bodyweight") ?? "";
+check("values normalized, junk cleared", weightCsv.includes("2026-07-04,72") && weightCsv.includes("2026-07-06,1072") && !weightCsv.includes("kg") && !weightCsv.includes("n/a"));
+runCli(["log", "reject", messy.notificationId]);
+const weightBack = readCsv("bodyweight") ?? "";
+check("reject restores the messy originals", weightBack.includes("72 kg") && weightBack.includes("n/a") && weightBack.includes('"1,072"'));
+
+// ---- 9. safety: text columns and live numeric columns are never flagged ------
+console.log("\nsafety — text and healthy columns stay untouched");
+mergeDailyCsv(rDir, "mood_journal", {
+  header: ["date", "mood_note"],
+  rows: [
+    ["2026-07-01", "happy"],
+    ["2026-07-02", "meh"],
+    ["2026-07-03", "n/a"],
+    ["2026-07-04", "great"],
+    ["2026-07-05", "sad"],
+  ],
+});
+mergeDailyCsv(rDir, "cigarettes", {
+  header: ["date", "smoked"],
+  rows: [
+    ["2026-07-01", "0"],
+    ["2026-07-02", "0"],
+    ["2026-07-03", "0"],
+    ["2026-07-04", "2"], // one real value — an all-zero streak, not a dead column
+    ["2026-07-05", "0"],
+  ],
+});
+const safety = scanQuality(rDir).filter(
+  (x: QualityFinding) => x.key.startsWith("mood_journal.") || x.key.startsWith("cigarettes."),
+);
+check("no findings on text or healthy columns", safety.length === 0, JSON.stringify(safety));
 
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed.");
 fs.rmSync(dataDir, { recursive: true, force: true });

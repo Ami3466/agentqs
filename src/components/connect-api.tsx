@@ -8,26 +8,31 @@ import { cn } from "./ui";
 
 export const PH = "AQS_KEY_HERE";
 export const SYNC_CMD = "agentqs sync --source github";
+// Crontab mode: runs whatever each source's interval says is due (API sources +
+// browser automations) — the same dueness the app checks on open.
+export const CRON_CMD = "0 * * * * agentqs sync --due";
 export const skillSnip = (b: string, k: string) =>
   `---\nname: agentqs\ndescription: Query the agentqs life-record.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}   - POST /api/scan {}`;
 
-/** Ready-to-paste prompt: hands an AI the column-scanner endpoints plus the
- *  merge-vs-dismiss criteria, so it can drive the cleanup decisions. */
-export const scanPromptSnip = (b: string, k: string) =>
+/** Ready-to-paste prompt: hands an AI the data-quality endpoints plus the
+ *  apply-vs-dismiss criteria, so it can drive the cleanup decisions. The prompt
+ *  points at the API — the findings themselves never leave the app. */
+export const fixPromptSnip = (b: string, k: string) =>
   [
-    "Help me clean duplicate columns in my agentqs daily record.",
+    "Help me fix the data-quality issues in my agentqs daily record.",
     `API ${b}, header: authorization: Bearer ${k}`,
-    "- GET /api/scan → open findings. POST /api/scan {} → re-scan (also re-applies saved merge rules).",
-    '- Each finding: {from, into, reason, overlap, agree, notificationId}. `into` is the column that survives (the auto-synced side).',
-    '- Merge: POST /api/structure {"id":"<notificationId>"} — moves unique days into `into`, keeps `into` on conflicts, saves a rule so future imports stay merged. Undo: POST /api/log/reject {"id":"<notificationId>"}.',
+    "- GET /api/scan → open findings. POST /api/scan {} → fresh scan (also re-applies saved merge rules).",
+    "- Each finding: {kind, key, into, cells, reason, notificationId}. Kinds: merge (duplicate columns — `into` survives, the auto-synced side), drop (dead column, all 0/blank), clean (numeric column with junk or unit-wrapped values).",
+    '- Apply a fix: POST /api/structure {"id":"<notificationId>"}. Undo later: POST /api/log/reject {"id":"<notificationId>"}.',
     "- Dismiss: DELETE /api/inbox?id=<notificationId> — never suggested again.",
-    "Decide per finding: MERGE when both columns are really one metric imported twice (related sources, or values matching on most shared days). DISMISS when they are different metrics that merely correlate. Ask me before merging text/journal columns or anything you are unsure about.",
+    "- Same flows key-free via the CLI: `agentqs scan --json`, `agentqs structure --id <id>`, `agentqs log reject <id>`.",
+    "Decide per finding: APPLY when it's clearly one metric imported twice, a dead column, or junk cells. DISMISS when the data is meaningful as-is (different metrics that merely correlate, a real all-zero streak). Ask me before touching anything you are unsure about.",
   ].join("\n");
 export const mcpSnip = (b: string, k: string) =>
   `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}'`;
 
 /** Small copy state hook: flips a checkmark for 1.2s after writing to the clipboard. */
-function useCopy(): [boolean, (code: string) => void] {
+export function useCopy(): [boolean, (code: string) => void] {
   const [done, setDone] = useState(false);
   return [
     done,
@@ -58,10 +63,10 @@ export function CopyRow({ label, code, className }: { label: string; code: strin
 }
 
 /** The CLI one-liner shown verbatim in a terminal-style row with its own copy button. */
-export function CliRow({ code }: { code: string }) {
+export function CliRow({ code, title }: { code: string; title?: string }) {
   const [done, copy] = useCopy();
   return (
-    <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 py-1 pl-2.5 pr-1">
+    <div title={title} className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 py-1 pl-2.5 pr-1">
       <Terminal width={13} height={13} className="shrink-0 text-muted-fg" />
       <code className="scrollbar-none flex-1 overflow-x-auto whitespace-nowrap font-mono text-[12px] text-fg">{code}</code>
       <button

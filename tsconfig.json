@@ -38,7 +38,8 @@
     ".next-scatter/types/**/*.ts",
     "tmp/e2e-dist/types/**/*.ts",
     ".next-scan-smoke/types/**/*.ts",
-    ".next-validate/types/**/*.ts"
+    ".next-validate/types/**/*.ts",
+    ".next-verify/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

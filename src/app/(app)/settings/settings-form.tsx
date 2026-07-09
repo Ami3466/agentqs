@@ -31,7 +31,7 @@ import {
   User,
   Wand,
 } from "@/components/icons";
-import { CliRow, CopyRow, KeyRow, PH, SYNC_CMD, mcpSnip, scanPromptSnip, skillSnip } from "@/components/connect-api";
+import { CRON_CMD, CliRow, CopyRow, KeyRow, PH, SYNC_CMD, fixPromptSnip, mcpSnip, skillSnip } from "@/components/connect-api";
 import { Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
@@ -837,8 +837,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
 
           <p className="text-xs text-muted-fg">
             The model downloads once into <code className="font-mono">data/models</code> and runs on-device.{" "}
-            <code className="font-mono">WHISPER_BIN</code> (your own engine) still takes priority; an OpenAI key stays
-            the cloud fallback.
+            <code className="font-mono">WHISPER_BIN</code> (your own engine) still takes priority. No install? The
+            voice provider above (ElevenLabs / Google Live) transcribes memos with its key; an OpenAI or Google
+            provider key stays the fallback.
           </p>
         </div>
       </Section>
@@ -1039,7 +1040,7 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "POST", path: "/api/search", body: `{"query":"…","limit":5}`, desc: "Semantic search — closest days plus a ready answer." },
   { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens. GET lists pending captures; DELETE discards one." },
   { method: "POST", path: "/api/structure", body: `{"id":"…"}`, desc: "Structure a pending capture into daily rows with the configured AI (or pass all: true). Pass csv with the extracted date,… rows to structure key-free — same contract as the CLI/MCP tool." },
-  { method: "POST", path: "/api/scan", body: `{}`, desc: "Find duplicated daily columns (one metric imported manually AND by a sync); findings queue as inbox notifications. GET lists open findings; fix: true merges them all." },
+  { method: "POST", path: "/api/scan", body: `{}`, desc: "Scan data quality: duplicate columns, dead all-zero columns, messy values; findings queue as inbox notifications. GET lists open findings; fix: true applies them all." },
   { method: "GET", path: "/api/journal", desc: "List journal entries (?days=30, ?numeric=1)." },
   { method: "POST", path: "/api/journal/edit", body: `{"edits":[…]}`, desc: "Edit the daily table — set/clear cells, drop rows or columns." },
   { method: "GET", path: "/api/daily", desc: "The structured daily table." },
@@ -1151,14 +1152,15 @@ function ApiTab() {
       <Section
         title="Connect"
         icon={Terminal}
-        desc="Ready-made snippets with your key filled in — sync from the CLI, add the MCP server, drop in the agent skill, or hand an AI the column-scan cleanup prompt."
+        desc="Ready-made snippets with your key filled in — sync from the CLI, add the MCP server, drop in the agent skill, or hand an AI the data-quality fix prompt."
       >
         <div className="space-y-2">
           <CliRow code={SYNC_CMD} />
+          <CliRow code={CRON_CMD} title="Crontab line — auto-runs every source whose interval says it's due, browser scrapes included" />
           <div className="flex gap-2">
             <CopyRow label="Copy mcp" code={mcpSnip(base, key)} className="flex-1" />
             <CopyRow label="Copy skill" code={skillSnip(base, key)} className="flex-1" />
-            <CopyRow label="Copy scan prompt" code={scanPromptSnip(base, key)} className="flex-1" />
+            <CopyRow label="Copy fix prompt" code={fixPromptSnip(base, key)} className="flex-1" />
           </div>
           <p className="text-xs text-muted-fg">
             or work directly in your forked repo — the record is plain files in your own git repo.

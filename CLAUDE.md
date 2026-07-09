@@ -43,12 +43,17 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
 ### Everything else (already key-free)
 
 - `agentqs import <file>` - land any file; clean CSV structures instantly.
-- `agentqs scan [--fix]` - find duplicate daily columns (one metric imported
-  manually AND by a sync). Findings queue as inbox notifications (kind
-  `notification`); structuring one applies the merge - the auto-synced column
-  wins - and saves a rule so future imports stay merged. MCP tool: `scan`.
+- `agentqs scan [--fix]` - data-quality scan: duplicate daily columns (one
+  metric imported manually AND by a sync), dead all-zero columns, and messy
+  numeric values (units, thousands separators, junk placeholders). Findings
+  queue as inbox notifications (kind `notification`, shown in Data -> Data
+  quality); structuring one applies the fix - merges keep the auto-synced
+  column and save a rule so future imports stay merged. MCP tool: `scan`.
 - `agentqs source file chrome|iphone` - local file importers.
 - `agentqs sync <source> --credential <key>` - API sources use THEIR OWN service keys.
+- `agentqs sync --due` - the crontab mode: runs every source whose interval
+  (`agentqs source interval <id> hourly|daily|weekly`, or set in Data) says it's
+  due - API sources AND browser automations. One crontab line = auto scraping.
 - `agentqs rebuild` - rebuild the SQLite cache from the record (deterministic).
 - `agentqs journal | sources | automation | photos | skill | config` - see `--help`.
 

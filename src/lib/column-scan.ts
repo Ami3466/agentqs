@@ -17,20 +17,23 @@ import { GOOGLE_PRESET_DAILY_SOURCES } from "./google-web-scraper";
 import { listAutomations } from "./automation";
 
 /**
- * The column scanner — finds broken daily columns: the same metric imported twice
- * (e.g. Chrome pulled manually AND by the automatic sync) living in two columns.
+ * The data-quality scanner — finds broken daily columns. Three deterministic
+ * checks, no LLM:
  *
- * Detection is deterministic, no LLM:
- *   1. same metric name in RELATED sources (`chrome.visits` vs `chrome_daily.visits`
- *      — source stems match once auto/manual-ish suffixes are stripped), or
- *   2. lookalike names whose values agree on ≥80% of ≥5 shared dates.
+ *   merge — the same metric imported twice (e.g. Chrome pulled manually AND by
+ *           the automatic sync) living in two columns: same metric name in
+ *           RELATED sources (source stems match once auto/manual-ish suffixes
+ *           are stripped), or lookalike names whose values agree on ≥80% of ≥5
+ *           shared dates. The automatically-synced side wins the merge.
+ *   drop  — a dead column: every value is 0 or a blank/junk placeholder.
+ *   clean — a numeric column with messy cells: numbers wrapped in units,
+ *           currency or thousands separators ("72 kg", "1,234"), or junk
+ *           placeholders ("n/a", "-") that should be cleared.
  *
- * Each finding picks a canonical column — the automatically-synced side wins, so
- * future syncs keep landing in the survivor — and becomes an inbox NOTIFICATION
- * (kind "notification"): structuring it applies the merge (auto values win
- * conflicting dates, the duplicate column is deleted, every touched cell recorded
- * for undo) and saves a rule in config. Saved rules re-apply on every import, so
- * a manual re-import can never split the column again.
+ * Each finding becomes an inbox NOTIFICATION (kind "notification"): structuring
+ * it applies the fix (every touched cell recorded for undo). Merges also save a
+ * rule in config; saved rules re-apply on every import, so a manual re-import
+ * can never split the column again.
  */
 
 export interface ColumnRef {
@@ -39,19 +42,21 @@ export interface ColumnRef {
   metric: string;
 }
 
-export interface ColumnFinding {
-  id: string; // stable hash of from→into — dedupes notifications across scans
+export type QualityKind = "merge" | "drop" | "clean";
+
+export interface QualityFinding {
+  kind: QualityKind;
+  id: string; // stable content hash — dedupes notifications across scans
   notificationId: string; // inbox item id this finding lands under
-  from: ColumnRef; // the duplicate to fold away
-  into: ColumnRef; // the canonical column (the automatic side when known)
-  fromCells: number;
-  intoCells: number;
-  overlap: number; // dates present in both columns
-  agree: number; // 0..1 of overlap dates whose values match
-  intoAuto: boolean; // the canonical side is a synced/automatic source
+  key: string; // the column the fix touches (the duplicate side for merges)
+  into: string | null; // merge only: the canonical column (the automatic side when known)
+  cells: number; // cells the fix would touch
   reason: string;
+  intoAuto: boolean; // merge only: the canonical side is a synced/automatic source
+  overlap: number; // merge only: dates present in both columns
+  agree: number; // merge only: 0..1 of overlap dates whose values match
   /** Lifecycle of the backing notification: "pending" (actionable), "structured"
-   *  (merged), "discarded" (user dismissed it — don't nag again). */
+   *  (fixed), "discarded" (user dismissed it — don't nag again). */
   notificationStatus: string;
 }
 
@@ -66,7 +71,7 @@ export interface MergeOutcome {
 
 export interface ColumnGuardResult {
   autoMerged: MergeOutcome[]; // saved rules that re-applied on this run
-  findings: ColumnFinding[];
+  findings: QualityFinding[];
   notified: number; // NEW notifications appended (stable ids dedupe re-scans)
 }
 
@@ -119,6 +124,26 @@ function isSidecarSource(source: string): boolean {
   return /_(texts|semantic)$/.test(source);
 }
 
+/** Placeholder cells that carry no data — clearing them loses nothing. */
+const JUNK_VALUES = new Set(["", "-", "--", "n/a", "na", "n.a.", "null", "none", "nan", "unknown", "?", "missing"]);
+
+export function isJunkValue(s: string): boolean {
+  return JUNK_VALUES.has(s.trim().toLowerCase());
+}
+
+/** A number wrapped in formatting a CSV cell shouldn't carry: thousands
+ *  separators, a currency prefix, or a short unit suffix ("1,234", "$59.90",
+ *  "72 kg", "12%"). Deliberately strict — dates, times and free text never
+ *  match, so cleaning can't corrupt a real value. */
+export function looseNumber(s: string): number | null {
+  const strict = parseNumber(s);
+  if (strict != null) return strict;
+  const m = s.trim().match(/^[$€£₪]?\s*([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?:[a-zA-Z%°µ/]{1,8}\.?)?$/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Two cells "agree" when the trimmed text matches, or both are numbers within
  *  1 absolute or 2% relative — counting imports of the same day rarely land
  *  byte-identical. */
@@ -162,8 +187,8 @@ function autoSourceIds(cfg: AppConfig | null): Set<string> {
   return ids;
 }
 
-function findingId(fromKey: string, intoKey: string): string {
-  return crypto.createHash("sha256").update(`${fromKey}\0${intoKey}`).digest("hex").slice(0, 12);
+function findingId(...parts: string[]): string {
+  return crypto.createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 12);
 }
 
 export function notificationIdFor(fromKey: string, intoKey: string): string {
@@ -181,11 +206,8 @@ function pickInto(a: ColStats, b: ColStats, auto: Set<string>): [ColStats, ColSt
   return a.ref.key < b.ref.key ? [a, b] : [b, a];
 }
 
-/** Scan the daily record for duplicate / near-duplicate columns. Pure read. */
-export function scanColumns(
-  rDir: string = recordDir(),
-  cfg: AppConfig | null = readConfig(),
-): ColumnFinding[] {
+/** Every daily column with its per-date values — the input all checks share. */
+function readColumns(rDir: string): Map<string, ColStats> {
   const cols = new Map<string, ColStats>();
   for (const row of readDailyFromRecord(rDir)) {
     if (isSidecarSource(row.source)) continue;
@@ -204,13 +226,19 @@ export function scanColumns(
     if (row.date < c.minDate) c.minDate = row.date;
     if (row.date > c.maxDate) c.maxDate = row.date;
   }
+  return cols;
+}
 
+const byKey = (x: QualityFinding, y: QualityFinding) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0);
+
+/** merge check: duplicate / near-duplicate column pairs. */
+function duplicateFindings(cols: Map<string, ColStats>, cfg: AppConfig | null): QualityFinding[] {
   const auto = autoSourceIds(cfg);
   const list = [...cols.values()];
   const ruleKeys = new Set(
     (cfg?.columnMerges ?? []).map((r) => `${r.from}\0${r.into}`),
   );
-  const findings: ColumnFinding[] = [];
+  const findings: QualityFinding[] = [];
 
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
@@ -254,12 +282,12 @@ export function scanColumns(
       if (ruleKeys.has(`${fromKey}\0${intoKey}`) || ruleKeys.has(`${intoKey}\0${fromKey}`)) continue;
       const id = findingId(fromKey, intoKey);
       findings.push({
+        kind: "merge",
         id,
         notificationId: `colscan-${id}`,
-        from: from.ref,
-        into: into.ref,
-        fromCells: from.values.size,
-        intoCells: into.values.size,
+        key: fromKey,
+        into: intoKey,
+        cells: from.values.size,
         overlap,
         agree: Math.round(agree * 100) / 100,
         intoAuto: auto.has(into.ref.source),
@@ -268,7 +296,83 @@ export function scanColumns(
       });
     }
   }
-  return findings.sort((x, y) => (x.from.key < y.from.key ? -1 : x.from.key > y.from.key ? 1 : 0));
+  return findings;
+}
+
+/** drop check: a dead column — every value 0 or a blank/junk placeholder. */
+function deadReason(values: Map<string, string>): string | null {
+  if (values.size < 5) return null; // a short column may just be starting out
+  let zeros = 0;
+  for (const v of values.values()) {
+    if (isJunkValue(v)) continue;
+    if (looseNumber(v) === 0) zeros++;
+    else return null;
+  }
+  return zeros ? `all ${values.size} values are 0 or blank` : `all ${values.size} values are blank/junk`;
+}
+
+/** clean check: a numeric column with messy cells. Returns each dirty cell with
+ *  its cleaned value ("" = clear the junk placeholder), or null when the column
+ *  is clean — or holds real text, which cleaning must never touch. */
+function messyCells(values: Map<string, string>): Array<{ date: string; from: string; to: string }> | null {
+  let plain = 0;
+  const dirty: Array<{ date: string; from: string; to: string }> = [];
+  for (const [date, v] of values) {
+    if (parseNumber(v) != null) {
+      plain++;
+      continue;
+    }
+    if (isJunkValue(v)) {
+      dirty.push({ date, from: v, to: "" });
+      continue;
+    }
+    const n = looseNumber(v);
+    if (n != null) {
+      dirty.push({ date, from: v, to: String(n) });
+      continue;
+    }
+    return null; // a real text cell — this is a text column, not a messy numeric one
+  }
+  return plain >= 3 && dirty.length ? dirty : null;
+}
+
+/** Scan the daily record for every quality issue: duplicate columns (merge),
+ *  dead columns (drop), messy numeric values (clean). Pure read. */
+export function scanQuality(
+  rDir: string = recordDir(),
+  cfg: AppConfig | null = readConfig(),
+): QualityFinding[] {
+  const cols = readColumns(rDir);
+  const findings = duplicateFindings(cols, cfg);
+  const merging = new Set(findings.map((f) => f.key));
+  for (const c of cols.values()) {
+    if (merging.has(c.ref.key)) continue; // the duplicate side merges away anyway
+    const blank = { into: null, intoAuto: false, overlap: 0, agree: 0, notificationStatus: "pending" };
+    const dead = deadReason(c.values);
+    if (dead) {
+      // Stable per column: a dismissed dead column stays dismissed even as more
+      // zeros accumulate.
+      const id = findingId("drop", c.ref.key);
+      findings.push({ kind: "drop", id, notificationId: `colscan-${id}`, key: c.ref.key, cells: c.values.size, reason: dead, ...blank });
+      continue;
+    }
+    const dirty = messyCells(c.values);
+    if (dirty) {
+      // Hash the dirty cells too: dismissing today's junk stays dismissed, but
+      // NEW junk arriving later is a new finding.
+      const id = findingId("clean", c.ref.key, ...dirty.map((d) => `${d.date}=${d.from}`));
+      findings.push({
+        kind: "clean",
+        id,
+        notificationId: `colscan-${id}`,
+        key: c.ref.key,
+        cells: dirty.length,
+        reason: `${dirty.length} of ${c.values.size} values are messy (units, separators or junk)`,
+        ...blank,
+      });
+    }
+  }
+  return findings.sort(byKey);
 }
 
 // ---- merge ------------------------------------------------------------------
@@ -318,6 +422,57 @@ export function applyColumnMerge(
   }
   applyDailyEdits(edits, { recordDir: rDir });
   return { from: fromKey, into: intoKey, moved, kept, cleared: fromVals.size, applied };
+}
+
+function columnValues(rDir: string, ref: ColumnRef): Map<string, string> {
+  const vals = new Map<string, string>();
+  for (const row of readDailyFromRecord(rDir)) {
+    if (row.source === ref.source && row.metric === ref.metric) vals.set(row.date, row.valueText);
+  }
+  return vals;
+}
+
+/** Delete a dead column, every cell in the undo trail. Null when already gone. */
+export function applyColumnDrop(
+  rDir: string,
+  key: string,
+): { cleared: number; applied: AppliedCell[] } | null {
+  const ref = splitColumnKey(key);
+  if (!ref.metric) return null;
+  const vals = columnValues(rDir, ref);
+  if (!vals.size) return null;
+  const applied = [...vals.entries()]
+    .sort()
+    .map(([d, v]) => ({ d, m: ref.metric, p: v, v: "", s: ref.source }));
+  applyDailyEdits([{ op: "deleteColumn", source: ref.source, metric: ref.metric }], { recordDir: rDir });
+  return { cleared: vals.size, applied };
+}
+
+/** Normalize a messy numeric column: unwrap formatted numbers, clear junk
+ *  placeholders. Recomputes the dirty cells at apply time — the column may have
+ *  changed since the scan. Null when already clean (or no longer numeric). */
+export function applyColumnClean(
+  rDir: string,
+  key: string,
+): { fixed: number; cleared: number; applied: AppliedCell[] } | null {
+  const ref = splitColumnKey(key);
+  if (!ref.metric) return null;
+  const dirty = messyCells(columnValues(rDir, ref));
+  if (!dirty) return null;
+  const edits: DailyEdit[] = dirty.map((c) => ({
+    op: "set",
+    source: ref.source,
+    metric: ref.metric,
+    date: c.date,
+    value: c.to,
+  }));
+  const applied = dirty.map((c) => ({ d: c.date, m: ref.metric, p: c.from, v: c.to, s: ref.source }));
+  applyDailyEdits(edits, { recordDir: rDir });
+  return {
+    fixed: dirty.filter((c) => c.to !== "").length,
+    cleared: dirty.filter((c) => c.to === "").length,
+    applied,
+  };
 }
 
 // ---- rules (config) ----------------------------------------------------------
@@ -388,6 +543,83 @@ export function columnMergeOf(meta: unknown): { from: string; into: string } | n
   return typeof from === "string" && typeof into === "string" && from && into ? { from, into } : null;
 }
 
+export type QualityAction =
+  | { type: "merge"; from: string; into: string }
+  | { type: "drop"; key: string }
+  | { type: "clean"; key: string };
+
+function keyedMeta(meta: unknown, field: "columnDrop" | "columnClean"): string | null {
+  if (!meta || typeof meta !== "object") return null;
+  const m = (meta as Record<string, unknown>)[field];
+  if (!m || typeof m !== "object") return null;
+  const key = (m as { key?: unknown }).key;
+  return typeof key === "string" && key ? key : null;
+}
+
+/** The fix a scanner notification carries — the dispatch every face (structure,
+ *  scan --fix) routes through. */
+export function qualityActionOf(meta: unknown): QualityAction | null {
+  const cm = columnMergeOf(meta);
+  if (cm) return { type: "merge", ...cm };
+  const drop = keyedMeta(meta, "columnDrop");
+  if (drop) return { type: "drop", key: drop };
+  const clean = keyedMeta(meta, "columnClean");
+  if (clean) return { type: "clean", key: clean };
+  return null;
+}
+
+export interface QualityOutcome {
+  summary: string; // one human line of what the fix did
+  source: string;
+  metric: string;
+  cells: number; // cells the fix touched
+  applied: AppliedCell[]; // undo trail
+}
+
+const plural = (n: number) => (n === 1 ? "" : "s");
+
+/** Apply a finding's fix. Merges also save their rule; every path returns the
+ *  undo trail the notification's `applied` meta needs. Idempotent — an already
+ *  fixed column returns a zero outcome. */
+export function acceptQualityAction(rDir: string, action: QualityAction): QualityOutcome {
+  if (action.type === "merge") {
+    const o = acceptColumnMerge(rDir, action.from, action.into);
+    const ref = splitColumnKey(action.into);
+    return {
+      summary: o.applied.length
+        ? `Merged ${action.from} into ${action.into}: ${o.moved} value${plural(o.moved)} moved, ${o.kept} conflict${plural(o.kept)} kept from ${action.into}.`
+        : `${action.from} is already gone — saved the rule so it stays merged into ${action.into}.`,
+      source: ref.source,
+      metric: ref.metric,
+      cells: o.moved,
+      applied: o.applied,
+    };
+  }
+  const ref = splitColumnKey(action.key);
+  if (action.type === "drop") {
+    const o = applyColumnDrop(rDir, action.key);
+    return {
+      summary: o
+        ? `Deleted dead column ${action.key} (${o.cleared} value${plural(o.cleared)}).`
+        : `${action.key} is already gone.`,
+      source: ref.source,
+      metric: ref.metric,
+      cells: o?.cleared ?? 0,
+      applied: o?.applied ?? [],
+    };
+  }
+  const o = applyColumnClean(rDir, action.key);
+  return {
+    summary: o
+      ? `Cleaned ${action.key}: ${o.fixed} value${plural(o.fixed)} normalized, ${o.cleared} junk cell${plural(o.cleared)} cleared.`
+      : `${action.key} is already clean.`,
+    source: ref.source,
+    metric: ref.metric,
+    cells: o ? o.fixed + o.cleared : 0,
+    applied: o?.applied ?? [],
+  };
+}
+
 /** Rejecting a merge (Log → Reject) must also forget its rule, or the next import
  *  would silently redo what the user just undid. Returns true when a rule fell. */
 export function dropMergeRuleFor(meta: unknown): boolean {
@@ -437,69 +669,106 @@ export function applySavedMerges(rDir: string = recordDir()): MergeOutcome[] {
 }
 
 /** Human line a finding lands under in the inbox — one line, no lecture. */
-export function notificationText(f: ColumnFinding): string {
-  return `${f.from.key} ≈ ${f.into.key} — ${f.reason}. Merge keeps ${f.into.key}${f.intoAuto ? " (auto-synced)" : ""}.`;
+export function notificationText(f: QualityFinding): string {
+  if (f.kind === "merge") {
+    return `${f.key} ≈ ${f.into} — ${f.reason}. Merge keeps ${f.into}${f.intoAuto ? " (auto-synced)" : ""}.`;
+  }
+  if (f.kind === "drop") return `${f.key} — ${f.reason}. Fix deletes the column.`;
+  return `${f.key} — ${f.reason}. Fix normalizes the numbers and clears junk cells.`;
 }
 
 /**
  * Findings already sitting in the inbox as pending notifications — the persistent
- * list every scanner surface (Journal table, Data inbox) shows without running a
- * scan. Pure read; evidence comes from the notification meta.
+ * list every scanner surface (Journal table, Data quality tab) shows without
+ * running a scan. Pure read; evidence comes from the notification meta.
  */
-export function pendingFindings(rDir: string = recordDir()): ColumnFinding[] {
-  const out: ColumnFinding[] = [];
+export function pendingFindings(rDir: string = recordDir()): QualityFinding[] {
+  const out: QualityFinding[] = [];
+  const num = (m: Record<string, unknown>, k: string) => {
+    const v = m[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  };
+  const str = (m: Record<string, unknown>, k: string, fallback: string) => {
+    const v = m[k];
+    return typeof v === "string" && v ? v : fallback;
+  };
   for (const item of readInboxFromRecord(rDir)) {
     if (item.kind !== "notification" || item.status !== "pending") continue;
-    const cm = columnMergeOf(item.meta);
-    if (!cm) continue;
-    const m = (item.meta as { columnMerge: Record<string, unknown> }).columnMerge;
-    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-    out.push({
-      id: findingId(cm.from, cm.into),
-      notificationId: item.id,
-      from: splitColumnKey(cm.from),
-      into: splitColumnKey(cm.into),
-      fromCells: num(m.fromCells),
-      intoCells: num(m.intoCells),
-      overlap: num(m.overlap),
-      agree: num(m.agree),
-      intoAuto: m.intoAuto === true,
-      reason: typeof m.reason === "string" ? m.reason : "duplicate column",
-      notificationStatus: "pending",
-    });
+    const action = qualityActionOf(item.meta);
+    if (!action) continue;
+    const meta = item.meta as Record<string, Record<string, unknown>>;
+    if (action.type === "merge") {
+      const m = meta.columnMerge;
+      out.push({
+        kind: "merge",
+        id: findingId(action.from, action.into),
+        notificationId: item.id,
+        key: action.from,
+        into: action.into,
+        cells: num(m, "fromCells"),
+        overlap: num(m, "overlap"),
+        agree: num(m, "agree"),
+        intoAuto: m.intoAuto === true,
+        reason: str(m, "reason", "duplicate column"),
+        notificationStatus: "pending",
+      });
+    } else {
+      const m = meta[action.type === "drop" ? "columnDrop" : "columnClean"];
+      out.push({
+        kind: action.type,
+        id: item.id.replace(/^colscan-/, ""),
+        notificationId: item.id,
+        key: action.key,
+        into: null,
+        cells: num(m, "cells"),
+        overlap: 0,
+        agree: 0,
+        intoAuto: false,
+        reason: str(m, "reason", action.type === "drop" ? "dead column" : "messy values"),
+        notificationStatus: "pending",
+      });
+    }
   }
-  return out.sort((x, y) => (x.from.key < y.from.key ? -1 : x.from.key > y.from.key ? 1 : 0));
+  return out.sort(byKey);
+}
+
+/** The per-kind meta a finding's notification carries — full evidence, so
+ *  pendingFindings can rebuild the finding without a rescan. */
+function findingMeta(f: QualityFinding): Record<string, unknown> {
+  if (f.kind === "merge") {
+    return {
+      columnMerge: {
+        from: f.key,
+        into: f.into,
+        overlap: f.overlap,
+        agree: f.agree,
+        reason: f.reason,
+        fromCells: f.cells,
+        intoAuto: f.intoAuto,
+      },
+    };
+  }
+  const m = { key: f.key, cells: f.cells, reason: f.reason };
+  return f.kind === "drop" ? { columnDrop: m } : { columnClean: m };
 }
 
 /**
- * The full guard: re-apply saved rules, scan for new duplicates, and queue each
- * new finding as a pending inbox notification (stable ids — a re-scan never
+ * The full guard: re-apply saved merge rules, run every quality check, and queue
+ * each new finding as a pending inbox notification (stable ids — a re-scan never
  * duplicates one, and a dismissed notification stays dismissed). Runs after every
- * structure (the "AI also runs this check" hook) and behind the Journal's
- * Scan-columns button. The caller rebuilds when anything changed.
+ * structure (the "AI also runs this check" hook) and behind the Scan buttons.
+ * The caller rebuilds when anything changed.
  */
 export function columnGuard(rDir: string = recordDir()): ColumnGuardResult {
   const autoMerged = applySavedMerges(rDir);
-  const findings = scanColumns(rDir, readConfig());
+  const findings = scanQuality(rDir, readConfig());
   const { added } = appendInboxItems(
     findings.map((f) => ({
       id: f.notificationId,
       text: notificationText(f),
       source: "scanner",
       kind: "notification",
-      meta: {
-        // Full evidence, so pendingFindings can rebuild the finding without a rescan.
-        columnMerge: {
-          from: f.from.key,
-          into: f.into.key,
-          overlap: f.overlap,
-          agree: f.agree,
-          reason: f.reason,
-          fromCells: f.fromCells,
-          intoCells: f.intoCells,
-          intoAuto: f.intoAuto,
-        },
-      },
+      meta: findingMeta(f),
     })),
     { recordDir: rDir },
   );
