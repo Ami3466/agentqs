@@ -17,8 +17,12 @@
  *   2. over the built app's real routes: POST audio to /api/voice/memo with a
  *      local transcriber wired, and the transcript lands in the inbox as a raw
  *      `voice` memo (pending, no daily row, no LLM) with the pending count up one;
- *   3. the in-chat live voice session is config-gated: /api/voice/session reports
- *      disabled (with a setup reason) when no ElevenLabs key/agent is set.
+ *   3. the cloud backends (ElevenLabs Scribe, Gemini) transcribe through the real
+ *      request path with an injected fetch, and the Settings voice provider wins
+ *      the resolution order;
+ *   4. the in-chat live voice session is config-gated per provider: ElevenLabs
+ *      needs a key + agent id, Gemini Live needs only a key and mints a real
+ *      ephemeral token server-side.
  *
  * The transcriber itself is substituted with a tiny wrapper (like the GitHub test
  * substitutes the network) — everything else (form parsing, the STT dispatch, the
@@ -33,8 +37,10 @@ import path from "path";
 import {
   describeSession,
   describeStt,
+  geminiLiveToken,
   localWhisperBackend,
   resolveSttBackend,
+  transcribeMemo,
 } from "../src/lib/voice";
 import { decodeWavToMono16k, transcribeWhisper } from "../src/lib/whisper-local";
 
@@ -183,13 +189,97 @@ async function main() {
   const transcript = await backend.transcribe({ audio: Buffer.from(PHRASE, "utf8"), mime: "audio/webm" });
   check("local backend transcribes audio → text", transcript === PHRASE, transcript.slice(0, 40));
 
-  // The live voice session is config-gated behind ElevenLabs env.
-  console.log("\nThe in-chat live voice session is config-gated (ElevenLabs)…\n");
-  check("no ElevenLabs env → session disabled", describeSession({}).enabled === false);
-  check("disabled session names what to set", /ELEVENLABS_API_KEY/.test(describeSession({}).reason));
+  // ---- 1c. Cloud STT backends (ElevenLabs Scribe / Gemini) -----------------
+  // The network is substituted (an injected fetch), everything else — request
+  // shape, auth header, response parsing, the resolution order the memo route
+  // relies on — is the real production path.
+  console.log("\nCloud STT backends — ElevenLabs Scribe and Gemini (injected fetch)…\n");
   check(
-    "both ElevenLabs vars set → session enabled",
+    "an ElevenLabs voice key alone → the Scribe backend",
+    resolveSttBackend({ elevenLabsKey: "xi" })?.id === "elevenlabs",
+  );
+  check(
+    "a Gemini key alone → the Gemini backend",
+    resolveSttBackend({ geminiKey: "g" })?.id === "gemini",
+  );
+  check(
+    "an OpenAI key still wins by default (no explicit voice provider)",
+    resolveSttBackend({ openaiKey: "sk", elevenLabsKey: "xi", geminiKey: "g" })?.id === "openai",
+  );
+  check(
+    "Settings provider = elevenlabs → Scribe beats the OpenAI fallback",
+    resolveSttBackend({ openaiKey: "sk", elevenLabsKey: "xi", prefer: "elevenlabs" })?.id === "elevenlabs",
+  );
+  check(
+    "Settings provider = google-live → Gemini beats the OpenAI fallback",
+    resolveSttBackend({ openaiKey: "sk", geminiKey: "g", prefer: "google-live" })?.id === "gemini",
+  );
+  check(
+    "…but an installed local Whisper still beats any cloud pick",
+    resolveSttBackend({ whisperModel: "base", geminiKey: "g", prefer: "google-live" })?.id === "whisper-local",
+  );
+
+  const seen: { url: string; auth: string; body?: unknown }[] = [];
+  const fakeFetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const u = String(url);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    seen.push({ url: u, auth: headers["xi-api-key"] || headers["x-goog-api-key"] || "" });
+    if (u.includes("api.elevenlabs.io/v1/speech-to-text")) {
+      return new Response(JSON.stringify({ text: PHRASE }), { status: 200 });
+    }
+    if (u.includes("generativelanguage.googleapis.com") && u.includes(":generateContent")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      seen[seen.length - 1].body = body;
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: PHRASE }] } }] }),
+        { status: 200 },
+      );
+    }
+    if (u.includes("generativelanguage.googleapis.com/v1alpha/auth_tokens")) {
+      return new Response(JSON.stringify({ name: "auth_tokens/ephemeral-123" }), { status: 200 });
+    }
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+
+  const scribe = await transcribeMemo(
+    { audio: Buffer.from("bytes"), mime: "audio/webm" },
+    { elevenLabsKey: "xi-key", fetchImpl: fakeFetch },
+  );
+  check("Scribe transcribes via the real request path", scribe.text === PHRASE && scribe.backend === "elevenlabs");
+  check("…with the key in xi-api-key", seen[0]?.auth === "xi-key");
+
+  const gem = await transcribeMemo(
+    { audio: Buffer.from("bytes"), mime: "audio/webm" },
+    { geminiKey: "g-key", fetchImpl: fakeFetch },
+  );
+  const gemBody = seen[1]?.body as { contents?: { parts?: { inline_data?: { data?: string } }[] }[] };
+  check("Gemini transcribes via generateContent", gem.text === PHRASE && gem.backend === "gemini");
+  check(
+    "…sending the audio inline as base64",
+    gemBody?.contents?.[0]?.parts?.some((p) => p.inline_data?.data === Buffer.from("bytes").toString("base64")) === true,
+  );
+
+  // The live voice session is config-gated per provider.
+  console.log("\nThe in-chat live voice session is config-gated (ElevenLabs / Gemini Live)…\n");
+  check("no voice config → session disabled", describeSession({}).enabled === false);
+  check("disabled session names what to set", /API key/.test(describeSession({}).reason));
+  check(
+    "ElevenLabs key + agent id → session enabled",
     describeSession({ elevenLabsKey: "k", elevenLabsAgentId: "a" }).enabled === true,
+  );
+  check(
+    "Google Live without a key → disabled, names the fix",
+    describeSession({ provider: "google-live" }).enabled === false &&
+      /Gemini API key/.test(describeSession({ provider: "google-live" }).reason),
+  );
+  check(
+    "Google Live with a key → enabled, no agent id needed",
+    describeSession({ provider: "google-live", googleKey: "g" }).enabled === true,
+  );
+  const live = await geminiLiveToken({ provider: "google-live", googleKey: "g-key", fetchImpl: fakeFetch });
+  check(
+    "Gemini Live mints an ephemeral token (real request path, key stays server-side)",
+    live.token === "auth_tokens/ephemeral-123" && live.model.length > 0,
   );
 
   // ---- 2. End-to-end over the built app ------------------------------------
