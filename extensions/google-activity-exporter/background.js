@@ -21,8 +21,22 @@ const IMPORTERS = [
 const TARGETS = Object.fromEntries(IMPORTERS.map((item) => [item.id, item.url]));
 const STATUS_KEY = "agentqsImportStatus";
 const BASE_KEY = "agentqsBaseUrl";
+const RESUME_KEY = "agentqs-google-exporter-resume"; // mirror written by content.js
 const DEFAULT_BASE = "http://localhost:3000";
 const PING_ALARM = "agentqs-server-ping";
+const WATCHDOG_ALARM = "agentqs-run-watchdog";
+// No status write for this long while a checkpoint says "running" = the tab is
+// gone, discarded, or frozen. Healthy runs update status every page; the longest
+// legit quiet stretch is a ~2-minute retry backoff.
+const WATCHDOG_STALE_MS = 5 * 60 * 1000;
+// A checkpoint this old is a forgotten run, not an interrupted one — stand down
+// instead of surprise-reopening Google tabs weeks later.
+const WATCHDOG_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+// Keep in sync with INGEST_FALLBACK in content.js and ingestPort() in
+// src/lib/ingest-server.ts: the recompile-proof ingest listener, then the app's
+// default port (the configured base is always tried first — a custom port lives
+// there, not in this list).
+const PING_FALLBACKS = ["http://localhost:3033", "http://localhost:3000"];
 
 async function serverBase() {
   const result = await chrome.storage.local.get([BASE_KEY]);
@@ -32,16 +46,22 @@ async function serverBase() {
 
 // Heartbeat: lets the AgentQS Data tab tell "extension installed" from "nothing
 // listening", so its Import buttons can guide instead of failing silently.
+// Rotates through the same targets batch posts use — the configured base may be
+// squatted by another app while the ingest listener still answers.
 async function pingServer() {
-  try {
-    const base = await serverBase();
-    await fetch(`${base}/api/automations/google-activity-extension/ping`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: chrome.runtime.getManifest().version }),
-    });
-  } catch {
-    /* server not running — the Data tab shows "not detected" until it is */
+  const base = await serverBase();
+  const targets = [...new Set([base, ...PING_FALLBACKS])];
+  for (const target of targets) {
+    try {
+      const res = await fetch(`${target}/api/automations/google-activity-extension/ping`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version: chrome.runtime.getManifest().version }),
+      });
+      if (res.ok) return;
+    } catch {
+      /* try the next target; all down = the Data tab shows "not detected" */
+    }
   }
 }
 const AUTO_KEY = "agentqsAutoScrape";
@@ -157,6 +177,55 @@ async function restoreAutoScrape() {
   if (auto.enabled) await chrome.alarms.create(ALARM_NAME, { delayInMinutes: 1, periodInMinutes: auto.periodMinutes || 24 * 60 });
 }
 
+// Watchdog: a multi-day walk must survive everything short of a Google sign-out.
+// content.js checkpoints every page into chrome.storage; if that checkpoint says
+// "running" but status has gone quiet (computer was shut down and the tab never
+// came back, tab discarded by Memory Saver, page frozen, Chrome restarted), this
+// reopens/reloads the Google page — where the content script auto-resumes from
+// the checkpoint. Pause, completion, and permanent errors mark the checkpoint
+// not-running, which stands the watchdog down.
+async function watchdogCheck() {
+  const stored = await chrome.storage.local.get([RESUME_KEY, STATUS_KEY]);
+  const resume = stored[RESUME_KEY];
+  if (!resume || resume.running !== true) return;
+  const checkpointAge = Date.now() - (Date.parse(resume.updatedAt || "") || 0);
+  if (checkpointAge > WATCHDOG_MAX_AGE_MS) {
+    await chrome.storage.local.set({
+      [RESUME_KEY]: { ...resume, running: false, status: "stale" },
+      [STATUS_KEY]: {
+        importer: resume.importer,
+        status: "stale",
+        text: `Found a ${Math.round(checkpointAge / 86400000)}-day-old interrupted import. Start it again from the popup — already-imported items are skipped.`,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    return;
+  }
+  const status = stored[STATUS_KEY] || {};
+  const lastBeat = Math.max(Date.parse(status.updatedAt || "") || 0, Date.parse(resume.updatedAt || "") || 0);
+  if (Date.now() - lastBeat < WATCHDOG_STALE_MS) return; // run is alive
+  const url = targetFor(resume.importer);
+  const tab = await findTargetTab(url);
+  if (tab && tab.id != null) {
+    // Tab exists but silent — discarded/frozen/dead content script. Reload; the
+    // content script's own checkpoint auto-resume takes it from there.
+    await chrome.storage.local.set({
+      [STATUS_KEY]: { importer: resume.importer, status: "opening", text: "Watchdog: reloading the stalled Google tab to resume the import.", updatedAt: new Date().toISOString() },
+    });
+    await chrome.tabs.reload(tab.id);
+  } else {
+    await chrome.storage.local.set({
+      [STATUS_KEY]: { importer: resume.importer, status: "opening", text: "Watchdog: reopening the Google page to resume the interrupted import.", updatedAt: new Date().toISOString() },
+    });
+    await openAndStart(resume.importer, false);
+  }
+}
+
+function armAlarms() {
+  chrome.alarms.create(PING_ALARM, { delayInMinutes: 1, periodInMinutes: 5 });
+  chrome.alarms.create(WATCHDOG_ALARM, { delayInMinutes: 1, periodInMinutes: 1 });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "agentqs-list-importers") return false;
   void pingServer(); // popup open = fresh install signal for the Data tab
@@ -167,6 +236,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "agentqs-open-and-start") return false;
   openAndStart(message.importer || "browser_history", message.dryRun === true)
+    .then(() => sendResponse({ ok: true }))
+    .catch((error) => sendResponse({ ok: false, error: error.message }));
+  return true;
+});
+
+// Popup "Stop": mark the checkpoint not-running (stands the watchdog down) and
+// tell the Google tab, if any, to pause its loop. Works even when the tab is gone.
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || message.type !== "agentqs-stop-run") return false;
+  (async () => {
+    const stored = await chrome.storage.local.get([RESUME_KEY]);
+    const resume = stored[RESUME_KEY];
+    if (resume) await chrome.storage.local.set({ [RESUME_KEY]: { ...resume, running: false, status: "paused" } });
+    const tab = await findTargetTab(targetFor(resume && resume.importer));
+    if (tab && tab.id != null) await chrome.tabs.sendMessage(tab.id, { type: "agentqs-stop-import" }).catch(() => undefined);
+    await chrome.storage.local.set({
+      [STATUS_KEY]: {
+        importer: (resume && resume.importer) || "browser_history",
+        status: "paused",
+        text: "Stopped. Start import resumes from the saved checkpoint.",
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  })()
     .then(() => sendResponse({ ok: true }))
     .catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
@@ -211,16 +304,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === PING_ALARM) void pingServer();
+  if (alarm.name === WATCHDOG_ALARM) watchdogCheck().catch(() => undefined);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
   restoreAutoScrape().catch(() => undefined);
   void pingServer();
-  chrome.alarms.create(PING_ALARM, { delayInMinutes: 1, periodInMinutes: 5 });
+  armAlarms();
+  // An interrupted run must not wait for the first alarm tick after an
+  // extension update/reload — check immediately.
+  watchdogCheck().catch(() => undefined);
 });
 
+// Chrome (or the whole computer) restarted: this is the moment an interrupted
+// multi-day import gets its tab back without any user action.
 chrome.runtime.onStartup.addListener(() => {
   restoreAutoScrape().catch(() => undefined);
   void pingServer();
-  chrome.alarms.create(PING_ALARM, { delayInMinutes: 1, periodInMinutes: 5 });
+  armAlarms();
+  watchdogCheck().catch(() => undefined);
 });

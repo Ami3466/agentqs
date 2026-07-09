@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
-import { extensionPingFile, GOOGLE_PRESETS } from "@/lib/google-web-scraper";
+import { extensionLatestVersion, extensionPingFile, extensionSourceDir, GOOGLE_PRESETS } from "@/lib/google-web-scraper";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,10 +86,13 @@ export async function GET() {
   }));
   const ping = extensionSeenAt();
   return NextResponse.json({
-    extensionDir: path.join(process.cwd(), "extensions", "google-activity-exporter"),
+    extensionDir: extensionSourceDir(),
     downloadUrl: "/downloads/agentqs-google-activity-exporter.zip",
     extensionSeenAt: ping.seenAt,
     extensionVersion: ping.version,
+    // Unpacked extensions never auto-update; the Data tab compares this to the
+    // pinged version and walks the user through replacing + reloading.
+    latestVersion: extensionLatestVersion(),
     imports,
   });
 }

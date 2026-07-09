@@ -113,6 +113,24 @@ export function extensionPingFile(): string {
   return path.join(dataDir(), "browser", "extension-ping.json");
 }
 
+/** Directory the app ships the unpacked extension from (also zipped for download). */
+export function extensionSourceDir(): string {
+  return path.join(process.cwd(), "extensions", "google-activity-exporter");
+}
+
+/** Version of the extension the app currently ships. The Data tab compares it to
+ *  the version the installed extension reports in its ping heartbeat: unpacked
+ *  installs never auto-update, so a mismatch is the only signal a user gets to
+ *  replace the folder and reload the extension. */
+export function extensionLatestVersion(): string {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionSourceDir(), "manifest.json"), "utf8")) as { version?: unknown };
+    return typeof manifest.version === "string" ? manifest.version : "";
+  } catch {
+    return "";
+  }
+}
+
 function chromeAppleScript(script: string, args: string[] = []): string {
   return execFileSync("osascript", ["-e", script, ...args], {
     encoding: "utf8",
