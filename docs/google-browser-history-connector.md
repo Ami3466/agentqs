@@ -68,6 +68,27 @@ local AgentQS server. Presets are defined once in
 under Automated imports. The Data Portability API below stays the target for a
 hosted/cloud connector, where a local extension is not available.
 
+A walk over a lifetime account takes hours, so the run is built to survive
+anything short of a Google sign-out without user action:
+
+- Every page saves a continuation checkpoint to the page's localStorage AND to
+  `chrome.storage.local` (the background worker's copy).
+- A background watchdog (1-minute alarm + Chrome startup hook) reopens or
+  reloads the Google tab whenever the checkpoint says "running" but status has
+  gone quiet for 5 minutes — this covers computer shutdown/restart, Chrome
+  restart, Memory-Saver tab discards, and frozen pages. The content script
+  auto-resumes from the checkpoint when the page loads.
+- If a resumed continuation token has expired, the walk restarts from the top
+  automatically; the server dedups events, so already-imported pages just
+  fast-forward (`added: 0`).
+- Batch posts and heartbeat pings rotate through the app port and the
+  standalone ingest listener (`src/lib/ingest-server.ts`, port 3033), so dev
+  recompiles or a squatted port never abort a run.
+- Pause (page panel) or Stop import (popup) marks the checkpoint not-running,
+  which stands the watchdog down; Start import resumes from the checkpoint.
+- Sign-out and other user-action errors are permanent: the run stops with an
+  explanatory status instead of retrying forever.
+
 ## Non-Goals
 
 - Server-side scraping of `myactivity.google.com` (headless/Playwright) as the

@@ -1,7 +1,5 @@
-import fs from "fs";
-import path from "path";
 import { NextResponse } from "next/server";
-import { extensionPingFile } from "@/lib/google-web-scraper";
+import { recordExtensionPing } from "@/lib/ingest-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,14 +38,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Origin not allowed." }, { status: 403, headers: cors(origin) });
   }
   const body = (await req.json().catch(() => ({}))) as { version?: unknown };
-  const file = extensionPingFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(
-    file,
-    JSON.stringify({
-      seenAt: new Date().toISOString(),
-      version: typeof body.version === "string" ? body.version : "",
-    }),
-  );
+  recordExtensionPing(body.version);
   return NextResponse.json({ ok: true }, { headers: cors(origin) });
 }

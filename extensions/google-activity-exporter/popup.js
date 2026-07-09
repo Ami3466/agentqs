@@ -98,6 +98,12 @@
     chrome.storage.local.set({ [BASE_KEY]: base });
   });
   document.getElementById("start-import").addEventListener("click", () => start(importerSelect.value, false));
+  document.getElementById("stop-import").addEventListener("click", () => {
+    statusNode.textContent = "Stopping...";
+    chrome.runtime.sendMessage({ type: "agentqs-stop-run" }, (response) => {
+      if (response && response.error) statusNode.textContent = response.error;
+    });
+  });
   document.getElementById("test-import").addEventListener("click", () => start(importerSelect.value, true));
   document.getElementById("open-agentqs").addEventListener("click", () => void open(normalizedBase()));
   autoBrowser.addEventListener("change", () => setAuto(autoBrowser.checked));

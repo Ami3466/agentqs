@@ -85,8 +85,18 @@
     }
   }
 
+  // The checkpoint lives in BOTH stores: page localStorage (synchronous reads on
+  // this origin) and chrome.storage.local (the background watchdog reads it there
+  // to reopen this page after a Chrome/computer restart or a discarded tab).
   function saveResume(value) {
     localStorage.setItem(RESUME_KEY, JSON.stringify(value));
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ [RESUME_KEY]: value });
+      }
+    } catch {
+      /* extension context torn down — localStorage copy still resumes in-tab */
+    }
     storageSet({ ...value, status: value.status || "running", text: value.text || "", url: location.href });
   }
 
@@ -100,6 +110,13 @@
 
   function clearResume() {
     localStorage.removeItem(RESUME_KEY);
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove(RESUME_KEY);
+      }
+    } catch {
+      /* mirror cleanup is best-effort */
+    }
   }
 
   function buttonStyle(bg, color) {
@@ -160,18 +177,28 @@
     const start = el("button", { type: "button", style: buttonStyle("#0969da", "#fff") }, "Start import");
     const stop = el("button", { type: "button", style: buttonStyle("#f6f8fa", "#cf222e") }, "Pause");
     start.addEventListener("click", () => void runExport({ importerId: current.id, maxPages: 100000 }));
-    stop.addEventListener("click", () => {
-      STATE.stop = true;
-      if (STATE.retryTimer) {
-        window.clearTimeout(STATE.retryTimer);
-        STATE.retryTimer = null;
-      }
-      setStatus("Pausing after current page...", { status: "pausing" });
-    });
+    stop.addEventListener("click", () => pauseRun());
     controls.append(start, stop);
     root.append(title, status, controls);
     document.documentElement.appendChild(root);
     setStatus(status.textContent || "Ready.", { status: "idle" });
+  }
+
+  // Pause = stop fetching AND mark the checkpoint not-running, so the background
+  // watchdog stands down instead of reviving the run the user just stopped.
+  function pauseRun() {
+    STATE.stop = true;
+    if (STATE.retryTimer) {
+      window.clearTimeout(STATE.retryTimer);
+      STATE.retryTimer = null;
+    }
+    const resume = readResume();
+    if (resume && resume.running) saveResume({ ...resume, running: false, status: "paused" });
+    if (STATE.running) {
+      setStatus("Pausing after current page...", { status: "pausing" });
+    } else {
+      setStatus("Paused. Start import resumes from the saved checkpoint.", { status: "paused" });
+    }
   }
 
   function importerForLocation() {
@@ -548,6 +575,9 @@
     STATE.pages = 0;
     STATE.seenItems = 0;
     STATE.added = 0;
+    // -1 = fresh walk; 0 = resumed from a checkpoint with no page fetched yet
+    // (the catch block reads this, so it must exist before the try can throw).
+    let pagesSinceResume = -1;
     try {
       if (!importer.rpc) {
         await runDomImport({ importer, dryRun });
@@ -565,6 +595,7 @@
           STATE.seenItems = Number(resume.seenItems) || 0;
           STATE.added = Number(resume.added) || 0;
           previousCt = resume.ct;
+          pagesSinceResume = 0;
           request = continuationRequest(api.initialRequest, resume.ct);
           setStatus(`Resuming from page ${STATE.pages}, ${STATE.seenItems} prior Google items...`, { status: "running" });
         }
@@ -573,6 +604,7 @@
       while (!STATE.stop && STATE.pages < maxPages) {
         const { items, ct } = await fetchDisplayItemsPageWithRetry(api, request);
         STATE.pages += 1;
+        if (pagesSinceResume >= 0) pagesSinceResume += 1;
         STATE.seenItems += items.length;
         firstIds.push(items[0] && items[0][5]);
         if (!dryRun) await postBatch(items, STATE.pages, ct, false, importer.id);
@@ -598,7 +630,10 @@
         if (!ct || ct === previousCt || items.length === 0) break;
         previousCt = ct;
         request = continuationRequest(api.initialRequest, ct);
-        await new Promise((resolve) => setTimeout(resolve, 120));
+        // No timer between pages: Chrome clamps background-tab timers to 1s (and
+        // to 1/minute under intensive throttling), which once stretched a ~2-hour
+        // walk into days. The RPC round-trip itself paces the loop; 429/5xx
+        // backoff in fetchDisplayItemsPageWithRetry protects Google.
       }
 
       if (STATE.stop) {
@@ -620,19 +655,35 @@
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
       const resume = readResume();
-      if (resume) saveResume({ ...resume, running: false, status: "error", lastError: msg });
       // Self-heal: anything not needing user action (Google RPC hiccup, machine
       // sleep, page state gone stale) restarts the export after a cooldown — the
       // resume checkpoint makes the rerun skip everything already imported.
       if (STATE.stop) {
+        if (resume) saveResume({ ...resume, running: false, status: "paused", lastError: msg });
         setStatus(`Paused at page ${STATE.pages}, Google items ${STATE.seenItems}.`, { status: "paused" });
+      } else if (!dryRun && pagesSinceResume === 0 && (!e || e.permanent !== true)) {
+        // The resumed checkpoint produced zero pages — its continuation token has
+        // expired (multi-day gap). Restarting from the top is always safe: the
+        // server dedups events, so already-imported pages just fast-forward.
+        clearResume();
+        setStatus(`Saved checkpoint expired (${msg}). Restarting the walk from the top in 5s — already-imported items are skipped server-side.`, { status: "retrying", lastError: msg });
+        STATE.retryTimer = window.setTimeout(() => {
+          STATE.retryTimer = null;
+          if (!STATE.running) void runExport({ importerId: importer.id, maxPages, dryRun });
+        }, 5000);
       } else if (!dryRun && (!e || e.permanent !== true)) {
+        // Keep the checkpoint marked running: if Chrome dies during this wait, the
+        // background watchdog must still know there is a run to revive.
+        if (resume) saveResume({ ...resume, running: true, status: "retrying", lastError: msg });
         setStatus(`Error: ${msg} Retrying automatically in 60s (Pause cancels).`, { status: "retrying", lastError: msg });
         STATE.retryTimer = window.setTimeout(() => {
           STATE.retryTimer = null;
           if (!STATE.running) void runExport({ importerId: importer.id, maxPages, dryRun });
         }, 60000);
       } else {
+        // Permanent errors (sign in again, preset unavailable) need the user —
+        // stand the watchdog down so it does not reopen this page forever.
+        if (resume) saveResume({ ...resume, running: false, status: "error", lastError: msg });
         setStatus(`Error: ${msg}`, { status: "error", lastError: msg });
       }
     } finally {
@@ -652,12 +703,36 @@
       sendResponse({ ok: true });
       return false;
     });
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (!message || message.type !== "agentqs-stop-import") return false;
+      pauseRun();
+      sendResponse({ ok: true });
+      return false;
+    });
   }
-  const resume = readResume();
-  if (resume && resume.running && location.hostname === "myactivity.google.com") {
+  function autoResume(resume) {
+    if (!resume || resume.running !== true || location.hostname !== "myactivity.google.com") return;
     window.setTimeout(() => {
       if (!STATE.running) void runExport({ importerId: resume.importer || "browser_history", maxPages: 100000 });
     }, 1500);
+  }
+  const resume = readResume();
+  if (resume) {
+    autoResume(resume);
+  } else {
+    // localStorage empty (cleared site data) — fall back to the chrome.storage
+    // mirror the watchdog uses, so an interrupted run still continues here.
+    try {
+      chrome.storage.local.get([RESUME_KEY], (result) => {
+        const mirrored = result && result[RESUME_KEY];
+        if (mirrored && !readResume()) {
+          localStorage.setItem(RESUME_KEY, JSON.stringify(mirrored));
+          autoResume(mirrored);
+        }
+      });
+    } catch {
+      /* no extension storage — nothing to adopt */
+    }
   }
 
   // Deep link from the AgentQS Data tab: opening a Google page with
