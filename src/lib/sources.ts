@@ -97,4 +97,18 @@ export interface SourceView {
   automationStatus?: "ok" | "error" | null; // last replay outcome (automation rows)
   automationError?: string | null; // last replay error, if any
   plugin?: boolean; // a Tier-1 plugin source — supports extra accounts ("<id>-2" instances)
+  /** Provenance of the working credential: "saved" = the user connected it,
+   *  "env" = environment variable, "discovered" = auto-detected from the
+   *  source's local desktop app (the user never connected it — surface that). */
+  credentialOrigin?: "env" | "saved" | "discovered" | null;
+  /** Rows exist in the record. Orthogonal to `connected`: imported data must
+   *  never present a source as connected, and a connected source may be empty. */
+  hasData?: boolean;
+  /** A local desktop app's token is detectable but the user has NOT opted in —
+   *  the UI offers "Use detected app" instead of silently syncing with it. */
+  detectedApp?: boolean;
+  /** Most recent sync attempt from the run ledger (sync-runs.ts) — failures
+   *  included, so a broken automation cannot render identically to a healthy one. */
+  lastRunOk?: boolean | null;
+  lastRunError?: string | null;
 }

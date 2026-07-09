@@ -10,6 +10,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { loadEnvConfig } from "@next/env";
+// Same env files as the Next server — every face must resolve the same store.
+loadEnvConfig(process.cwd(), undefined, { info: () => undefined, error: () => undefined });
 import * as core from "../src/lib/cli-core";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -68,6 +71,17 @@ export async function startMcpServer(): Promise<void> {
     "sources",
     { title: "List data sources", description: "Every source: kind, connected, interval, last sync, stale/due.", inputSchema: {} },
     async () => guard(() => core.sources()),
+  );
+
+  server.registerTool(
+    "pipeline",
+    {
+      title: "Data-pipeline truth table",
+      description:
+        "Per source: how data arrives, credential provenance (user-saved vs auto-detected local app), schedule, scheduler presence, last run outcome (failures included), and landed data coverage.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.pipeline()),
   );
 
   server.registerTool(

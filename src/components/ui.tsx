@@ -284,9 +284,12 @@ export function Checkbox({
   );
 }
 
-export function Badge({ children }: { children: ReactNode }) {
+export function Badge({ children, title }: { children: ReactNode; title?: string }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg">
+    <span
+      title={title}
+      className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-fg"
+    >
       {children}
     </span>
   );

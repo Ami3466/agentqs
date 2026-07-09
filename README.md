@@ -74,7 +74,7 @@ Connect a channel in Settings - log memos and ask your record questions from whe
 
 **Connect by API or OAuth:** GitHub · WHOOP · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
 
-**Scrape or import from locked-in apps:** Google MyActivity (browser extension) · Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · any CSV, TSV, Markdown or text file
+**Scrape or import from locked-in apps:** Google MyActivity (browser extension - checkpointed walks that survive restarts and resume on their own) · Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · any CSV, TSV, Markdown or text file
 
 Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
 
@@ -103,7 +103,7 @@ Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`
 
 ## Deploy on cloud
 
-Scheduled syncs need a machine that's always on. On your own machine one crontab line does it - `0 * * * * agentqs sync --due` runs every source whose interval says it's due, browser scrapes included (copy it from Settings → API → Connect). [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`.
+While the app is running it schedules its own syncs - set a source's interval and it happens, no setup. For times the app isn't open, one crontab line covers it: `0 * * * * agentqs sync --due` runs every source whose interval says it's due, browser scrapes included (copy it from Settings → API → Connect). `agentqs pipeline` shows the whole truth in one table: where each source's data comes from, credential provenance, what's scheduled, and whether the last run actually worked. [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`, syncs run around the clock.
 
 ![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 

@@ -1,11 +1,28 @@
 import path from "path";
+import fs from "fs";
+
+/** A data dir counts as initialized once it holds a config or a record —
+ *  a bare directory (leftover mkdir, sync artifact) is NOT a store. */
+function initialized(dir: string): boolean {
+  return fs.existsSync(path.join(dir, "config.json")) || fs.existsSync(path.join(dir, "record"));
+}
 
 /**
  * Resolved data directory where agentqs writes config, the git record, and the
  * SQLite cache. Local default: ./data · Docker default: /data (set in the image).
+ * On iCloud-synced checkouts ./data is a symlink to ./data.nosync; iCloud sync
+ * conflicts sometimes rename the symlink away (or leave an EMPTY ./data behind),
+ * so the store is chosen by which dir is actually initialized — an empty ./data
+ * must never shadow a data.nosync that holds the record, or every face of the
+ * app silently splits across two stores.
  */
 export function dataDir(): string {
-  const dir = process.env.AGENTQS_DATA_DIR || path.join(process.cwd(), "data");
+  if (process.env.AGENTQS_DATA_DIR) return path.resolve(process.env.AGENTQS_DATA_DIR);
+  const dir = path.join(process.cwd(), "data");
+  if (!initialized(dir)) {
+    const nosync = path.join(process.cwd(), "data.nosync");
+    if (initialized(nosync)) return nosync;
+  }
   return path.resolve(dir);
 }
 

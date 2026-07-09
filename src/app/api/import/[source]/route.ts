@@ -6,8 +6,9 @@ import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv, rebuild } from "@/lib/record";
 import { pluginInstanceById, pluginInstanceName, type PluginInstance } from "@/lib/importers/registry";
-import { importPlugin, resolveCredential, windowDays } from "@/lib/importers/plugin";
+import { connectionState, importPlugin, resolveSyncCredential, windowDays } from "@/lib/importers/plugin";
 import { wipeDemoOnImport } from "@/lib/demo";
+import { connectDetectedApp } from "@/lib/cli-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,13 +23,19 @@ interface SeriesPoint {
 function status({ plugin, instanceId }: PluginInstance) {
   const file = path.join(recordDir(), "daily", `${instanceId}.csv`);
   const cfg = readConfig();
+  // connected = authorized to sync (user credential or opted-in detected app).
+  // hasData = rows exist. NEVER derived from each other — an import must not
+  // present a source as connected, and connecting starts with zero rows.
+  const state = connectionState(plugin, cfg, instanceId, file);
   const out = {
     id: instanceId,
     name: pluginInstanceName({ plugin, instanceId }),
     detail: plugin.detail,
     live: plugin.live,
-    connected: false,
-    hasCredential: Boolean(resolveCredential(plugin, undefined, cfg, instanceId)),
+    connected: state.connected,
+    hasData: state.hasData,
+    detectedApp: state.detectedApp,
+    hasCredential: Boolean(resolveSyncCredential(plugin, undefined, cfg, instanceId)),
     credentialLabel: plugin.credentialLabel,
     credentialPlaceholder: plugin.credentialPlaceholder,
     primaryMetric: plugin.primaryMetric,
@@ -44,7 +51,6 @@ function status({ plugin, instanceId }: PluginInstance) {
   const di = header.indexOf("date");
   const mi = header.indexOf(plugin.primaryMetric);
   if (di < 0 || rows.length === 0) return out;
-  out.connected = true;
   out.days = rows.filter((r) => (r[di] ?? "").trim() !== "").length;
   if (mi >= 0) {
     const series: SeriesPoint[] = [];
@@ -82,9 +88,20 @@ export async function POST(req: Request, { params }: { params: { source: string 
   if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
   const { plugin, instanceId } = inst;
 
-  const body = (await req.json().catch(() => ({}))) as { credential?: string; days?: number };
+  const body = (await req.json().catch(() => ({}))) as { credential?: string; days?: number; useDetected?: boolean };
+  // "Connect (use detected app)" — imports the desktop app's login as this
+  // source's SAVED credential (same store as a pasted key, revoked by
+  // disconnect). Connected always means a stored credential; this is the only
+  // thing discovery can ever do, and only through this explicit action.
+  if (body.useDetected === true) {
+    try {
+      connectDetectedApp(instanceId);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
+  }
   const cfg = readConfig();
-  const credential = resolveCredential(plugin, body.credential, cfg, instanceId);
+  const credential = resolveSyncCredential(plugin, body.credential, cfg, instanceId);
   if (plugin.requiresCredential && !credential) {
     return NextResponse.json(
       { error: `Add a ${plugin.credentialLabel} to sync ${plugin.name}.` },

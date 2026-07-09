@@ -30,6 +30,8 @@
     "granola:test": "tsx scripts/granola.ts",
     "files:test": "tsx scripts/import-files-test.ts",
     "scan:test": "tsx scripts/column-scan-test.ts",
+    "extension:test": "tsx scripts/google-activity-extension-test.ts",
+    "pipeline:test": "tsx scripts/pipeline-test.ts",
     "syncdue:test": "tsx scripts/sync-due-test.ts",
     "voice:test": "tsx scripts/voice-memo.ts",
     "channels:test": "tsx scripts/channels.ts",

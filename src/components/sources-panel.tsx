@@ -27,6 +27,7 @@ type ChromeImporterStatus = {
   downloadUrl: string;
   extensionSeenAt: string | null;
   extensionVersion: string;
+  latestVersion: string;
   imports: Array<{
     id: string;
     label: string;
@@ -44,7 +45,8 @@ type ChromeImporterStatus = {
  *   • Automated imports — everything the server ingests without an API key: the
  *     Chrome-extension Google presets, Playwright/scraping automations, and
  *     record-backed imports (Chrome history file, Google archives, other CSVs).
- * A source is only shown as connected when its record actually has rows (derived,
+ * Connected = the user authorized syncing (credential / opted-in detected app);
+ * data presence is a separate fact (hasData) and never implies connected (derived,
  * never faked). Also owns lazy-sync-on-open: on mount it POSTs every DUE api source,
  * then bumps the shared `version` so downstream panels refetch.
  */
@@ -237,8 +239,8 @@ export function SourcesPanel({
   function row(s: SourceView) {
     const saving = savingId === s.id;
     const removing = removingId === s.id;
-    // Any connected row can be removed in place — sources don't switch tabs.
-    const onRemove = s.connected ? () => void removeSource(s.id) : undefined;
+    // Removable when there is anything to remove — landed data or a credential.
+    const onRemove = s.connected || s.hasData ? () => void removeSource(s.id) : undefined;
     const onIntervalChange = (i: Interval) => void changeInterval(s.id, i);
 
     if (s.automation) {
@@ -295,6 +297,8 @@ export function SourcesPanel({
           due={s.due}
           savingInterval={saving}
           removing={removing}
+          credentialOrigin={s.credentialOrigin ?? null}
+          lastRunError={s.lastRunOk === false ? (s.lastRunError ?? "sync failed") : null}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
         />
@@ -474,6 +478,11 @@ function GoogleImporterCard({
   const extensionOnline = Boolean(
     status?.extensionSeenAt && Date.now() - new Date(status.extensionSeenAt).getTime() < 6 * 60 * 1000,
   );
+  // Unpacked extensions never auto-update — a version behind the one this app
+  // ships is the only signal the user gets to replace the folder and reload.
+  const extensionOutdated = Boolean(
+    extensionOnline && status?.latestVersion && status?.extensionVersion && status.extensionVersion !== status.latestVersion,
+  );
   // All imported presets always show; the not-yet-imported tail fills the card up
   // to ~6 rows, the rest sits behind "Show all" so the card doesn't drown the tab.
   const fillCount = Math.max(0, 6 - landed.length);
@@ -497,13 +506,21 @@ function GoogleImporterCard({
         </div>
         <Button
           size="sm"
-          variant={extensionOnline ? "secondary" : "primary"}
+          variant={extensionOnline && !extensionOutdated ? "secondary" : "primary"}
           onClick={() => window.open(status?.downloadUrl ?? "/downloads/agentqs-google-activity-exporter.zip", "_blank", "noopener,noreferrer")}
         >
           {extensionOnline ? "Update extension" : "Download extension"}
         </Button>
       </div>
 
+      {extensionOutdated ? (
+        <p
+          className="mt-2 truncate text-xs text-destructive"
+          title={`Installed v${status?.extensionVersion} is missing fixes from v${status?.latestVersion}. Download the zip, replace the unpacked extension folder with its contents, then press Reload on chrome://extensions — unpacked extensions never update themselves.`}
+        >
+          Extension v{status?.extensionVersion} is outdated — v{status?.latestVersion} available. Download, replace the folder, then Reload it on chrome://extensions.
+        </p>
+      ) : null}
       {extensionOnline ? (
         <p className="mt-2 text-xs text-muted-fg">
           Press <span className="font-medium text-fg">Import</span> on a row: the Google page opens and the import starts in the
