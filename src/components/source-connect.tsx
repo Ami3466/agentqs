@@ -161,7 +161,9 @@ export function SourceConnect({
       const data = (await res.json().catch(() => ({}))) as { authorizeUrl?: string; error?: string };
       if (!res.ok || !data.authorizeUrl) {
         setBusy(false);
-        setError(data.error || "Could not start the authorization.");
+        // Always name the real failure — a bare "could not start" hides a
+        // missing route (404) or a crashed server (500) behind one string.
+        setError(data.error || `Could not start the authorization (HTTP ${res.status}).`);
         return;
       }
       window.location.href = data.authorizeUrl;
