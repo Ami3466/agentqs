@@ -929,7 +929,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               {config.store.issues[0]}
             </span>
           ) : null}
-          {!config.store.atDefault ? (
+          {!config.store.atDefault && !config.store.envPinned ? (
             <Button
               variant="ghost"
               className="shrink-0"
@@ -956,7 +956,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         </div>
         {migrateMsg ? <p className="mt-2 text-xs text-muted-fg">{migrateMsg}</p> : null}
         <div className="mt-4 border-t border-border pt-4">
-          {config.recordInAppRepoApplicable ? (
+          {config.recordInAppRepoApplicable || recordInAppRepo ? (
+            /* Also shown when tracking is ON but the store moved away — the
+               checkbox is the only disable control and must stay reachable. */
             <Checkbox
               label="Allow this repo to track data/record"
               hint="Only enable this if this GitHub repository is private. When off, /data stays ignored and accidental pushes will not include your record."
@@ -975,14 +977,12 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               }}
             />
           ) : (
-            <>
-              <Field label="Back up the record to GitHub" hint="The record is its own git repo — push it to a PRIVATE repo, or skip this and it stays local.">
-                <CliRow
-                  code={`cd '${config.recordDir}' && git remote add origin <your-private-repo> && git push -u origin main`}
-                  title="The record folder is already a git repository with local history."
-                />
-              </Field>
-            </>
+            <Field label="Back up the record to GitHub" hint="The record is its own git repo — push it to a PRIVATE repo, or skip this and it stays local.">
+              <CliRow
+                code={`cd '${config.recordDir}' && git remote add origin <your-private-repo> && git push -u origin main`}
+                title="The record folder is already a git repository with local history."
+              />
+            </Field>
           )}
         </div>
       </Section>

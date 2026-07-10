@@ -117,6 +117,58 @@ const mkStore = (dir: string) => {
   }
 }
 
+// ---- migrate guards ------------------------------------------------------------
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-migrate-guards-"));
+  process.env.HOME = path.join(root, "home");
+  fs.mkdirSync(path.join(root, "home"), { recursive: true });
+  process.chdir(root);
+  try {
+    const from = path.join(root, "data.nosync");
+    mkStore(from);
+
+    // env-pinned store: migrating would strand it (env keeps resolving the old path)
+    process.env.AGENTQS_DATA_DIR = from;
+    let threw = "";
+    try {
+      migrateStore({ skipCrontab: true, reloadLaunchd: false, plistPath: path.join(root, "no.plist") });
+    } catch (e) {
+      threw = e instanceof Error ? e.message : String(e);
+    }
+    check("env-pinned store refuses to migrate", threw.includes("AGENTQS_DATA_DIR pins"));
+    delete process.env.AGENTQS_DATA_DIR;
+
+    // active background sync: refuse until idle
+    fs.writeFileSync(
+      path.join(from, "sync-jobs.json"),
+      JSON.stringify({
+        jobs: {
+          whoop: { id: "whoop", status: "running", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        },
+      }),
+    );
+    threw = "";
+    try {
+      migrateStore({ skipCrontab: true, reloadLaunchd: false, plistPath: path.join(root, "no.plist") });
+    } catch (e) {
+      threw = e instanceof Error ? e.message : String(e);
+    }
+    check("active sync job refuses to migrate", threw.includes("sync is running"));
+    fs.rmSync(path.join(from, "sync-jobs.json"));
+
+    // custom --to target: resolution can't auto-find it — next[] must say to pin the env var
+    const custom = path.join(root, "elsewhere", "store");
+    const r = migrateStore({ to: custom, skipCrontab: true, reloadLaunchd: false, plistPath: path.join(root, "no.plist") });
+    check("custom target migration verified", r.verified);
+    check("custom target instructs AGENTQS_DATA_DIR", r.next.some((n) => n.includes(`AGENTQS_DATA_DIR=${custom}`)));
+  } finally {
+    process.chdir(origCwd);
+    process.env.HOME = origHome;
+    delete process.env.AGENTQS_DATA_DIR;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 if (failures) {
   console.error(`${failures} failure(s)`);
   process.exit(1);

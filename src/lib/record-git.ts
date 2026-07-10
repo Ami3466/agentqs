@@ -35,10 +35,19 @@ function writeLines(lines: string[]): void {
 }
 
 /** The toggle only works while the active store IS <checkout>/data — a store
- *  in app-data (or data.nosync) can't be re-included by this repo's .gitignore. */
+ *  in app-data (or data.nosync) can't be re-included by this repo's .gitignore,
+ *  and a SYMLINKED ./data can't either: git never traverses directory symlinks,
+ *  so "!/data/record/" would re-include nothing and enabling would stage only
+ *  the symlink blob while the user believes the record is backed up. */
 export function recordInAppRepoApplicable(): boolean {
   const local = path.join(process.cwd(), "data");
-  if (!fs.existsSync(local)) return false;
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(local);
+  } catch {
+    return false;
+  }
+  if (!st.isDirectory()) return false;
   try {
     return fs.realpathSync(dataDir()) === fs.realpathSync(local);
   } catch {
@@ -46,10 +55,18 @@ export function recordInAppRepoApplicable(): boolean {
   }
 }
 
+/** Lines that blanket-ignore the data dir itself (children can never be
+ *  re-included past an excluded parent). "/data.nosync*" variants only ignore
+ *  the escape-hatch dir, never data/record — they don't change the truth. */
+const BLANKET_LINES = ["/data*", "/data", "/data/"];
+const RECORD_NEGATIONS = ["!/data/record/", "!/data/record/**"];
+
 export function recordInAppRepoEnabled(): boolean {
+  // Truth = what git does, not which vintage of shape wrote it: the record is
+  // tracked when the re-include negations are present (the pre-upgrade 3-line
+  // shape or today's ENABLED_SHAPE) and no blanket line overrides them.
   const lines = readLines();
-  const blanket = [...DISABLED_SHAPE, ...LEGACY_LINES].some((line) => lines.includes(line));
-  return !blanket && ENABLED_SHAPE.every((line) => lines.includes(line));
+  return RECORD_NEGATIONS.every((line) => lines.includes(line)) && !BLANKET_LINES.some((line) => lines.includes(line));
 }
 
 export function setRecordInAppRepoEnabled(enabled: boolean): void {
