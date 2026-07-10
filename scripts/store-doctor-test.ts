@@ -40,6 +40,11 @@ const mkStore = (dir: string) => {
   fs.mkdirSync(inDropbox, { recursive: true });
   fs.mkdirSync(exempt, { recursive: true });
   check("detects a Dropbox path", syncDomainOf(inDropbox) === "Dropbox");
+  fs.mkdirSync(path.join(root, "Dropbox (Personal)", "store"), { recursive: true });
+  check(
+    "detects a 'Dropbox (Personal)' root",
+    (syncDomainOf(path.join(root, "Dropbox (Personal)", "store")) ?? "").startsWith("Dropbox"),
+  );
   check("plain temp path is domain-free", syncDomainOf(path.join(root, "plain")) === null);
 
   mkStore(inDropbox);
@@ -64,12 +69,18 @@ const mkStore = (dir: string) => {
     const store = path.join(root, "data.nosync");
     mkStore(store);
     fs.writeFileSync(path.join(store, "record", "daily", "mood 2.csv"), "date,mood\n");
+    // legit names ending in digits must NOT count as twins (no sibling original)
+    fs.writeFileSync(path.join(store, "record", "daily", "trip 2025.csv"), "date,km\n");
     fs.mkdirSync(path.join(root, "data"), { recursive: true });
     fs.writeFileSync(path.join(root, "data", "config.json"), "{}"); // ghost
 
     const rep = doctorReport(dataDir());
     check("conflict twin flagged", rep.checks.find((c) => c.id === "conflicts")?.severity === "warn");
     check("twin path named", Boolean(rep.checks.find((c) => c.id === "conflicts")?.detail.includes("mood 2.csv")));
+    check(
+      "'trip 2025.csv' without a sibling is NOT a twin",
+      !rep.checks.find((c) => c.id === "conflicts")?.detail.includes("trip 2025.csv"),
+    );
     check("split store flagged (ghost ./data visible)", rep.checks.find((c) => c.id === "split")?.severity === "warn");
   } finally {
     process.chdir(origCwd);
