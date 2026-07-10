@@ -78,6 +78,16 @@ export interface OAuthProviderConfig {
   /** Where client id+secret travel on token calls: HTTP Basic vs form body. */
   tokenAuth: "basic" | "body";
   extraAuthParams?: Record<string, string>; // e.g. Google's access_type=offline
+  /** Token-call body encoding — Trakt only accepts JSON. Default form. */
+  tokenBody?: "form" | "json";
+  /** Extra token-call params — Withings needs action=requesttoken. */
+  tokenExtraParams?: Record<string, string>;
+  /** Non-standard token reply envelope: "withings" = {status, body:{tokens}},
+   *  status !== 0 is an error even on HTTP 200. Default: standard OAuth2 JSON. */
+  tokenUnwrap?: "withings";
+  /** What syncs use as the credential — Trakt's API wants the app client id
+   *  alongside the token, in the plugin's "<client_id>:<token>" format. */
+  grantCredential?: "token" | "clientId:token";
 }
 
 export interface ImporterPlugin {

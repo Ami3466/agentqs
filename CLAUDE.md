@@ -66,13 +66,17 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form
   shows the same guide (it lives once, on the plugin's `credentialHelp`).
-- OAuth sources (spotify, gcal, fitbit, strava, whoop-api - expiring tokens):
-  connect via the authorize dance in the web app - the form shows the redirect
-  URI to register, takes the user's app client id + secret (POST
-  `/api/oauth/<id>` -> authorize URL -> GET `/api/oauth/callback` stores the
-  grant). The grant IS the stored credential (connection rule holds); syncs
-  mint fresh access tokens from the refresh token automatically. Pasted
-  access tokens still work but die within hours - steer users to Authorize.
+- OAuth sources (spotify, gcal, fitbit, strava, whoop-api, withings, trakt -
+  expiring/rotating tokens): connect via the authorize dance in the web app -
+  the form shows the redirect URI to register, takes the user's app client id
+  + secret (POST `/api/oauth/<id>` -> authorize URL -> GET `/api/oauth/callback`
+  stores the grant). The grant IS the stored credential (connection rule
+  holds); syncs mint fresh access tokens from the refresh token automatically
+  (Trakt syncs get the plugin's `<client_id>:<token>` format). Pasted access
+  tokens still work but die within hours - steer users to Authorize.
+- WHOOP unofficial (email + password, per-minute HR) is RETIRED upstream -
+  api-7.whoop.com no longer exists; the login fails with a message steering to
+  the official whoop-api row. Don't debug the password.
 - `agentqs source test <id> [credential]` - prove a credential against the real
   API (one probe, nothing saved). `source connect` runs it first, so only a
   WORKING key is ever stored; the web connect + POST `/api/import/<id>` do the

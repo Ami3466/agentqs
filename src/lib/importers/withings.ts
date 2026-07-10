@@ -71,9 +71,19 @@ export const withingsPlugin: ImporterPlugin = {
     url: "https://developer.withings.com",
     steps: [
       "Register a (free) app in the Withings developer portal.",
-      "Mint an access token via their OAuth flow (their docs' \"getting started\" walks it; scope user.metrics).",
-      "Paste it here. Withings tokens expire after ~3 hours — re-paste to sync again (their refresh flow is non-standard and not automated here yet).",
+      "Set its Callback URI to the Redirect URI shown here.",
+      "Paste the Client ID and Client Secret into the fields here and press Authorize.",
     ],
+  },
+  oauth: {
+    authUrl: "https://account.withings.com/oauth2_user/authorize2",
+    // Withings' token endpoint is non-standard: action=requesttoken in the
+    // body, and the tokens ride a {status, body} envelope (status !== 0 = error).
+    tokenUrl: "https://wbsapi.withings.net/v2/oauth2",
+    scope: "user.metrics",
+    tokenAuth: "body",
+    tokenExtraParams: { action: "requesttoken" },
+    tokenUnwrap: "withings",
   },
   envKey: "WITHINGS_TOKEN",
   primaryMetric: "weight",

@@ -50,11 +50,20 @@ export const traktPlugin: ImporterPlugin = {
   credentialHelp: {
     url: "https://trakt.tv/oauth/applications",
     steps: [
-      "Create an API app; set the redirect URI to urn:ietf:wg:oauth:2.0:oob.",
-      "Open the app page and use \"Authorize\" to approve it — Trakt shows a PIN/code.",
-      "Exchange the code for an access token (the app page's token helper, or the Trakt docs' /oauth/token call).",
-      "Paste client_id:access_token here.",
+      "Create an API app at trakt.tv (any name).",
+      "Set the Redirect URI to the one shown here.",
+      "Paste the Client ID and Client Secret into the fields here and press Authorize.",
     ],
+  },
+  oauth: {
+    authUrl: "https://trakt.tv/oauth/authorize",
+    tokenUrl: "https://api.trakt.tv/oauth/token",
+    scope: "", // Trakt has no scopes
+    tokenAuth: "body",
+    tokenBody: "json", // Trakt's token endpoint only accepts JSON
+    // Data calls need the app client id (trakt-api-key header) AND the token —
+    // hand syncs the plugin's own "<client_id>:<access_token>" format.
+    grantCredential: "clientId:token",
   },
   envKey: "TRAKT_TOKEN",
   primaryMetric: "plays",

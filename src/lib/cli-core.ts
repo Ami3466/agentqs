@@ -309,7 +309,7 @@ export async function testSourceCredential(id: string, credential?: string): Pro
   const cred = credential?.trim()
     ? credential.trim()
     : cfg?.sourceOAuth?.[instanceId]
-      ? await freshOAuthToken(instanceId, cfg)
+      ? await resolveSyncCredentialFresh(plugin, undefined, cfg, instanceId) // grant → plugin's own credential format
       : resolveCredential(plugin, undefined, cfg, instanceId);
   if (plugin.requiresCredential && !cred) {
     throw new Error(`${plugin.name} needs a ${plugin.credentialLabel} to test.`);
