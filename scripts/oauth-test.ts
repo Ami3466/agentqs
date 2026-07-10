@@ -69,7 +69,7 @@ async function main() {
       Boolean(p.credentialHelp && p.credentialHelp.url && p.credentialHelp.steps.length >= 2),
     );
   }
-  for (const id of ["spotify", "gcal", "fitbit", "strava"]) {
+  for (const id of ["spotify", "gcal", "fitbit", "strava", "whoop-api", "withings", "trakt"]) {
     check(`${id} connects via OAuth`, Boolean(pluginById(id)?.oauth));
   }
   const g = sourceGuide("spotify");
@@ -133,7 +133,53 @@ async function main() {
   const gBody = new URLSearchParams(gex.calls[0]?.body ?? "");
   check("client creds travel in the body", gBody.get("client_id") === "gid" && gBody.get("client_secret") === "gsec" && !gex.calls[0]?.headers.Authorization);
 
-  // --- 6. disconnect forgets the grant (a grant is a stored credential).
+  // --- 6. Trakt quirks: JSON token body; syncs get "<client_id>:<token>".
+  console.log("trakt:");
+  const trakt = pluginById("trakt")!;
+  const tUrl = new URL(beginOAuth("trakt", "tid", "tsec", origin).authorizeUrl);
+  const tex = fakeToken({ access_token: "TA", refresh_token: "TR", expires_in: 7776000 });
+  await completeOAuth("tcode", tUrl.searchParams.get("state") ?? "", tex.fn);
+  check("token body is JSON", (tex.calls[0]?.headers["Content-Type"] ?? "") === "application/json");
+  const tBody = JSON.parse(tex.calls[0]?.body || "{}") as Record<string, string>;
+  check("JSON carries code + client creds", tBody.code === "tcode" && tBody.client_id === "tid" && tBody.client_secret === "tsec");
+  check(
+    "sync credential is clientId:token (the plugin's own format)",
+    (await resolveSyncCredentialFresh(trakt, undefined, readConfig(), "trakt", neverFetch)) === "tid:TA",
+  );
+
+  // --- 7. Withings quirks: action=requesttoken + {status, body} envelope.
+  console.log("withings:");
+  const wUrl = new URL(beginOAuth("withings", "wid", "wsec", origin).authorizeUrl);
+  const wex = fakeToken({ status: 0, body: { access_token: "WA", refresh_token: "WR", expires_in: 10800 } });
+  await completeOAuth("wcode", wUrl.searchParams.get("state") ?? "", wex.fn);
+  const wBody = new URLSearchParams(wex.calls[0]?.body ?? "");
+  check("action=requesttoken sent", wBody.get("action") === "requesttoken" && wBody.get("client_id") === "wid");
+  check("envelope unwrapped into the grant", readConfig()?.sourceOAuth?.withings?.refreshToken === "WR");
+  const wFailUrl = new URL(beginOAuth("withings", "wid", "wsec", origin).authorizeUrl);
+  let envelopeRejected = false;
+  await completeOAuth(
+    "wcode2",
+    wFailUrl.searchParams.get("state") ?? "",
+    fakeToken({ status: 503, error: "Invalid params" }).fn,
+  ).catch(() => (envelopeRejected = true));
+  check("status !== 0 rejected even on HTTP 200", envelopeRejected);
+
+  // --- 8. Todoist runs on the unified v1 API (Sync v9 is 410 Gone upstream).
+  console.log("todoist:");
+  const todoist = pluginById("todoist")!;
+  const todoistCalls: string[] = [];
+  const todoistFetch = (async (url: unknown) => {
+    todoistCalls.push(String(url));
+    return new Response(
+      JSON.stringify({ items: [{ completed_at: "2026-07-02T10:00:00Z" }, { completed_at: "2026-07-02T11:00:00Z" }], next_cursor: null }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as unknown as FetchLike;
+  const tr = await todoist.fetch({ credential: "tok", from: "2026-07-01", to: "2026-07-08", fetchImpl: todoistFetch });
+  check("hits /api/v1/tasks/completed", todoistCalls[0]?.startsWith("https://api.todoist.com/api/v1/tasks/completed/by_completion_date"));
+  check("counts per completion day", tr.table.rows.length === 1 && tr.table.rows[0][1] === "2");
+
+  // --- 9. disconnect forgets the grant (a grant is a stored credential).
   console.log("disconnect:");
   fs.writeFileSync(path.join(dataDir, "record", "daily", "spotify.csv"), "date,tracks\n2026-07-01,3\n");
   disconnectSource("spotify");

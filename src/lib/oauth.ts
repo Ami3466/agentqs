@@ -78,28 +78,49 @@ interface TokenReply {
   expires_in?: number;
 }
 
-/** POST the form-encoded token request, client creds per the provider's style. */
+/** Withings wraps every reply in {status, body}; status !== 0 is the error
+ *  channel even on HTTP 200. */
+interface WithingsEnvelope {
+  status?: number;
+  error?: string;
+  body?: TokenReply;
+}
+
+/** POST the token request — form-encoded by default, JSON for providers that
+ *  demand it (Trakt); client creds per the provider's style. */
 async function tokenRequest(
   o: OAuthProviderConfig,
   grant: OAuthGrant,
   params: Record<string, string>,
   fetchImpl: FetchLike,
 ): Promise<TokenReply> {
-  const body = new URLSearchParams(params);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/x-www-form-urlencoded",
-    Accept: "application/json",
-  };
+  const all: Record<string, string> = { ...params, ...(o.tokenExtraParams ?? {}) };
+  const headers: Record<string, string> = { Accept: "application/json" };
   if (o.tokenAuth === "basic") {
     headers.Authorization = `Basic ${Buffer.from(`${grant.clientId}:${grant.clientSecret}`).toString("base64")}`;
   } else {
-    body.set("client_id", grant.clientId);
-    body.set("client_secret", grant.clientSecret);
+    all.client_id = grant.clientId;
+    all.client_secret = grant.clientSecret;
   }
-  const res = await fetchImpl(o.tokenUrl, { method: "POST", headers, body: body.toString() });
+  let body: string;
+  if (o.tokenBody === "json") {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(all);
+  } else {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    body = new URLSearchParams(all).toString();
+  }
+  const res = await fetchImpl(o.tokenUrl, { method: "POST", headers, body });
   const text = await res.text();
   if (!res.ok) throw new Error(`${res.status}${text ? ` — ${text.trim().slice(0, 200)}` : ""}`);
-  const reply = JSON.parse(text) as TokenReply;
+  let reply = JSON.parse(text) as TokenReply;
+  if (o.tokenUnwrap === "withings") {
+    const env = reply as WithingsEnvelope;
+    if (env.status !== 0 || !env.body) {
+      throw new Error(`status ${env.status ?? "?"}${env.error ? ` — ${env.error}` : ""}`);
+    }
+    reply = env.body;
+  }
   if (!reply.access_token) throw new Error(`token endpoint returned no access_token`);
   return reply;
 }
@@ -197,7 +218,9 @@ export async function freshOAuthToken(
 }
 
 /** Sync-time credential: explicit → fresh OAuth token → key/env/saved (a
- *  discovered desktop-app token still never syncs uninvited). */
+ *  discovered desktop-app token still never syncs uninvited). A
+ *  `grantCredential: "clientId:token"` provider (Trakt) gets the credential in
+ *  the plugin's own combined format, so the importer needs no OAuth awareness. */
 export async function resolveSyncCredentialFresh(
   plugin: ImporterPlugin,
   explicit: string | undefined,
@@ -207,6 +230,12 @@ export async function resolveSyncCredentialFresh(
 ): Promise<string | undefined> {
   if (explicit && explicit.trim()) return explicit.trim();
   const grant = cfg?.sourceOAuth?.[instanceId];
-  if (grant?.accessToken || grant?.refreshToken) return freshOAuthToken(instanceId, cfg, fetchImpl);
+  if (grant?.accessToken || grant?.refreshToken) {
+    const token = await freshOAuthToken(instanceId, cfg, fetchImpl);
+    if (token && plugin.oauth?.grantCredential === "clientId:token") {
+      return `${grant.clientId}:${token}`;
+    }
+    return token;
+  }
   return resolveSyncCredential(plugin, undefined, cfg, instanceId);
 }

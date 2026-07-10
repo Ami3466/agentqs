@@ -22,6 +22,8 @@ interface DeezerPlay {
 }
 interface DeezerResp {
   data?: DeezerPlay[];
+  /** Deezer answers HTTP 200 even for auth failures — the error rides the body. */
+  error?: { type?: string; message?: string; code?: number };
 }
 
 const API = "https://api.deezer.com/user/me/history";
@@ -70,6 +72,12 @@ export const deezerPlugin: ImporterPlugin = {
       raw = await getJson(url.toString(), { Accept: "application/json" }, fetchImpl);
     } catch (e) {
       throw new Error(`Deezer history → ${(e as Error).message}`);
+    }
+    // A bad token is HTTP 200 + {error} — without this check it would read as
+    // a successful sync with zero plays.
+    const err = (raw as DeezerResp)?.error;
+    if (err) {
+      throw new Error(`Deezer history → ${err.type ?? "error"} ${err.code ?? ""}: ${err.message ?? "request failed"}`);
     }
     const plays = (raw as DeezerResp)?.data ?? [];
     return { table: normalizeDeezer(plays, ctx.from, ctx.to), meta: { pulledPlays: plays.length } };
