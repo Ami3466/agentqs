@@ -5,6 +5,8 @@ const nextConfig = {
   // running `next dev` that owns .next.
   distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: true,
+  // The Data tab is now Pipeline; keep old bookmarks working.
+  redirects: async () => [{ source: "/data", destination: "/pipeline", permanent: false }],
   // Native / heavy server-only deps must stay external (not webpack-bundled): the
   // local embedders (transformers.js + onnxruntime), image tooling (sharp, exifr),
   // and the sqlite-vec loadable extension all ship native binaries or resolve model

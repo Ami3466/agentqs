@@ -237,7 +237,7 @@ export function seedDemo(): { days: number } {
   });
 
   // Already-processed Log entries: two structured drops (what fed the daily table)
-  // and one rejected one, so the Data-tab Log demos its whole lifecycle.
+  // and one rejected one, so the Pipeline-tab Log demos its whole lifecycle.
   const structuredDrop = (
     daysAgo: number,
     filename: string,

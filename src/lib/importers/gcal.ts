@@ -60,6 +60,23 @@ export const gcalPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "ya29.… (OAuth access token)",
+  credentialHelp: {
+    url: "https://console.cloud.google.com/apis/credentials",
+    steps: [
+      "In Google Cloud Console, create a project and enable the Google Calendar API.",
+      "Configure the OAuth consent screen (External) and add your own Google account as a test user.",
+      "Credentials → Create OAuth client ID → Web application, with the Redirect URI shown here.",
+      "Paste the Client ID and Client Secret into the fields here and press Authorize.",
+    ],
+  },
+  oauth: {
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUrl: "https://oauth2.googleapis.com/token",
+    scope: "https://www.googleapis.com/auth/calendar.readonly",
+    tokenAuth: "body",
+    // offline + consent → Google actually returns a refresh token, every time.
+    extraAuthParams: { access_type: "offline", prompt: "consent" },
+  },
   envKey: "GCAL_TOKEN",
   primaryMetric: "meetings",
   unit: "meetings",

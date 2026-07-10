@@ -5,7 +5,7 @@ import { cn } from "@/components/ui";
 
 /**
  * Per-source sync-cadence dropdown, shared by the GitHub row and every generic
- * source row so the whole Data-tab list reads the same. Compact (h-8) to sit
+ * source row so the whole Pipeline-tab list reads the same. Compact (h-8) to sit
  * inline in a source row.
  */
 export function IntervalSelect({

@@ -43,9 +43,11 @@ export interface PipelineRow {
   /** A local desktop app's login is detectable but the user has not approved it. */
   detectedApp: boolean;
   interval: string;
-  scheduled: boolean; // interval !== off → sync --due / Data-tab open will run it
+  scheduled: boolean; // interval !== off → sync --due / Pipeline-tab open will run it
   lastSync: string | null;
   lastRun: { at: string; ok: boolean; error?: string } | null;
+  /** A background sync job currently queued/running for this source. */
+  syncing: { status: string; phase: string; pct: number; startedAt: string } | null;
   data: PipelineCoverage;
 }
 
@@ -126,11 +128,15 @@ function rowFromSource(s: SourceView, coverage: Map<string, PipelineCoverage>): 
     scheduled: s.interval !== "off",
     lastSync: s.lastSync,
     lastRun: run ? { at: run.at, ok: run.ok, ...(run.error ? { error: run.error } : {}) } : null,
+    syncing:
+      s.job && (s.job.status === "queued" || s.job.status === "running")
+        ? { status: s.job.status, phase: s.job.phase, pct: s.job.pct, startedAt: s.job.startedAt }
+        : null,
     data,
   };
 }
 
-/** Chrome-extension presets are owned by the Data tab's Google card, not
+/** Chrome-extension presets are owned by the Pipeline tab's Google card, not
  *  buildSources — the pipeline covers them too: origin "extension", manual
  *  (the extension's own daily auto-scrape lives in the browser, not here). */
 function extensionRows(coverage: Map<string, PipelineCoverage>): PipelineRow[] {
@@ -150,6 +156,7 @@ function extensionRows(coverage: Map<string, PipelineCoverage>): PipelineRow[] {
       scheduled: false,
       lastSync: null,
       lastRun: null,
+      syncing: null,
       data,
     };
   });

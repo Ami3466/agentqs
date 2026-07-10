@@ -1,5 +1,5 @@
 /**
- * Browser-automation import types — pure and browser-safe (NO fs), so the Data-tab
+ * Browser-automation import types — pure and browser-safe (NO fs), so the Pipeline-tab
  * client (the setup wizard + the automated-imports row) and the server store both
  * import the same shapes.
  *

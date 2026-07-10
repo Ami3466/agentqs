@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
 import { SCHEMA_VERSION, createEmpty } from "./db";
+import { buildDetailHeartRate } from "./detail";
 import { dbPath, recordDir } from "./paths";
 
 /**
@@ -398,7 +399,8 @@ export interface AppendInboxInput {
   /**
    * Lifecycle status (default "pending"). Both the inbox panel and the Structure
    * step act only on "pending", but every reader — FTS and the embedding index —
-   * indexes an inbox item whatever its status. So an importer landing a finished
+   * indexes an inbox item whatever its status, except "discarded" (Reject drops
+   * an item from both indexes). So an importer landing a finished
    * reference document (a Spotify taste profile, a saved-tracks list) passes
    * "reference": searchable and recall-able, but never queued as pending work and
    * never fed to the structuring LLM.
@@ -1160,6 +1162,8 @@ export interface RebuildResult {
   inbox: number;
   sessions: number;
   events: number;
+  /** Per-minute heart-rate samples derived into the detail store (0 = none in the record). */
+  detailHrSamples: number;
 }
 
 /** iCloud "Optimize Mac Storage" evicts file contents (BSD `dataless` flag);
@@ -1339,8 +1343,9 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
       insSearch.run(`session:${s.id}`, "session", body);
     }
     // Skip image captures — their body is a base64 data URL, not searchable text.
+    // Skip discarded captures — Reject means "leave my record", so no index keeps them.
     for (const it of rec.inbox) {
-      if (it.kind === "image") continue;
+      if (it.kind === "image" || it.status === "discarded") continue;
       insSearch.run(`inbox:${it.id}`, "inbox", it.text);
     }
     // Events (imports, scrapes, listening history) join the same keyword index so
@@ -1381,6 +1386,16 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
   }
   fs.renameSync(tmpPath, outPath);
 
+  // Dense streams stay indexed as numbers: re-derive the detail store's
+  // heart_rate table beside the cache. Non-fatal — a broken sidecar must never
+  // take the main cache down with it.
+  let detailHrSamples = 0;
+  try {
+    detailHrSamples = buildDetailHeartRate(rDir, path.dirname(outPath)).hrSamples;
+  } catch (e) {
+    console.warn(`agentqs: detail store rebuild failed — ${(e as Error).message}`);
+  }
+
   return {
     dbPath: outPath,
     recordHash: hash,
@@ -1388,5 +1403,6 @@ export function rebuild(opts: RebuildOptions = {}): RebuildResult {
     inbox: record.inbox.length,
     sessions: record.sessions.length,
     events: eventRows,
+    detailHrSamples,
   };
 }

@@ -9,7 +9,7 @@ const TABS = [
   { href: "/", label: "Chat", Icon: Chat, match: (p: string) => p === "/" },
   { href: "/graphs", label: "Graphs", Icon: Chart, match: (p: string) => p.startsWith("/graphs") },
   { href: "/journal", label: "Journal", Icon: Journal, match: (p: string) => p.startsWith("/journal") },
-  { href: "/data", label: "Data", Icon: Data, match: (p: string) => p.startsWith("/data") },
+  { href: "/pipeline", label: "Pipeline", Icon: Data, match: (p: string) => p.startsWith("/pipeline") },
   { href: "/settings", label: "Settings", Icon: Settings, match: (p: string) => p.startsWith("/settings") },
 ];
 

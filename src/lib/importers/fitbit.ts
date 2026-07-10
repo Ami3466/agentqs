@@ -48,6 +48,20 @@ export const fitbitPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "Fitbit OAuth access token",
+  credentialHelp: {
+    url: "https://dev.fitbit.com/apps",
+    steps: [
+      "Register an app at dev.fitbit.com (OAuth 2.0 Application Type: Personal).",
+      "Set the Redirect URL to the one shown here.",
+      "Paste the Client ID and Client Secret into the fields here and press Authorize.",
+    ],
+  },
+  oauth: {
+    authUrl: "https://www.fitbit.com/oauth2/authorize",
+    tokenUrl: "https://api.fitbit.com/oauth2/token",
+    scope: "activity",
+    tokenAuth: "basic",
+  },
   envKey: "FITBIT_TOKEN",
   primaryMetric: "steps",
   unit: "steps",

@@ -1,5 +1,5 @@
 /**
- * Server-only source composition (uses fs). Builds the Data-tab sources list by
+ * Server-only source composition (uses fs). Builds the Pipeline-tab sources list by
  * merging a registry of known integrations with the manual sources discovered in
  * the record, then layering each source's saved interval + derived last-sync and
  * computing stale/due via the pure helpers in ./sources.
@@ -17,6 +17,7 @@ import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { PLUGINS } from "./importers/registry";
 import { connectionState } from "./importers/plugin";
 import { readSyncRuns } from "./sync-runs";
+import { readSyncJobs, type SyncJob } from "./sync-jobs";
 import { FILE_IMPORTERS } from "./importers/files/registry";
 import { listAutomations } from "./automation";
 import type { AutomationRecipe } from "./automation-types";
@@ -35,9 +36,19 @@ import {
  *  Read per row but the ledger is one small JSON — cache it per buildSources
  *  pass via the module-level snapshot below. */
 let runsSnapshot: ReturnType<typeof readSyncRuns> | null = null;
-function lastRunFields(id: string): { lastRunOk: boolean | null; lastRunError: string | null } {
+let jobsSnapshot: Record<string, SyncJob> | null = null;
+function lastRunFields(id: string): {
+  lastRunOk: boolean | null;
+  lastRunError: string | null;
+  job: SyncJob | null;
+} {
   const run = (runsSnapshot ?? readSyncRuns()).runs[id];
-  return { lastRunOk: run ? run.ok : null, lastRunError: run?.error ?? null };
+  return {
+    lastRunOk: run ? run.ok : null,
+    lastRunError: run?.error ?? null,
+    // Live/last background job — the UI's progress bar + poll signal.
+    job: (jobsSnapshot ?? readSyncJobs())[id] ?? null,
+  };
 }
 
 function intervalFor(cfg: AppConfig | null, id: string): Interval {
@@ -194,7 +205,7 @@ function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
   const hasCred = Boolean(wc?.email && (wc?.password || wc?.refreshToken));
   return {
     id: "whoop",
-    name: "WHOOP",
+    name: "WHOOP (per-minute, unofficial)",
     kind: "api",
     detail: "per-minute HR, HRV, recovery, sleep, strain",
     connected: hasCred,
@@ -362,7 +373,7 @@ function bundleRow(cfg: AppConfig | null, dir: string, bundle: SourceBundle): So
 /** Row for a browser-automation recipe (a source with no API). Always shown as a
  *  set-up import (connected) so it stays editable under Automated imports even if a
  *  replay fails; the server CAN auto-sync it (headless Playwright), so overdue → due
- *  and it replays on Data-tab open via its run endpoint. */
+ *  and it replays on Pipeline-tab open via its run endpoint. */
 function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRecipe): SourceView {
   const file = path.join(dir, "daily", `${recipe.id}.csv`);
   const interval = intervalFor(cfg, recipe.id);
@@ -401,6 +412,7 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
  *  not as fake automations. */
 export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
   runsSnapshot = readSyncRuns(); // one ledger read per pass, not per row
+  jobsSnapshot = readSyncJobs();
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
   const owned = new Set<string>(["github", "whoop"]);
   for (const plugin of PLUGINS) {
@@ -425,7 +437,7 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
     out.push(automationRow(cfg, dir, recipe));
   }
 
-  // Chrome-extension Google scrapes are owned by the Data tab's Google card
+  // Chrome-extension Google scrapes are owned by the Pipeline tab's Google card
   // (per-preset status + remove) — keep them out of the generic record rows.
   for (const id of GOOGLE_PRESET_DAILY_SOURCES) owned.add(id);
 

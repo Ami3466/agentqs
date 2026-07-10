@@ -85,6 +85,28 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "doctor",
+    {
+      title: "Store health check",
+      description:
+        "Is the store safe where it lives? Flags sync-engine domains (iCloud/Dropbox/OneDrive), cloud-evicted files, 'X 2' conflict twins and split stores.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.doctor()),
+  );
+
+  server.registerTool(
+    "migrate_store",
+    {
+      title: "Move the store to a sync-safe location",
+      description:
+        "Copy the whole store (record + config + caches) to the platform app-data dir (or an explicit target), hash-verify, retire the source, re-point schedulers. Stop the app first; restart after.",
+      inputSchema: { to: z.string().optional(), dryRun: z.boolean().optional() },
+    },
+    async ({ to, dryRun }) => guard(() => core.storeMigrate({ to, dryRun })),
+  );
+
+  server.registerTool(
     "sync",
     {
       title: "Sync a source now",
@@ -97,6 +119,28 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ source, credential, days }) =>
       guard(() => (source ? core.syncSource({ id: source, credential, days }) : core.syncAll(days))),
+  );
+
+  server.registerTool(
+    "source_test",
+    {
+      title: "Test a source credential",
+      description:
+        "Prove a credential works against the source's real API — one authenticated probe, nothing saved. Run before source connect / sync.",
+      inputSchema: { source: z.string(), credential: z.string().optional() },
+    },
+    async ({ source, credential }) => guard(() => core.testSourceCredential(source, credential)),
+  );
+
+  server.registerTool(
+    "source_guide",
+    {
+      title: "How to connect a source",
+      description:
+        "Step-by-step guide for a source's credential: where it comes from, the start URL, and — for expiring-token providers (Spotify, Google Calendar, Fitbit, Strava) — the OAuth redirect URI the user's provider app must register. Relay these steps when the user asks how to connect something.",
+      inputSchema: { source: z.string() },
+    },
+    async ({ source }) => guard(() => core.sourceGuide(source)),
   );
 
   server.registerTool(

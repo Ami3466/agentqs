@@ -1,17 +1,14 @@
 import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
-import { readConfig, writeConfig } from "@/lib/config";
+import { readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import {
-  importGithub,
-  parseGithubCsv,
-  resolveGithubToken,
-  windowDays,
-} from "@/lib/importers/github";
-import { rebuild } from "@/lib/record";
+import { parseGithubCsv, resolveGithubToken } from "@/lib/importers/github";
+import { readSyncRuns } from "@/lib/sync-runs";
+import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
 import { wipeDemoOnImport } from "@/lib/demo";
+import { connectSource, syncSource, testSourceCredential } from "@/lib/cli-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,12 +32,18 @@ export async function GET() {
     hasData: days.length > 0,
     hasToken: Boolean(resolveGithubToken()),
     syncedAt: cfg?.githubSyncedAt ?? null,
+    job: readSyncJob("github"),
+    lastRun: readSyncRuns().runs["github"] ?? null,
     total: days.reduce((n, d) => n + d.commits, 0),
     series: days.slice(-30),
   });
 }
 
-/** Run the importer, persist the token if newly given, rebuild the cache. */
+/**
+ * Connect and/or sync GitHub. `{test: true, token?}` probes the token (nothing
+ * saved); a fresh token is probed FIRST and only a working one stored. The sync
+ * runs as a background job (202) — refreshing the page never kills it.
+ */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -49,51 +52,40 @@ export async function POST(req: Request) {
     token?: string;
     login?: string;
     days?: number;
+    test?: boolean;
   };
 
-  const token = resolveGithubToken(body.token);
-  if (!token && !body.login) {
+  if (body.test === true) {
+    try {
+      return NextResponse.json(await testSourceCredential("github", body.token));
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
+  }
+
+  if (body.token && body.token.trim()) {
+    try {
+      await testSourceCredential("github", body.token);
+      connectSource("github", body.token);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
+  }
+  if (!resolveGithubToken() && !body.login) {
     return NextResponse.json(
       { error: "Add a GitHub token (or set GITHUB_TOKEN) to sync commits." },
       { status: 400 },
     );
   }
 
-  const { from, to } = windowDays(body.days && body.days > 0 ? body.days : 90);
-
   wipeDemoOnImport(); // first real import clears the generic demo record
 
-  let summary;
-  try {
-    summary = await importGithub({ token, login: body.login, from, to, recordDir: recordDir() });
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 502 });
-  }
-
-  // Persist a freshly supplied token + the sync time so status survives reloads.
-  const cfg = readConfig();
-  if (cfg) {
-    if (body.token && body.token.trim()) cfg.githubToken = body.token.trim();
-    cfg.githubSyncedAt = new Date().toISOString();
-    try {
-      writeConfig(cfg);
-    } catch {
-      /* non-fatal: the record already has the data */
-    }
-  }
-
-  const r = rebuild({ recordDir: recordDir() });
-
-  return NextResponse.json({
-    ok: true,
-    login: summary.login,
-    from: summary.from,
-    to: summary.to,
-    commits: summary.total,
-    daysWithCommits: summary.daysWithCommits,
-    capped: summary.capped,
-    dailyRows: r.daily,
-    syncedAt: cfg?.githubSyncedAt ?? null,
-    series: summary.days.slice(-30),
+  const days = body.days && body.days > 0 ? body.days : undefined;
+  const login = body.login;
+  const job = startSyncJob("github", async (progress) => {
+    const r = await syncSource({ id: "github", days, login, onProgress: progress });
+    return { days: r.days, dailyRows: r.dailyRows };
   });
+
+  return NextResponse.json({ ok: true, id: "github", name: "GitHub", job }, { status: 202 });
 }

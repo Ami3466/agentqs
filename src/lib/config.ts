@@ -7,7 +7,8 @@ import type { Interval } from "./sources";
 import type { Skill } from "./skills";
 import type { AutomationCreds, AutomationRecipe } from "./automation-types";
 import type { WhoopCreds } from "./importers/whoop";
-import { recordInAppRepoEnabled } from "./record-git";
+import { recordInAppRepoApplicable, recordInAppRepoEnabled } from "./record-git";
+import { storeSummary, type StoreSummary } from "./store-doctor";
 import { whisperInstalled } from "./whisper-local";
 import {
   accountBase,
@@ -67,6 +68,26 @@ export interface ChannelsConfig {
   replies?: Record<string, ChannelReplyPrefs>; // per-channel reply behaviour, keyed by channel id
 }
 
+/** An OAuth2 app the user registered with a provider (client id + secret) plus
+ *  the tokens the authorize dance minted. A refresh/access token here is a
+ *  STORED CREDENTIAL — it makes the source connected, and disconnect deletes it. */
+export interface OAuthGrant {
+  clientId: string;
+  clientSecret: string;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: string; // ISO — syncs refresh before use once past
+}
+
+/** The in-flight authorize dance (one at a time): the `state` nonce the callback
+ *  must echo, and the exact redirect URI the code exchange must repeat. */
+export interface OAuthPending {
+  state: string;
+  instanceId: string;
+  redirectUri: string;
+  createdAt: string;
+}
+
 /**
  * On-disk config, the first thing agentqs writes. Its presence is the "has this
  * instance been set up?" signal that drives the first-run redirect.
@@ -89,8 +110,10 @@ export interface AppConfig {
   githubSyncedAt?: string; // ISO timestamp of the last GitHub import
   journalViews?: JournalView[]; // saved Journal table layouts, per user
   savedGraphs?: SavedGraph[]; // saved correlation / timeline graph cards
-  sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Data tab)
+  sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Pipeline tab)
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
+  sourceOAuth?: Record<string, OAuthGrant>; // per-source OAuth app + tokens (the authorize dance)
+  oauthPending?: OAuthPending; // authorize dance in flight (cleared by the callback)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
   hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)
@@ -285,6 +308,8 @@ export interface PublicConfig {
   dataDir: string;
   recordDir: string;
   recordInAppRepo: boolean;
+  recordInAppRepoApplicable: boolean;
+  store: StoreSummary;
   createdAt: string;
 }
 
@@ -336,6 +361,8 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     dataDir: dataDir(),
     recordDir: recordDir(),
     recordInAppRepo: recordInAppRepoEnabled(),
+    recordInAppRepoApplicable: recordInAppRepoApplicable(),
+    store: storeSummary(),
     createdAt: cfg.createdAt,
   };
 }

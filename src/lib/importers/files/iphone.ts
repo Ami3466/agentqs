@@ -16,7 +16,7 @@ import type { FileImporter, FileImportContext, FileImportResult } from "../file-
  *   date, files_backed_up, domains
  *
  * The read path is real and fixture-provable; `live: false` marks it not-yet-full
- * in the Data tab until the per-domain extraction lands (a later loop).
+ * in the Pipeline tab until the per-domain extraction lands (a later loop).
  */
 
 interface ManifestSummary {

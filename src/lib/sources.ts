@@ -1,11 +1,11 @@
 /**
- * Sync-engine core — pure and browser-safe (NO fs/path here, so the Data-tab
+ * Sync-engine core — pure and browser-safe (NO fs/path here, so the Pipeline-tab
  * client can import these helpers directly). The fs-backed source composition
  * lives in ./source-registry (server-only).
  *
  * Two source kinds behave differently on a schedule:
  *   - api    → can auto-sync. When its interval has elapsed it is DUE, and the
- *              Data tab runs it on open (lazy-sync-on-open).
+ *              Pipeline tab runs it on open (lazy-sync-on-open).
  *   - manual → can't auto-sync (a file drop, an export you paste). When fresh
  *              data hasn't arrived within its interval it is STALE, and we badge
  *              it as a nudge to refresh.
@@ -80,7 +80,7 @@ export function ago(iso: string | null): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-/** One row in the Data-tab sources list. */
+/** One row in the Pipeline-tab sources list. */
 export interface SourceView {
   id: string;
   name: string;
@@ -111,4 +111,26 @@ export interface SourceView {
    *  included, so a broken automation cannot render identically to a healthy one. */
   lastRunOk?: boolean | null;
   lastRunError?: string | null;
+  /** The source's background sync job (sync-jobs.ts): queued/running carries the
+   *  live phase + percent for the progress bar; ok/error is the last outcome.
+   *  Server state, so the bar survives page refreshes. */
+  job?: SourceJobView | null;
+}
+
+/** Browser-safe slice of a sync job (full shape lives in sync-jobs.ts). */
+export interface SourceJobView {
+  status: "queued" | "running" | "ok" | "error";
+  phase: string;
+  pct: number;
+  startedAt: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  days?: number;
+  dailyRows?: number;
+}
+
+/** A job the UI should poll + show a bar for. */
+export function jobActive(job: SourceJobView | null | undefined): boolean {
+  return job?.status === "queued" || job?.status === "running";
 }

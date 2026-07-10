@@ -220,6 +220,51 @@ program
   });
 
 program
+  .command("doctor")
+  .description("store health: sync-engine exposure, evicted files, conflict twins, split stores")
+  .action(() => {
+    try {
+      const r = core.doctor();
+      out(r, (rep: any) => {
+        const icon = (s: string) => (s === "ok" ? "●" : s === "warn" ? "▲" : "✗");
+        const lines = rep.checks.map((c: any) => `${icon(c.severity)} ${c.title.padEnd(16)} ${c.detail}`);
+        lines.push(
+          "",
+          rep.safe
+            ? `store: ${rep.dataDir}${rep.atDefault ? " (default safe location)" : ""}`
+            : `store: ${rep.dataDir} — UNSAFE, run: agentqs migrate-store`,
+        );
+        return lines.join("\n");
+      });
+      if (!r.safe) process.exitCode = 1;
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
+  .command("migrate-store")
+  .description("move the store to a sync-safe location (default: the platform app-data dir); stop the app first")
+  .option("--to <dir>", "explicit target directory")
+  .option("--dry-run", "show what would move without touching anything")
+  .action((opts: { to?: string; dryRun?: boolean }) => {
+    try {
+      out(core.storeMigrate({ to: opts.to, dryRun: opts.dryRun }), (r: any) =>
+        [
+          r.dryRun
+            ? `DRY RUN — would move ${r.files} files (${Math.round(r.bytes / 1e6)} MB): ${r.from} → ${r.to}`
+            : `Moved ${r.files} files (${Math.round(r.bytes / 1e6)} MB): ${r.from} → ${r.to} (hash-verified)`,
+          ...(r.retiredTo ? [`old store retired at ${r.retiredTo}`] : []),
+          ...r.schedulers,
+          ...r.next,
+        ].join("\n"),
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
   .command("sync [source]")
   .description("run an API source now (omit source to sync all connected)")
   .option("--source <id>", "source id (alternative to the positional arg)")
@@ -310,10 +355,48 @@ const source = program.command("source").description("manage sources (connect, s
 
 source
   .command("connect <id> <credential>")
-  .description("save an API source's credential (connected always means a stored key)")
-  .action((id: string, credential: string) => {
+  .description("test + save an API source's credential (connected always means a stored, WORKING key)")
+  .action(async (id: string, credential: string) => {
     try {
-      out(core.connectSource(id, credential), (d) => `Connected ${d.id}.`);
+      // Prove the key against the real API first — a typo'd credential fails
+      // here, loudly, instead of on next week's scheduled sync.
+      const probe = await core.testSourceCredential(id, credential);
+      out({ ...core.connectSource(id, credential), tested: probe.detail }, (d) => `Connected ${d.id} — ${probe.detail}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+source
+  .command("guide <id>")
+  .description("how to connect a source: where its credential comes from, step by step")
+  .action((id: string) => {
+    try {
+      out(core.sourceGuide(id), (g) => {
+        const lines = [
+          `${g.name} — ${g.credentialLabel}`,
+          ...g.steps.map((s: string, i: number) => `  ${i + 1}. ${s}`),
+        ];
+        if (g.url) lines.push(`  Start here: ${g.url}`);
+        if (g.oauth) {
+          lines.push(
+            "  Expiring tokens — connect via the OAuth authorize flow in the web app (Pipeline → Connect).",
+            `  Register this redirect URI on the provider app: ${g.redirectUriHint}`,
+          );
+        }
+        return lines.join("\n");
+      });
+    } catch (e) {
+      die(e);
+    }
+  });
+
+source
+  .command("test <id> [credential]")
+  .description("prove a source's credential works against the real API — nothing saved")
+  .action(async (id: string, credential?: string) => {
+    try {
+      out(await core.testSourceCredential(id, credential), (d) => `${d.name}: ${d.detail}.`);
     } catch (e) {
       die(e);
     }

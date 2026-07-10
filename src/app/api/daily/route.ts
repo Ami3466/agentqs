@@ -5,7 +5,7 @@ import { readDailySummary } from "@/lib/daily";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Read-only summary of the rebuilt daily cache — powers the Data-tab preview. */
+/** Read-only summary of the rebuilt daily cache — powers the Pipeline-tab preview. */
 export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });

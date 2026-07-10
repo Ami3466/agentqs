@@ -58,6 +58,20 @@ export const stravaPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "Strava OAuth access token",
+  credentialHelp: {
+    url: "https://www.strava.com/settings/api",
+    steps: [
+      "Create an API application under Strava Settings → My API Application.",
+      "Set \"Authorization Callback Domain\" to just the host shown in the Redirect URI here (e.g. 127.0.0.1) — no scheme or port.",
+      "Paste the Client ID and Client Secret into the fields here and press Authorize.",
+    ],
+  },
+  oauth: {
+    authUrl: "https://www.strava.com/oauth/authorize",
+    tokenUrl: "https://www.strava.com/oauth/token",
+    scope: "activity:read_all",
+    tokenAuth: "body",
+  },
   envKey: "STRAVA_TOKEN",
   primaryMetric: "activities",
   unit: "activities",

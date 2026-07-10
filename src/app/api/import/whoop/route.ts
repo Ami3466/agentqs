@@ -4,10 +4,12 @@ import { NextResponse } from "next/server";
 import { readConfig, writeConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import { parseCsv, rebuild } from "@/lib/record";
-import { windowDays } from "@/lib/importers/plugin";
-import { importWhoop, whoopHrDir, type WhoopCreds } from "@/lib/importers/whoop";
+import { parseCsv } from "@/lib/record";
+import { mergeTokens, whoopHrDir, whoopLogin, type WhoopCreds } from "@/lib/importers/whoop";
+import { readSyncRuns } from "@/lib/sync-runs";
+import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
 import { wipeDemoOnImport } from "@/lib/demo";
+import { syncSource } from "@/lib/cli-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +52,8 @@ function status() {
     hasPassword: Boolean(wc?.password),
     hasCredential: Boolean(wc?.email && (wc?.password || wc?.refreshToken)),
     syncedAt: cfg?.sourceSyncedAt?.whoop ?? null,
+    job: readSyncJob("whoop"),
+    lastRun: readSyncRuns().runs["whoop"] ?? null,
     days: 0,
     latest: null as number | null,
     average: null as number | null,
@@ -89,8 +93,9 @@ export async function GET() {
 
 /**
  * Connect (email + password) and/or sync WHOOP via the unofficial app login.
- * A fresh email/password is stored (with the rotated tokens) so scheduled pulls
- * keep working; a re-sync with no body re-uses the stored creds.
+ * Fresh credentials are TESTED with a real login first — only working ones are
+ * stored (with the minted tokens), so scheduled pulls keep working. The sync
+ * itself runs as a background job (202) that survives page refreshes.
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -101,6 +106,7 @@ export async function POST(req: Request) {
     password?: string;
     days?: number;
     hrDays?: number;
+    test?: boolean;
   };
   const cfg = readConfig();
   if (!cfg) return NextResponse.json({ error: "Not set up." }, { status: 400 });
@@ -108,58 +114,37 @@ export async function POST(req: Request) {
   const stored = cfg.whoopCreds ?? ({} as WhoopCreds);
   const email = (body.email ?? stored.email ?? "").trim();
   const password = (body.password ?? stored.password ?? "").trim();
-  const canAuth = Boolean(email && (password || stored.refreshToken));
-  if (!canAuth) {
+  if (!email || !(password || stored.refreshToken)) {
     return NextResponse.json(
       { error: "Add your WHOOP email + password to connect." },
       { status: 400 },
     );
   }
 
-  const creds: WhoopCreds = { ...stored, email, password: password || stored.password };
-  const { from, to } = windowDays(body.days && body.days > 0 ? body.days : 90);
+  // Fresh email/password → prove the login BEFORE storing anything. The minted
+  // tokens are kept so the first sync doesn't have to log in twice.
+  const freshCreds = Boolean(body.email || body.password);
+  if (freshCreds || body.test === true) {
+    try {
+      const session = await whoopLogin(email, password);
+      if (body.test === true) {
+        return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });
+      }
+      cfg.whoopCreds = mergeTokens({ ...stored, email, password }, session);
+      writeConfig(cfg);
+    } catch (e) {
+      return NextResponse.json({ error: `WHOOP login failed — ${(e as Error).message}` }, { status: 400 });
+    }
+  }
 
   wipeDemoOnImport(); // first real import clears the generic demo record
 
-  let summary;
-  try {
-    summary = await importWhoop({
-      creds,
-      from,
-      to,
-      recordDir: recordDir(),
-      hrDays: body.hrDays && body.hrDays > 0 ? body.hrDays : undefined,
-    });
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 502 });
-  }
-
-  // Persist the creds with rotated tokens + the sync time so status survives reloads.
-  const latest = readConfig();
-  if (latest) {
-    latest.whoopCreds = summary.creds;
-    latest.sourceSyncedAt = { ...(latest.sourceSyncedAt ?? {}), whoop: new Date().toISOString() };
-  }
-  try {
-    if (latest) writeConfig(latest);
-  } catch {
-    /* non-fatal: the record already holds the data */
-  }
-
-  const r = rebuild({ recordDir: recordDir() });
-
-  return NextResponse.json({
-    ok: true,
-    id: "whoop",
-    name: "WHOOP",
-    from: summary.from,
-    to: summary.to,
-    days: summary.daysWithData,
-    metrics: summary.metrics,
-    cells: summary.cells,
-    minutes: summary.minutes,
-    hrDays: summary.hrDays,
-    dailyRows: r.daily,
-    syncedAt: latest?.sourceSyncedAt?.whoop ?? null,
+  const days = body.days && body.days > 0 ? body.days : undefined;
+  const hrDays = body.hrDays && body.hrDays > 0 ? body.hrDays : undefined;
+  const job = startSyncJob("whoop", async (progress) => {
+    const r = await syncSource({ id: "whoop", days, hrDays, onProgress: progress });
+    return { days: r.days, dailyRows: r.dailyRows };
   });
+
+  return NextResponse.json({ ok: true, id: "whoop", name: "WHOOP (per-minute, unofficial)", job }, { status: 202 });
 }

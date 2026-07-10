@@ -104,7 +104,7 @@ if (!resumeKeyOf(contentJs) || resumeKeyOf(contentJs) !== resumeKeyOf(background
 
 // The downloadable zip must ship the same version as the source folder — a
 // stale zip strands every unpacked install on old code with no signal (the
-// Data tab's update hint compares against extensionLatestVersion()).
+// Pipeline tab's update hint compares against extensionLatestVersion()).
 const manifestVersion = (JSON.parse(fs.readFileSync(path.join(extDir, "manifest.json"), "utf8")) as { version: string }).version;
 if (extensionLatestVersion() !== manifestVersion)
   throw new Error(`extensionLatestVersion() ${extensionLatestVersion()} != manifest ${manifestVersion}`);

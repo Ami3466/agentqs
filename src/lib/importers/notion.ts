@@ -51,6 +51,14 @@ export const notionPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Notion integration token",
   credentialPlaceholder: "secret_… (internal integration token)",
+  credentialHelp: {
+    url: "https://www.notion.so/my-integrations",
+    steps: [
+      "Create a new internal integration in your workspace and copy its secret.",
+      "Share the pages/databases you want counted with the integration (page ⋯ → Connections).",
+      "Paste the secret here.",
+    ],
+  },
   envKey: "NOTION_TOKEN",
   primaryMetric: "pages_edited",
   unit: "pages",

@@ -1,7 +1,7 @@
 /**
- * Ships-when proof for Loop 10 · Data tab (sync engine).
+ * Ships-when proof for Loop 10 · Pipeline tab (sync engine).
  *
- *   1. Set "GitHub: daily" and, on reopen, it is DUE → the Data tab auto-syncs it.
+ *   1. Set "GitHub: daily" and, on reopen, it is DUE → the Pipeline tab auto-syncs it.
  *   2. A real manual importer (Chrome) that has fallen behind its interval shows a
  *      STALE badge — and a one-off dropped CSV is NOT surfaced as a source at all.
  *

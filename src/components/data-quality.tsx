@@ -96,7 +96,7 @@ export function DataQualityPanel({
 }: {
   version?: number;
   onChanged: () => void;
-  /** Reports the open-issue count on every change — feeds the Data tab badge. */
+  /** Reports the open-issue count on every change — feeds the Pipeline tab badge. */
   onCount?: (n: number) => void;
   compact?: boolean;
 }) {

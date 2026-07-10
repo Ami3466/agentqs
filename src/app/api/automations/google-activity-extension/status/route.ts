@@ -19,7 +19,7 @@ interface DailyStatus {
   updatedAt: string | null;
 }
 
-// The Data tab polls this route while the Automated tab is open; parsing all
+// The Pipeline tab polls this route while the Automated tab is open; parsing all
 // preset CSVs on every poll would re-read identical files 12x/minute, so each
 // file's parsed status is cached against its mtime+size.
 const statusCache = new Map<string, { mtimeMs: number; size: number; status: DailyStatus }>();
@@ -70,7 +70,7 @@ function extensionSeenAt(): { seenAt: string | null; version: string } {
   }
 }
 
-/** Per-preset import coverage for the Data-tab "Google data" card. The preset
+/** Per-preset import coverage for the Pipeline-tab "Google data" card. The preset
  *  list itself comes from GOOGLE_PRESETS — one canonical definition. */
 export async function GET() {
   if (!getCurrentUser()) {
@@ -91,7 +91,7 @@ export async function GET() {
     downloadUrl: "/downloads/agentqs-google-activity-exporter.zip",
     extensionSeenAt: ping.seenAt,
     extensionVersion: ping.version,
-    // Unpacked extensions never auto-update; the Data tab compares this to the
+    // Unpacked extensions never auto-update; the Pipeline tab compares this to the
     // pinged version and walks the user through replacing + reloading.
     latestVersion: extensionLatestVersion(),
     imports,

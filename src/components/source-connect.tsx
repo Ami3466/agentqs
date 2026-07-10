@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
+import { useEffect, useRef, useState } from "react";
+import { useCopy } from "@/components/connect-api";
+import { Check, Copy, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
-import { Badge, Button, Input, cn } from "@/components/ui";
-import { type Interval } from "@/lib/sources";
+import { SyncStatus } from "@/components/sync-status";
+import { Badge, Button, Input } from "@/components/ui";
+import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
 
 /**
  * Generic connect/sync row for a single-credential Tier-1 plugin source
  * (RescueTime · Google Calendar · Spotify). The same shape as GithubConnect, driven by
- * the source's own /api/import/<id> GET/POST: paste a credential → sync → headline
- * number + sparkline of the primary metric, an interval dropdown, and version-
- * driven refresh so a lazy auto-sync updates it. Kept generic so a new source is a
- * registry entry, not a new component.
+ * the source's own /api/import/<id> GET/POST. Connecting TESTS the pasted key
+ * against the real API before anything is saved; the sync then runs as a
+ * BACKGROUND JOB on the server — the row shows its live progress bar (from
+ * server state, so it survives refreshes) and the panel polls until it lands.
+ * Kept generic so a new source is a registry entry, not a new component.
  */
 
 interface Point {
@@ -30,9 +33,13 @@ interface Status {
   hasCredential: boolean;
   credentialLabel: string;
   credentialPlaceholder: string;
+  credentialHelp: { url: string; steps: string[] } | null;
+  oauth: { supported: boolean; authorized: boolean; clientId: string } | null;
   primaryMetric: string;
   unit: string;
   syncedAt: string | null;
+  job: SourceJobView | null;
+  lastRun: { at: string; ok: boolean; error?: string } | null;
   days: number;
   latest: number | null;
   average: number | null;
@@ -74,10 +81,10 @@ export function SourceConnect({
   interval = "off",
   savingInterval = false,
   removing = false,
-  credentialOrigin = null,
-  lastRunError = null,
+  job = null,
   onIntervalChange,
   onRemove,
+  onSyncStarted,
 }: {
   id: string;
   version?: number;
@@ -86,17 +93,24 @@ export function SourceConnect({
   savingInterval?: boolean;
   removing?: boolean;
   credentialOrigin?: "env" | "saved" | "discovered" | null;
-  lastRunError?: string | null;
+  /** Live/last background job — the panel polls /api/sources and threads it here. */
+  job?: SourceJobView | null;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
+  /** A sync job was just enqueued — the panel starts polling. */
+  onSyncStarted?: () => void;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [cred, setCred] = useState("");
   const [showCred, setShowCred] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false); // the POST round-trip (credential test)
   const [error, setError] = useState("");
+  // OAuth connect (expiring-token sources): the user's provider app + the dance.
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [copied, copy] = useCopy();
+  const handledReturn = useRef(false);
   // Cadence chosen AS PART OF connecting — defaults to Daily so a newly connected
   // API source actually auto-syncs (Manual is still selectable here).
   const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
@@ -111,38 +125,95 @@ export function SourceConnect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, id]);
 
+  // Prefer the panel's freshly polled job over this row's own (older) GET.
+  const liveJob = job ?? status?.job ?? null;
+  const syncing = jobActive(liveJob);
+
+  // Returning from the provider's authorize page (/api/oauth/callback bounced
+  // here with ?source=<id>&connected=1 or &oauth_error=…): kick the first sync,
+  // or surface the failure on this row. Runs once, then cleans the URL.
+  useEffect(() => {
+    if (!status || handledReturn.current) return;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("source") !== id) return;
+    handledReturn.current = true;
+    const oauthError = p.get("oauth_error");
+    window.history.replaceState(null, "", window.location.pathname);
+    if (oauthError) {
+      setOpen(true);
+      setError(oauthError);
+    } else if (p.get("connected")) {
+      void sync();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, id]);
+
+  /** Save the provider app creds, then send the browser to the authorize page. */
+  async function authorize() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/oauth/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientId, clientSecret, origin: window.location.origin }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { authorizeUrl?: string; error?: string };
+      if (!res.ok || !data.authorizeUrl) {
+        setBusy(false);
+        setError(data.error || "Could not start the authorization.");
+        return;
+      }
+      window.location.href = data.authorizeUrl;
+    } catch (e) {
+      setBusy(false);
+      setError((e as Error).message || "Could not reach the app.");
+    }
+  }
+
   async function sync() {
     const wasConnected = Boolean(status?.connected);
     setBusy(true);
     setError("");
-    setMsg("");
-    const res = await fetch(`/api/import/${id}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // "Use detected app" = explicit opt-in to the desktop-app token; the
-      // server persists it, so this source is connected from here on.
-      body: JSON.stringify(cred ? { credential: cred } : status?.detectedApp && !status?.connected ? { useDetected: true } : {}),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`/api/import/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // "Use detected app" = explicit opt-in to the desktop-app token; the
+        // server persists it, so this source is connected from here on.
+        body: JSON.stringify(cred ? { credential: cred } : status?.detectedApp && !status?.connected ? { useDetected: true } : {}),
+      });
+    } catch (e) {
+      setBusy(false);
+      setError((e as Error).message || "Could not reach the app.");
+      return;
+    }
     setBusy(false);
-    const data = await res.json().catch(() => ({}));
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
+      // A bad credential fails HERE (tested against the real API) — nothing saved.
       setError(data.error || "Sync failed.");
       return;
     }
     setCred("");
     setOpen(false);
-    setMsg(`${data.days} day${data.days === 1 ? "" : "s"} of ${data.name} → ${data.dailyRows} daily rows.`);
-    // First-time connect → persist the cadence chosen in the connect form.
+    // Connected the moment a TESTED credential is stored — persist the cadence
+    // chosen in the connect form; the sync itself continues in the background.
     if (!wasConnected) onIntervalChange?.(pendingInterval);
     await loadStatus();
-    setTimeout(() => setMsg(""), 6000);
+    onSyncStarted?.();
   }
 
   const Icon = sourceIcon(id);
+  // Guarded for SSR — only read once the panel is open (post-hydration anyway).
+  const redirectUri = typeof window === "undefined" ? "" : `${window.location.origin}/api/oauth/callback`;
   const connected = status?.connected;
   const live = status?.live ?? true;
   const detectedApp = Boolean(status?.detectedApp) && !connected;
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred) || detectedApp;
+  const working = busy || syncing;
+  const startLabel = busy ? (cred ? "Testing key…" : "Starting…") : "Sync";
 
   return (
     <div className="p-4">
@@ -160,11 +231,6 @@ export function SourceConnect({
               </Badge>
             ) : null}
           </div>
-          {lastRunError ? (
-            <p className="truncate text-xs text-destructive" title={lastRunError}>
-              Last sync failed: {lastRunError}
-            </p>
-          ) : null}
         </div>
         <div className="flex items-center gap-2">
           {live && connected && onIntervalChange ? (
@@ -175,16 +241,16 @@ export function SourceConnect({
           ) : null}
           {connected ? (
             <>
-              <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
-                {busy ? <Spinner width={14} height={14} /> : null}
-                {busy ? "Syncing…" : "Sync"}
+              <Button size="sm" variant="secondary" onClick={sync} disabled={working}>
+                {working ? <Spinner width={14} height={14} /> : null}
+                {syncing ? "Syncing…" : startLabel}
               </Button>
               {onRemove ? (
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={onRemove}
-                  disabled={removing}
+                  disabled={removing || syncing}
                   title="Remove this automated import"
                 >
                   {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
@@ -197,10 +263,10 @@ export function SourceConnect({
               size="sm"
               variant="primary"
               onClick={() => (canSyncNow ? void sync() : setOpen((v) => !v))}
-              disabled={busy}
+              disabled={working}
             >
-              {busy ? <Spinner width={14} height={14} /> : null}
-              {busy ? "Syncing…" : detectedApp ? "Connect (use detected app)" : canSyncNow ? "Sync" : "Connect"}
+              {working ? <Spinner width={14} height={14} /> : null}
+              {syncing ? "Syncing…" : busy ? startLabel : detectedApp ? "Connect (use detected app)" : canSyncNow ? "Sync" : "Connect"}
             </Button>
           )}
         </div>
@@ -214,6 +280,77 @@ export function SourceConnect({
 
       {open && !connected ? (
         <div className="mt-3 space-y-2 pl-12">
+          {status?.credentialHelp ? (
+            <div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
+                  How to get your {status.credentialLabel}
+                </p>
+                <a
+                  href={status.credentialHelp.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-xs text-accent hover:underline"
+                  title={status.credentialHelp.url}
+                >
+                  Open {new URL(status.credentialHelp.url).host} ↗
+                </a>
+              </div>
+              <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-xs text-muted-fg">
+                {status.credentialHelp.steps.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+
+          {status?.oauth ? (
+            <>
+              {/* The exact redirect URI the provider app must register — the one
+                  thing every OAuth setup trips on, so it's front and copyable. */}
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-xs text-muted-fg">Redirect URI</span>
+                <code className="min-w-0 flex-1 truncate rounded border border-border bg-muted px-2 py-1 font-mono text-xs text-fg" title={redirectUri}>
+                  {redirectUri}
+                </code>
+                <Button size="sm" variant="ghost" onClick={() => copy(redirectUri)} title="Copy the redirect URI to paste into the provider app">
+                  {copied ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
+                  Copy
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  placeholder="Client ID"
+                  autoComplete="off"
+                  className="flex-1 font-mono"
+                />
+                <Input
+                  type="password"
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder="Client Secret"
+                  autoComplete="off"
+                  className="flex-1 font-mono"
+                />
+                <Button
+                  size="md"
+                  variant="primary"
+                  onClick={authorize}
+                  disabled={working || !clientId.trim() || !clientSecret.trim()}
+                  title={`Opens ${status.name}'s consent page; tokens are stored and refreshed automatically`}
+                >
+                  {busy ? <Spinner width={16} height={16} /> : null}
+                  {busy ? "Starting…" : "Authorize"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-fg" title="A pasted access token expires within hours — the authorize flow stores a refresh token, so scheduled syncs keep working.">
+                Or paste a short-lived access token below (expires — authorize is the durable way).
+              </p>
+            </>
+          ) : null}
+
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Input
@@ -233,19 +370,30 @@ export function SourceConnect({
                 {showCred ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
               </button>
             </div>
-            <Button size="md" variant="primary" onClick={sync} disabled={busy || !cred}>
+            <Button
+              size="md"
+              variant="primary"
+              onClick={sync}
+              disabled={working || !cred}
+              title="Tests the key against the real API first — only a working key is saved"
+            >
               {busy ? <Spinner width={16} height={16} /> : null}
-              {busy ? "Syncing…" : "Connect & sync"}
+              {busy ? "Testing key…" : "Connect & sync"}
             </Button>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-fg">Auto-sync</span>
-            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
+            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={working} />
           </div>
         </div>
       ) : null}
 
-      {msg ? <p className={cn("mt-2 pl-12 text-xs text-accent")}>{msg}</p> : null}
+      <SyncStatus
+        job={liveJob}
+        lastRunError={status?.lastRun && !status.lastRun.ok ? (status.lastRun.error ?? "sync failed") : null}
+        className="mt-2 pl-12"
+        onFinished={() => void loadStatus()}
+      />
       {error ? <p className="mt-2 pl-12 text-xs text-destructive">{error}</p> : null}
     </div>
   );

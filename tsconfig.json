@@ -42,7 +42,12 @@
     ".next-verify/types/**/*.ts",
     "tmp/dq-verify/types/**/*.ts",
     ".next-launch-check/types/**/*.ts",
-    ".next-prod-smoke/types/**/*.ts"
+    ".next-prod-smoke/types/**/*.ts",
+    "tmp/readme-shots-dist/types/**/*.ts",
+    "tmp/build-shots/types/**/*.ts",
+    ".next-jobs-verify/types/**/*.ts",
+    ".next-main/types/**/*.ts",
+    ".next-docsverify/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

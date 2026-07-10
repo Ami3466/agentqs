@@ -15,18 +15,22 @@ import { swarmPlugin } from "./swarm";
 import { mastodonPlugin } from "./mastodon";
 import { withingsPlugin } from "./withings";
 import { granolaPlugin } from "./granola";
+import { whoopApiPlugin } from "./whoop-api";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
- * an API is pulled through it (never manual export). GitHub and WHOOP keep their
- * own bespoke modules + routes — GitHub for its commit-specific sparkline, WHOOP
- * because it uses the reverse-engineered app login (email + password → token) and
- * a per-minute stream, neither of which fit the single-credential daily-table
- * plugin contract these share behind /api/import/[source]. Adding an API source is
- * one entry here — it then appears in the Data tab, gets a connect/sync route, and
+ * an API is pulled through it (never manual export). GitHub and the per-minute
+ * WHOOP keep their own bespoke modules + routes — GitHub for its commit-specific
+ * sparkline, WHOOP because it uses the reverse-engineered app login (email +
+ * password → token) and a per-minute stream, neither of which fit the
+ * single-credential daily-table plugin contract these share behind
+ * /api/import/[source]. The OFFICIAL WHOOP API (daily summaries, bearer token)
+ * fits the contract and lives here as `whoop-api`. Adding an API source is
+ * one entry here — it then appears in the Pipeline tab, gets a connect/sync route, and
  * is syncable from the CLI + MCP automatically.
  */
 export const PLUGINS: ImporterPlugin[] = [
+  whoopApiPlugin,
   rescuetimePlugin,
   gcalPlugin,
   spotifyPlugin,

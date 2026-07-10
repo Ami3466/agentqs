@@ -309,7 +309,7 @@ export function AutomationSetup({
 
         {step === 4 ? (
           <>
-            <Field label="How often it runs" hint="agentqs replays this headless on the schedule and on Data-tab open.">
+            <Field label="How often it runs" hint="agentqs replays this headless on the schedule and on Pipeline-tab open.">
               <IntervalSelect value={interval} onChange={setInterval} />
             </Field>
             <div className="rounded-lg border border-border bg-bg p-3 text-xs text-muted-fg">

@@ -9,7 +9,7 @@ import { isValidInterval } from "@/lib/sources";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** The Data-tab sources list: kind, connected, last-sync, interval, stale/due. */
+/** The Pipeline-tab sources list: kind, connected, last-sync, interval, stale/due. */
 export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });

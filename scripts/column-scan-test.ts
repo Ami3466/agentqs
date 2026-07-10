@@ -21,6 +21,7 @@ import os from "os";
 import path from "path";
 import { mergeDailyCsv, readInboxFromRecord } from "../src/lib/record";
 import { applySavedMerges, columnGuard, pendingFindings, scanQuality, type QualityFinding } from "../src/lib/column-scan";
+import { collectItems } from "../src/lib/embeddings";
 import { structurePending } from "../src/lib/structure-run";
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-scan-"));
@@ -151,6 +152,12 @@ check("auto column back to its own days (+ the later fold)", autoAfter.includes(
 check("rule dropped from config", (config().columnMerges ?? []).length === 0);
 findings = scanQuality(rDir);
 check("pair is findable again, notification stays discarded", findings.length === 1 && columnGuard(rDir).findings[0].notificationStatus === "discarded");
+// Discard drops the item from every index: FTS (rebuilt by reject) and the
+// embedding collector must both stop returning it, while pending items stay.
+const ftsRows = runCli(["query", `SELECT ref FROM search WHERE kind='inbox' AND ref='inbox:${f.notificationId}'`]);
+check("discarded item left the FTS index", (ftsRows.rows ?? ftsRows).length === 0);
+const embedRefs = collectItems(rDir).map((i) => i.ref);
+check("discarded item left the embedding input", !embedRefs.includes(`inbox:${f.notificationId}`));
 
 // ---- 6. value-duplicate detection + `agentqs scan --fix` ---------------------
 console.log("\nscan --fix — value duplicates via the CLI");

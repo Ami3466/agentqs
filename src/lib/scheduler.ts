@@ -27,7 +27,7 @@ async function sweep(): Promise<void> {
     if (r.due > 0) {
       console.log(
         `agentqs scheduler: ${r.synced.length} synced, ${r.failed.length} failed` +
-          (r.failed.length ? ` (${r.failed.map((f) => f.id).join(", ")} — see Data tab / agentqs pipeline)` : ""),
+          (r.failed.length ? ` (${r.failed.map((f) => f.id).join(", ")} — see Pipeline tab / agentqs pipeline)` : ""),
       );
     }
   } catch (e) {

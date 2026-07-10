@@ -1,9 +1,27 @@
-[
-  { "date": "2026-06-01", "productivity_pulse": 55, "all_productive_hours": 3.2, "all_distracting_hours": 2.1, "total_hours": 8.0 },
-  { "date": "2026-06-02", "productivity_pulse": 62, "all_productive_hours": 4.0, "all_distracting_hours": 1.5, "total_hours": 8.5 },
-  { "date": "2026-06-03", "productivity_pulse": 48, "all_productive_hours": 2.5, "all_distracting_hours": 3.0, "total_hours": 7.5 },
-  { "date": "2026-06-04", "productivity_pulse": 70, "all_productive_hours": 5.1, "all_distracting_hours": 1.0, "total_hours": 9.0 },
-  { "date": "2026-06-05", "productivity_pulse": 66, "all_productive_hours": 4.6, "all_distracting_hours": 1.4, "total_hours": 8.2 },
-  { "date": "2026-06-06", "productivity_pulse": 52, "all_productive_hours": 3.0, "all_distracting_hours": 2.6, "total_hours": 7.0 },
-  { "date": "2026-06-07", "productivity_pulse": 74, "all_productive_hours": 5.5, "all_distracting_hours": 0.8, "total_hours": 9.3 }
-]
+{
+  "summary": [
+    { "date": "2026-06-01", "productivity_pulse": 55, "all_productive_hours": 3.2, "all_distracting_hours": 2.1, "total_hours": 8.0 },
+    { "date": "2026-06-02", "productivity_pulse": 62, "all_productive_hours": 4.0, "all_distracting_hours": 1.5, "total_hours": 8.5 },
+    { "date": "2026-06-03", "productivity_pulse": 48, "all_productive_hours": 2.5, "all_distracting_hours": 3.0, "total_hours": 7.5 },
+    { "date": "2026-06-04", "productivity_pulse": 70, "all_productive_hours": 5.1, "all_distracting_hours": 1.0, "total_hours": 9.0 },
+    { "date": "2026-06-05", "productivity_pulse": 66, "all_productive_hours": 4.6, "all_distracting_hours": 1.4, "total_hours": 8.2 },
+    { "date": "2026-06-06", "productivity_pulse": 52, "all_productive_hours": 3.0, "all_distracting_hours": 2.6, "total_hours": 7.0 },
+    { "date": "2026-06-07", "productivity_pulse": 74, "all_productive_hours": 5.5, "all_distracting_hours": 0.8, "total_hours": 9.3 }
+  ],
+  "interval": {
+    "row_headers": ["Date", "Time Spent (seconds)", "Number of People", "Productivity"],
+    "rows": [
+      ["2026-06-06T00:00:00", 9000, 1, 2],
+      ["2026-06-06T00:00:00", 1800, 1, 1],
+      ["2026-06-06T00:00:00", 9360, 1, -2],
+      ["2026-06-06T00:00:00", 5040, 1, 0],
+      ["2026-06-07T00:00:00", 18000, 1, 2],
+      ["2026-06-07T00:00:00", 1800, 1, 1],
+      ["2026-06-07T00:00:00", 2880, 1, -1],
+      ["2026-06-07T00:00:00", 10800, 1, 0],
+      ["2026-06-08T00:00:00", 12600, 1, 2],
+      ["2026-06-08T00:00:00", 3600, 1, -2],
+      ["2026-06-08T00:00:00", 5400, 1, 0]
+    ]
+  }
+}

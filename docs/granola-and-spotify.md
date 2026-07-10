@@ -19,7 +19,7 @@ Each meeting lands three ways, because each is read differently:
 
 | Where | What | Read by |
 | --- | --- | --- |
-| `daily/granola.csv` | `meetings · notes · minutes · words` per day | graphs, the Data-tab sparkline |
+| `daily/granola.csv` | `meetings · notes · minutes · words` per day | graphs, the Pipeline-tab sparkline |
 | `daily/granola_texts.csv` | the day's notes/summary as prose | search + semantic recall |
 | `events.jsonl` | one event per meeting, verbatim transcript in `meta.transcript` | the Journal timeline |
 

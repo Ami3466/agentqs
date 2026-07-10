@@ -55,6 +55,20 @@ export const spotifyPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "BQ… (OAuth access token)",
+  credentialHelp: {
+    url: "https://developer.spotify.com/dashboard",
+    steps: [
+      "Create an app in the Spotify developer dashboard (any name; Web API checked).",
+      "Under the app's settings, add the Redirect URI shown here EXACTLY — Spotify accepts http://127.0.0.1:<port>/… but rejects \"localhost\", so open agentqs via 127.0.0.1.",
+      "Copy the app's Client ID and Client Secret into the fields here and press Authorize.",
+    ],
+  },
+  oauth: {
+    authUrl: "https://accounts.spotify.com/authorize",
+    tokenUrl: "https://accounts.spotify.com/api/token",
+    scope: "user-read-recently-played",
+    tokenAuth: "basic",
+  },
   envKey: "SPOTIFY_TOKEN",
   primaryMetric: "tracks",
   unit: "tracks",

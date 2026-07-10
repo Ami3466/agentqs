@@ -54,6 +54,13 @@ export const lastfmPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "API key + username",
   credentialPlaceholder: "<api_key>:<username>",
+  credentialHelp: {
+    url: "https://www.last.fm/api/account/create",
+    steps: [
+      "Create an API account (any application name; callback URL can stay empty).",
+      "Copy the API key and paste it here as api_key:your_lastfm_username.",
+    ],
+  },
   envKey: "LASTFM_KEY",
   primaryMetric: "scrobbles",
   unit: "scrobbles",

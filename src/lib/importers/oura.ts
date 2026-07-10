@@ -55,6 +55,13 @@ export const ouraPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Oura personal access token",
   credentialPlaceholder: "your Oura PAT",
+  credentialHelp: {
+    url: "https://cloud.ouraring.com/personal-access-tokens",
+    steps: [
+      "Sign in to Oura on the web and open Personal Access Tokens.",
+      "Create a token and paste it here — it does not expire.",
+    ],
+  },
   envKey: "OURA_TOKEN",
   primaryMetric: "readiness_score",
   unit: "readiness",

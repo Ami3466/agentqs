@@ -64,7 +64,7 @@ The shipped path is the local Chrome extension
 (`extensions/google-activity-exporter`): the user's own authenticated Chrome
 session reads My Activity through the page's data feed and posts batches to the
 local AgentQS server. Presets are defined once in
-`src/lib/google-web-scraper.ts` (`GOOGLE_PRESETS`) and surface in the Data tab
+`src/lib/google-web-scraper.ts` (`GOOGLE_PRESETS`) and surface in the Pipeline tab
 under Automated imports. The Data Portability API below stays the target for a
 hosted/cloud connector, where a local extension is not available.
 

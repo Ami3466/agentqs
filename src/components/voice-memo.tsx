@@ -333,7 +333,7 @@ export function VoiceMemo() {
       }
       setResult({ text: data.text, pending: data.pending, backend: data.backend, structured: Boolean(data.structured) });
       setPhase("done");
-      router.refresh(); // so the Data-tab inbox reflects the new memo
+      router.refresh(); // so the Pipeline-tab inbox reflects the new memo
     } catch {
       setPhase("error");
       setError("Could not reach the transcriber.");
