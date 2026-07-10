@@ -530,10 +530,12 @@ export function Chat() {
         if (!res.ok) {
           push({ role: "note", tone: "error", text: data.error || "Sync failed." });
         } else {
+          // 202: the route queues a background job — completion (and failures)
+          // land in the Pipeline sync status, not in this response.
           push({
             role: "note",
             tone: "ok",
-            text: `Synced @${data.login}: ${data.commits} commits → ${data.dailyRows} daily rows.`,
+            text: `${data.name || "GitHub"} sync started in the background — progress and results are on the Pipeline tab.`,
           });
         }
       } catch {

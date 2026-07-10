@@ -32,6 +32,7 @@
     "scan:test": "tsx scripts/column-scan-test.ts",
     "paths:test": "tsx scripts/paths-test.ts",
     "store:test": "tsx scripts/store-doctor-test.ts",
+    "recordgit:test": "tsx scripts/record-git-test.ts",
     "detail:test": "tsx scripts/detail-test.ts",
     "oauth:test": "tsx scripts/oauth-test.ts",
     "extension:test": "tsx scripts/google-activity-extension-test.ts",

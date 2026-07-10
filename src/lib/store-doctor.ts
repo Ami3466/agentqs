@@ -4,6 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { dataDir, defaultStoreDir, storeRank } from "./paths";
+import { readSyncJobs } from "./sync-jobs";
 
 /**
  * Store health + migration. File-sync engines (iCloud Desktop & Documents,
@@ -36,6 +37,8 @@ export interface DoctorReport {
 export interface StoreSummary {
   safe: boolean;
   atDefault: boolean;
+  /** AGENTQS_DATA_DIR pins the location — in-app migration would strand the store. */
+  envPinned: boolean;
   safeDir: string;
   issues: string[];
 }
@@ -196,14 +199,27 @@ export function doctorReport(dir: string = dataDir()): DoctorReport {
   return { dataDir: dir, safeDir, atDefault, safe: checks.every((c) => c.severity !== "bad"), checks };
 }
 
+/** doctorReport shells out (xattr, find) and walks the store — too heavy for
+ *  publicConfig's callers (chat + inbox fetch /api/settings on every mount).
+ *  The location can't change while the process runs, so cache per dir with a
+ *  short TTL; migrateStore busts the cache. */
+let summaryCache: { dir: string; at: number; value: StoreSummary } | null = null;
+const SUMMARY_TTL_MS = 60_000;
+
 export function storeSummary(dir: string = dataDir()): StoreSummary {
+  if (summaryCache && summaryCache.dir === dir && Date.now() - summaryCache.at < SUMMARY_TTL_MS) {
+    return summaryCache.value;
+  }
   const r = doctorReport(dir);
-  return {
+  const value: StoreSummary = {
     safe: r.safe,
     atDefault: r.atDefault,
+    envPinned: Boolean(process.env.AGENTQS_DATA_DIR),
     safeDir: r.safeDir,
     issues: r.checks.filter((c) => c.severity !== "ok").map((c) => c.detail),
   };
+  summaryCache = { dir, at: Date.now(), value };
+  return value;
 }
 
 // ---- migration -------------------------------------------------------------
@@ -234,14 +250,35 @@ function manifestOf(root: string): Manifest {
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) walk(full);
       else if (e.isFile()) {
-        const buf = fs.readFileSync(full);
-        bytes += buf.length;
-        files.set(path.relative(root, full), crypto.createHash("sha256").update(buf).digest("hex"));
+        const f = sha256File(full);
+        bytes += f.bytes;
+        files.set(path.relative(root, full), f.hash);
       }
     }
   };
   walk(root);
   return { files, bytes };
+}
+
+/** Chunked hashing: readFileSync would buffer whole files (RSS spikes by the
+ *  largest file, hard ERR_FS_FILE_TOO_LARGE at 2 GiB — agentqs.db grows
+ *  monotonically toward it). 1 MiB chunks keep memory flat with no size cap. */
+function sha256File(full: string): { hash: string; bytes: number } {
+  const h = crypto.createHash("sha256");
+  const fd = fs.openSync(full, "r");
+  try {
+    const buf = Buffer.allocUnsafe(1 << 20);
+    let bytes = 0;
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, -1);
+      if (n <= 0) break;
+      h.update(n === buf.length ? buf : buf.subarray(0, n));
+      bytes += n;
+    }
+    return { hash: h.digest("hex"), bytes };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export interface MigrateOptions {
@@ -266,6 +303,24 @@ export function migrateStore(opts: MigrateOptions = {}): MigrateResult {
   if (safeReal(from) === safeReal(to)) throw new Error(`Store already lives at ${to}.`);
   if (storeRank(to) > 0) throw new Error(`${to} already holds a store — refusing to overwrite. Pass --to <empty dir>.`);
   if (under(to, from) || under(from, to)) throw new Error("Source and target stores must not nest.");
+  // An env-pinned store (Docker's ENV AGENTQS_DATA_DIR=/data, launchd, shell
+  // profile) would be STRANDED: after the rename the env var still resolves to
+  // the retired path and the app reopens an empty store there.
+  if (process.env.AGENTQS_DATA_DIR && safeReal(path.resolve(process.env.AGENTQS_DATA_DIR)) === safeReal(from)) {
+    throw new Error(
+      `AGENTQS_DATA_DIR pins the store to ${from} — migrating would strand it (the app keeps resolving the env path). ` +
+        `Point AGENTQS_DATA_DIR at the new location and move the data yourself, or unset it and re-run.`,
+    );
+  }
+  // A live background sync holds pre-rename record paths and a heartbeat that
+  // recreates the retired dir — refuse until the queue is idle. readSyncJobs
+  // already flips stale (dead-process) jobs, so a crashed job can't block.
+  const activeJobs = Object.values(readSyncJobs(from)).filter((j) => j.status === "queued" || j.status === "running");
+  if (activeJobs.length) {
+    throw new Error(
+      `A sync is running (${activeJobs.map((j) => j.id).join(", ")}) — wait for it to finish (or stop the app), then re-run.`,
+    );
+  }
 
   const dataless = datalessFiles(from);
   if (dataless.length) {
@@ -326,8 +381,19 @@ export function migrateStore(opts: MigrateOptions = {}): MigrateResult {
   result.retiredTo = retired;
 
   result.schedulers = repointSchedulers(fromAliases, to, opts);
+  // dataDir() only auto-finds the app-data default and checkout-local stores —
+  // a custom target is unreachable without the env var.
+  const autoFound =
+    safeReal(to) === safeReal(defaultStoreDir()) ||
+    [path.join(process.cwd(), "data.nosync"), path.join(process.cwd(), "data")].some((c) => safeReal(c) === safeReal(to));
+  if (!autoFound) {
+    result.next.push(
+      `Custom location: set AGENTQS_DATA_DIR=${to} everywhere the app runs (shell profile, launchd, Docker env) — resolution only auto-finds ${defaultStoreDir()} and checkout-local stores.`,
+    );
+  }
   result.next.push("Restart the app / dev server so it opens the new store.");
   result.next.push(`Revert: mv '${retired}' '${from}' && rm -rf '${to}' (then restore scheduler paths).`);
+  summaryCache = null;
   return result;
 }
 
