@@ -344,7 +344,6 @@ export function SourcesPanel({
           due={s.due}
           savingInterval={saving}
           removing={removing}
-          credentialOrigin={s.credentialOrigin ?? null}
           job={s.job ?? null}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}

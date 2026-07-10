@@ -43,9 +43,16 @@ export function defaultStoreDir(): string {
  */
 let warnedShadow = false;
 
+/** Every place a store may live, in resolution priority order. The ONE list —
+ *  the doctor's split-store check iterates it too, so a new candidate location
+ *  can never be resolvable yet invisible to the doctor (or vice versa). */
+export function storeCandidates(): string[] {
+  return [defaultStoreDir(), path.join(process.cwd(), "data.nosync"), path.join(process.cwd(), "data")];
+}
+
 export function dataDir(): string {
   if (process.env.AGENTQS_DATA_DIR) return path.resolve(process.env.AGENTQS_DATA_DIR);
-  const candidates = [defaultStoreDir(), path.join(process.cwd(), "data.nosync"), path.join(process.cwd(), "data")];
+  const candidates = storeCandidates();
   let best = "";
   let bestRank = 0;
   for (const dir of candidates) {

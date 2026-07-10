@@ -92,7 +92,6 @@ export function SourceConnect({
   due?: boolean;
   savingInterval?: boolean;
   removing?: boolean;
-  credentialOrigin?: "env" | "saved" | "discovered" | null;
   /** Live/last background job — the panel polls /api/sources and threads it here. */
   job?: SourceJobView | null;
   onIntervalChange?: (i: Interval) => void;

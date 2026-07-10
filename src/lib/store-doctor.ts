@@ -3,7 +3,7 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { dataDir, defaultStoreDir, storeRank } from "./paths";
+import { dataDir, defaultStoreDir, storeCandidates, storeRank } from "./paths";
 import { readSyncJobs } from "./sync-jobs";
 
 /**
@@ -65,7 +65,11 @@ export function syncDomainOf(p: string): string | null {
     const rel = path.relative(path.join(home, "Library", "CloudStorage"), real);
     return rel.split(path.sep)[0] || "a cloud provider";
   }
-  const marker = real.match(/(^|\/)(Dropbox|OneDrive[^/]*|Google Drive)(\/|$)/i);
+  // Classic (non-FileProvider) roots by name — real Dropbox roots are often
+  // "Dropbox (Personal)"/"Dropbox (Team)". Normalize separators so win32
+  // paths match too.
+  const posix = real.split(path.sep).join("/");
+  const marker = posix.match(/(^|\/)(Dropbox( \([^/]+\))?|OneDrive[^/]*|Google Drive)(\/|$)/i);
   if (marker) return marker[2];
   if (process.platform === "darwin") {
     for (const root of [path.join(home, "Desktop"), path.join(home, "Documents")]) {
@@ -104,8 +108,10 @@ function datalessFiles(dir: string): string[] {
   }
 }
 
-/** "X 2.csv" / "X 3" — the rename a sync engine leaves next to a conflicted file. */
-const CONFLICT_TWIN = /\s\d+(\.[^.]+)?$/;
+/** "X 2.csv" beside an existing "X.csv" — the rename a sync engine leaves next
+ *  to a conflicted file. Requiring the ORIGINAL to exist keeps legitimate
+ *  names like "trip 2025.md" or a "meetings 3" dir out of the findings. */
+const CONFLICT_TWIN = /^(.*\S)\s\d+$/;
 
 function conflictTwins(dir: string): string[] {
   const hits: string[] = [];
@@ -117,11 +123,15 @@ function conflictTwins(dir: string): string[] {
     } catch {
       return;
     }
+    const names = new Set(entries.map((e) => e.name));
     for (const e of entries) {
       if (e.name === ".git" || e.name === "node_modules") continue;
       const full = path.join(d, e.name);
-      const base = e.isFile() ? e.name.replace(/\.[^.]+$/, "") : e.name;
-      if (CONFLICT_TWIN.test(base) || CONFLICT_TWIN.test(e.name)) hits.push(full);
+      const dot = e.isFile() ? e.name.lastIndexOf(".") : -1;
+      const ext = dot > 0 ? e.name.slice(dot) : "";
+      const base = dot > 0 ? e.name.slice(0, dot) : e.name;
+      const m = base.match(CONFLICT_TWIN);
+      if (m && names.has(m[1] + ext)) hits.push(full);
       if (e.isDirectory()) walk(full, depth + 1);
     }
   };
@@ -132,8 +142,7 @@ function conflictTwins(dir: string): string[] {
 /** Initialized stores visible from here that are NOT the active one. */
 function shadowStores(active: string): string[] {
   const activeReal = safeReal(active);
-  const candidates = [defaultStoreDir(), path.join(process.cwd(), "data.nosync"), path.join(process.cwd(), "data")];
-  return candidates.filter((c) => storeRank(c) > 0 && safeReal(c) !== activeReal);
+  return storeCandidates().filter((c) => storeRank(c) > 0 && safeReal(c) !== activeReal);
 }
 
 export function doctorReport(dir: string = dataDir()): DoctorReport {
@@ -169,7 +178,15 @@ export function doctorReport(dir: string = dataDir()): DoctorReport {
           title: "Evicted files",
           detail: `${dataless.length} file(s) are cloud-evicted placeholders (reads hang): ${dataless.slice(0, 3).join(", ")}${dataless.length > 3 ? ", …" : ""}. Materialize: brctl download '${dir}'.`,
         }
-      : { id: "eviction", severity: "ok", title: "Evicted files", detail: "All file contents are on disk." },
+      : {
+          id: "eviction",
+          severity: "ok",
+          title: "Evicted files",
+          detail:
+            process.platform === "darwin"
+              ? "All file contents are on disk."
+              : "No eviction probe on this platform — checked on macOS only.",
+        },
   );
 
   const twins = conflictTwins(dir);
