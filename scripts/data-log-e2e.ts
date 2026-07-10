@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Ships-when proof for the Data-tab Log + Journal Edit mode, end to end.
+ * Ships-when proof for the Pipeline-tab Log + Journal Edit mode, end to end.
  *
  *   MAIN: over the deployed URL — drop a CSV capture (POST /api/inbox),
  *   Structure it (POST /api/structure), see it in the Log with revert armed

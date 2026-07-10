@@ -51,6 +51,13 @@ export const togglPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Toggl API token",
   credentialPlaceholder: "your Toggl API token",
+  credentialHelp: {
+    url: "https://track.toggl.com/profile",
+    steps: [
+      "Open your Toggl Track Profile page and scroll to the bottom.",
+      "Reveal the API Token and paste it here.",
+    ],
+  },
   envKey: "TOGGL_TOKEN",
   primaryMetric: "tracked_hours",
   unit: "hours",

@@ -35,10 +35,10 @@ export interface FileImportResult {
 export interface FileImporter {
   id: string; // source stem → record/daily/<id>.csv
   name: string; // display name
-  detail: string; // one-line description for the Data tab / CLI
+  detail: string; // one-line description for the Pipeline tab / CLI
   /** false = stub adapter (real read path, but not the full extraction yet). */
   live: boolean;
-  /** The metric column the Data-tab headline / sparkline reads. */
+  /** The metric column the Pipeline-tab headline / sparkline reads. */
   primaryMetric: string;
   unit?: string;
   /** Default OS locations to probe when `--path` is omitted (platform-aware). */

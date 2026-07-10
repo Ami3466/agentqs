@@ -103,7 +103,7 @@ async function main(): Promise<void> {
 
   if (!fetchImpl && plugin.requiresCredential && !credential) {
     console.error(
-      `import:source: no credential for ${plugin.name}. Pass --credential, set ${plugin.envKey}, or save one in the Data tab.`,
+      `import:source: no credential for ${plugin.name}. Pass --credential, set ${plugin.envKey}, or save one in the Pipeline tab.`,
     );
     process.exit(2);
   }

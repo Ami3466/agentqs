@@ -5,10 +5,10 @@ import { dataDir } from "./paths";
 /**
  * Sync-run health ledger — the missing truth signal of the data pipeline.
  *
- * Every sync attempt (manual, Data-tab lazy sync, `sync --due` from a
+ * Every sync attempt (manual, Pipeline-tab lazy sync, `sync --due` from a
  * scheduler) records its outcome here, success AND failure, so "is this
  * automation actually working" is answerable from the CLI, the API and the
- * Data tab instead of failures vanishing into a launchd log nobody reads.
+ * Pipeline tab instead of failures vanishing into a launchd log nobody reads.
  *
  * Derived state under the data dir (never part of the record): losing it only
  * loses run history, and a corrupt file degrades to "no history".

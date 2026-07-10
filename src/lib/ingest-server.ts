@@ -20,7 +20,7 @@ import { extensionPingFile, ingestGoogleActivityApiItems, isGooglePreset } from 
 export const INGEST_PATH = "/api/automations/google-activity-extension";
 export const INGEST_PING_PATH = `${INGEST_PATH}/ping`;
 
-/** Stamp the extension heartbeat file the Data tab reads ("extension installed"
+/** Stamp the extension heartbeat file the Pipeline tab reads ("extension installed"
  *  vs "nothing listening"). Shared by the Next ping route and this listener, so
  *  the extension can rotate ping targets exactly like batch posts. */
 export function recordExtensionPing(version: unknown): void {

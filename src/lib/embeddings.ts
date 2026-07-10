@@ -86,6 +86,9 @@ export function collectItems(recordDir: string): IndexItem[] {
   const out: IndexItem[] = [];
 
   for (const it of readInboxFromRecord(recordDir)) {
+    // Mirror the FTS insert in rebuild(): no image bodies (base64 data URLs),
+    // no discarded captures (Reject removes an item from every index).
+    if (it.kind === "image" || it.status === "discarded") continue;
     const text = it.text.trim();
     if (!text) continue;
     out.push({ ref: `inbox:${it.id}`, kind: "memo", date: (it.ts || "").slice(0, 10), text });

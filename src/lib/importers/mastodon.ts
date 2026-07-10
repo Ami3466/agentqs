@@ -50,6 +50,14 @@ export const mastodonPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Mastodon host:token",
   credentialPlaceholder: "mastodon.social:your-access-token",
+  credentialHelp: {
+    url: "https://mastodon.social/settings/applications",
+    steps: [
+      "On YOUR instance: Preferences → Development → New application (read scope is enough).",
+      "Open the application and copy \"Your access token\".",
+      "Paste it here as your.instance.host:token.",
+    ],
+  },
   primaryMetric: "posts",
   unit: "posts",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {

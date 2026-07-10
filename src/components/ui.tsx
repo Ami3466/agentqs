@@ -284,6 +284,43 @@ export function Checkbox({
   );
 }
 
+/** Determinate progress bar for background work (sync jobs): thin track,
+ *  accent fill, one-line label. Derived from server state so it survives
+ *  reloads — never drive it from one-shot component state. */
+export function ProgressBar({
+  pct,
+  label,
+  className,
+}: {
+  pct: number; // 0..100
+  label?: string;
+  className?: string;
+}) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  return (
+    <div className={cn("min-w-0", className)}>
+      {label ? (
+        <p className="mb-1 truncate text-xs text-muted-fg" title={label}>
+          {label}
+        </p>
+      ) : null}
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuenow={clamped}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={label ?? "progress"}
+      >
+        <div
+          className="h-full rounded-full bg-accent transition-[width] duration-500"
+          style={{ width: `${clamped}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 const BADGE_TONES = {
   neutral: "border-border bg-muted text-muted-fg",
   warning: "border-warning/30 bg-warning/10 text-warning",

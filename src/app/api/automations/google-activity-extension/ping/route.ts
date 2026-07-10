@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** Extension heartbeat. The background service worker POSTs here on startup and
- *  on a slow alarm; the Data tab reads the stamp (via the status route) to tell
+ *  on a slow alarm; the Pipeline tab reads the stamp (via the status route) to tell
  *  "extension installed and pointed at this server" from "nothing listening",
  *  so Import buttons can say so instead of failing silently. Same origin gate as
  *  the ingest route — the extension can't carry the session cookie. */

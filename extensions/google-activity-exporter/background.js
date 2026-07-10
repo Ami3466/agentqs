@@ -4,17 +4,13 @@ const IMPORTERS = [
   { id: "google_activity_all", label: "All Google activity", url: "https://myactivity.google.com/myactivity?hl=en_GB" },
   { id: "browser_history", label: "Browser history", url: "https://myactivity.google.com/search-services/history?hl=en_GB" },
   { id: "google_search", label: "Search", url: "https://myactivity.google.com/product/search?hl=en_GB" },
-  { id: "google_image_search", label: "Image Search", url: "https://myactivity.google.com/product/image_search?hl=en_GB" },
-  { id: "google_video_search", label: "Video Search", url: "https://myactivity.google.com/product/video_search?hl=en_GB" },
   { id: "google_maps", label: "Maps", url: "https://myactivity.google.com/product/maps?hl=en_GB" },
   { id: "youtube_history", label: "YouTube", url: "https://myactivity.google.com/product/youtube?hl=en_GB" },
   { id: "google_assistant", label: "Assistant", url: "https://myactivity.google.com/product/assistant?hl=en_GB" },
-  { id: "google_play", label: "Play", url: "https://myactivity.google.com/product/play?hl=en_GB" },
   { id: "google_news", label: "News", url: "https://myactivity.google.com/product/news?hl=en_GB" },
   { id: "google_chrome", label: "Chrome", url: "https://myactivity.google.com/product/chrome?hl=en_GB" },
   { id: "google_shopping", label: "Shopping", url: "https://myactivity.google.com/product/shopping?hl=en_GB" },
   { id: "google_translate", label: "Translate", url: "https://myactivity.google.com/product/translate?hl=en_GB" },
-  { id: "google_discover", label: "Discover", url: "https://myactivity.google.com/product/discover?hl=en_GB" },
   { id: "google_gemini", label: "Gemini", url: "https://myactivity.google.com/product/gemini?hl=en_GB" },
   { id: "google_timeline", label: "Timeline", url: "https://timeline.google.com/maps/timeline" },
 ];
@@ -44,7 +40,7 @@ async function serverBase() {
   return /^https?:\/\//i.test(raw) ? raw : DEFAULT_BASE;
 }
 
-// Heartbeat: lets the AgentQS Data tab tell "extension installed" from "nothing
+// Heartbeat: lets the AgentQS Pipeline tab tell "extension installed" from "nothing
 // listening", so its Import buttons can guide instead of failing silently.
 // Rotates through the same targets batch posts use — the configured base may be
 // squatted by another app while the ingest listener still answers.
@@ -60,7 +56,7 @@ async function pingServer() {
       });
       if (res.ok) return;
     } catch {
-      /* try the next target; all down = the Data tab shows "not detected" */
+      /* try the next target; all down = the Pipeline tab shows "not detected" */
     }
   }
 }
@@ -228,7 +224,7 @@ function armAlarms() {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "agentqs-list-importers") return false;
-  void pingServer(); // popup open = fresh install signal for the Data tab
+  void pingServer(); // popup open = fresh install signal for the Pipeline tab
   sendResponse({ ok: true, importers: IMPORTERS.map(({ id, label }) => ({ id, label })) });
   return false;
 });

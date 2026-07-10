@@ -58,18 +58,45 @@ export interface ImporterResult {
   meta?: Record<string, unknown>;
 }
 
+/** How to obtain the credential — the connect form, `agentqs source guide` and
+ *  docs all render THIS, so a source is never a bare paste box with no path to
+ *  a key. `url` is where the user starts (dashboard / token page). */
+export interface CredentialHelp {
+  url: string;
+  steps: string[];
+}
+
+/** Provider endpoints for the standard OAuth2 authorization-code + refresh
+ *  dance. Set on sources whose tokens EXPIRE — pasting an access token can
+ *  never survive auto-sync there, so connect runs the dance instead: the user
+ *  registers an app (redirect URI shown in the form), pastes client id +
+ *  secret, authorizes, and syncs mint fresh tokens from the refresh token. */
+export interface OAuthProviderConfig {
+  authUrl: string; // provider authorize endpoint
+  tokenUrl: string; // code + refresh exchange endpoint
+  scope: string;
+  /** Where client id+secret travel on token calls: HTTP Basic vs form body. */
+  tokenAuth: "basic" | "body";
+  extraAuthParams?: Record<string, string>; // e.g. Google's access_type=offline
+}
+
 export interface ImporterPlugin {
   id: string; // source stem → record/daily/<id>.csv
   name: string; // display name
-  detail: string; // one-line description for the Data tab
+  detail: string; // one-line description for the Pipeline tab
   /** api sources are auto-syncable; a not-yet-wired adapter would be `false`. */
   live: boolean;
   /** Whether a credential is required to sync (all Tier-1 APIs need one). */
   requiresCredential: boolean;
   credentialLabel: string; // "RescueTime API key" | "OAuth access token"
   credentialPlaceholder: string; // input placeholder
+  /** How to get the credential (steps + start URL) — required for every
+   *  credentialed source; the guide test fails a bare paste box. */
+  credentialHelp?: CredentialHelp;
+  /** OAuth2 authorization-code app config — only for expiring-token providers. */
+  oauth?: OAuthProviderConfig;
   envKey?: string; // env var the credential can come from
-  /** The metric column the Data-tab sparkline / headline number reads. */
+  /** The metric column the Pipeline-tab sparkline / headline number reads. */
   primaryMetric: string;
   unit?: string; // shown after the headline number (e.g. "meetings")
   /**
@@ -114,6 +141,14 @@ export function resolveCredentialWithOrigin(
   credKey: string = plugin.id,
 ): { credential?: string; origin: CredentialOrigin | null } {
   if (explicit && explicit.trim()) return { credential: explicit.trim(), origin: "explicit" };
+  // A completed OAuth grant IS a stored credential (the user authorized it in
+  // the connect form), so it satisfies the connection rule exactly like a
+  // pasted key. Sync paths mint a FRESH access token via oauth.ts; the stored
+  // one here only answers presence/connected checks.
+  const grant = cfg?.sourceOAuth?.[credKey];
+  if (grant?.refreshToken || grant?.accessToken) {
+    return { credential: grant.accessToken || grant.refreshToken, origin: "saved" };
+  }
   const isBase = credKey === plugin.id;
   if (isBase && plugin.envKey && process.env[plugin.envKey]) {
     return { credential: process.env[plugin.envKey], origin: "env" };

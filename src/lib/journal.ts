@@ -3,7 +3,7 @@ import { openReadonly, type DB } from "./db";
 import { dbPath } from "./paths";
 
 /**
- * Read-side view that powers the Journal tab. Same rebuilt cache the Data-tab
+ * Read-side view that powers the Journal tab. Same rebuilt cache the Pipeline-tab
  * preview reads, but shaped for browsing a life day-by-day: the long-form daily
  * table is pivoted to one record per day, and each day also carries the memos
  * (inbox captures) and mentor/therapy sessions that landed on it. The Timeline

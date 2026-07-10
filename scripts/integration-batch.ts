@@ -16,33 +16,20 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { importPlugin, fixtureFetch } from "../src/lib/importers/plugin";
+import { importPlugin } from "../src/lib/importers/plugin";
 import { PLUGINS } from "../src/lib/importers/registry";
 import { writeGithubRecord } from "../src/lib/importers/github";
 import { importWhoop, whoopFixtureFetch } from "../src/lib/importers/whoop";
 import { rebuild } from "../src/lib/record";
 import { readDailySummary } from "../src/lib/daily";
 import { readGrounding, groundedCrossSourceAnswer } from "../src/lib/grounding";
+import { CRED, FIXTURES, fetchForFixture } from "./api-fixtures";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
   console.log(`  ${cond ? "✓" : "✗"} ${label}${extra ? ` — ${extra}` : ""}`);
   if (!cond) failures++;
 }
-
-const FIXTURES: Record<string, string> = {
-  rescuetime: "samples/rescuetime-daily.json",
-  gcal: "samples/gcal-events.json",
-  spotify: "samples/spotify-recent.json",
-  oura: "samples/oura-readiness.json",
-  fitbit: "samples/fitbit-steps.json",
-  strava: "samples/strava-activities.json",
-  lastfm: "samples/lastfm-recent.json",
-  toggl: "samples/toggl-entries.json",
-  todoist: "samples/todoist-completed.json",
-  trakt: "samples/trakt-history.json",
-  notion: "samples/notion-search.json",
-};
 
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-integ-"));
@@ -66,12 +53,12 @@ async function main() {
   writeGithubRecord(recordDir, ghDays);
   check("GitHub commits written to record/daily/github.csv", fs.existsSync(path.join(recordDir, "daily", "github.csv")));
 
-  // The three single-credential plugins through the real import pipeline.
+  // Every single-credential plugin through the real import pipeline.
   for (const plugin of PLUGINS) {
     const body = JSON.parse(fs.readFileSync(path.resolve(FIXTURES[plugin.id]), "utf8"));
     const summary = await importPlugin(
       plugin,
-      { from, to, fetchImpl: fixtureFetch(body) },
+      { from, to, credential: CRED[plugin.id], fetchImpl: fetchForFixture(plugin.id, body) },
       recordDir,
     );
     check(

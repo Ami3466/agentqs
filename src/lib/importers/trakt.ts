@@ -47,6 +47,15 @@ export const traktPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "client id + access token",
   credentialPlaceholder: "<client_id>:<access_token>",
+  credentialHelp: {
+    url: "https://trakt.tv/oauth/applications",
+    steps: [
+      "Create an API app; set the redirect URI to urn:ietf:wg:oauth:2.0:oob.",
+      "Open the app page and use \"Authorize\" to approve it — Trakt shows a PIN/code.",
+      "Exchange the code for an access token (the app page's token helper, or the Trakt docs' /oauth/token call).",
+      "Paste client_id:access_token here.",
+    ],
+  },
   envKey: "TRAKT_TOKEN",
   primaryMetric: "plays",
   unit: "plays",

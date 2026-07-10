@@ -9,7 +9,7 @@ import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, cn, Input, TabBar } from "@/components/ui";
-import { type Interval, type SourceView } from "@/lib/sources";
+import { jobActive, type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
 
@@ -40,7 +40,7 @@ type ChromeImporterStatus = {
 };
 
 /**
- * The Data-tab Sources card. One fetcher/persister of /api/sources, split into two
+ * The Pipeline-tab Sources card. One fetcher/persister of /api/sources, split into two
  * tabs by acquisition path:
  *   • Connections       — API integrations, connected or not.
  *   • Automated imports — everything the server ingests without an API key: the
@@ -67,6 +67,7 @@ export function SourcesPanel({
   const [chromeStatusError, setChromeStatusError] = useState("");
   const [sourceError, setSourceError] = useState("");
   const [autoMsg, setAutoMsg] = useState("");
+  const [autoFailed, setAutoFailed] = useState(false);
   const [syncing, setSyncing] = useState(false);
   // Extra-account rows being set up (instance ids like "spotify-2") — ephemeral
   // until a credential is saved, then /api/sources owns them.
@@ -132,6 +133,8 @@ export function SourcesPanel({
 
   // Load on mount + whenever the shared version bumps. The first load also fires
   // lazy-sync-on-open for any due api source (guarded so it runs exactly once).
+  // The POSTs return immediately (202 — the syncs run as background jobs on the
+  // server); the job poller below tracks them to completion.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -141,7 +144,7 @@ export function SourcesPanel({
       const due = (list ?? []).filter((s) => s.due && s.syncEndpoint);
       if (!due.length) return;
       setSyncing(true);
-      setAutoMsg(`Auto-syncing ${due.map((d) => d.name).join(", ")}…`);
+      setAutoMsg(`Syncing ${due.map((d) => d.name).join(", ")} in the background…`);
       await Promise.all(
         due.map((s) =>
           fetch(s.syncEndpoint as string, {
@@ -152,16 +155,49 @@ export function SourcesPanel({
         ),
       );
       if (cancelled) return;
-      setSyncing(false);
-      setAutoMsg(`Auto-synced ${due.map((d) => d.name).join(", ")} on open.`);
-      onChanged(); // bump → downstream refetch (version effect)
-      window.setTimeout(() => setAutoMsg(""), 6000);
+      await load(); // pick up the queued jobs → the poller takes over
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
+
+  // Background-job poller: while any source has a queued/running sync job,
+  // refetch every 2s so the rows' progress bars advance — server state, so a
+  // reload resumes exactly where the import is. On the active→idle transition,
+  // announce the outcome (failures BY NAME — they also persist per row) and
+  // bump the shared version so downstream panels pick up the landed data.
+  const activeJobs = (sources ?? []).filter((s) => jobActive(s.job));
+  const anyJobActive = activeJobs.length > 0;
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (!anyJobActive) return;
+    setSyncing(true);
+    setAutoMsg(`Syncing ${activeJobs.map((s) => s.name).join(", ")} in the background…`);
+    const t = window.setInterval(() => void load(), 2000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyJobActive, activeJobs.map((s) => s.id).join(",")]);
+  useEffect(() => {
+    if (wasActive.current && !anyJobActive) {
+      setSyncing(false);
+      const failed = (sources ?? []).filter((s) => s.job?.status === "error");
+      setAutoFailed(failed.length > 0);
+      setAutoMsg(
+        failed.length
+          ? `Sync failed for ${failed.map((s) => s.name).join(", ")} — see the row for the reason.`
+          : "Background sync finished.",
+      );
+      onChanged(); // bump → downstream refetch (version effect)
+      window.setTimeout(() => {
+        setAutoMsg("");
+        setAutoFailed(false);
+      }, 8000);
+    }
+    wasActive.current = anyJobActive;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyJobActive]);
 
   async function changeInterval(id: string, interval: Interval) {
     setSavingId(id);
@@ -218,7 +254,10 @@ export function SourcesPanel({
     .sort((a, b) => a.name.localeCompare(b.name));
   const list = tab === "automated" ? automations : connections;
   const googleImportsLanded = (chromeStatus?.imports ?? []).filter((item) => item.status.exists).length;
-  const automatedCount = automations.filter((s) => s.connected).length + googleImportsLanded + importedData.length;
+  // The badge counts ACTIVE automated pipelines (recorded automations + landed
+  // Google-extension imports). Manual file/archive imports live in the Imported
+  // data group on this tab but are not automated — never count them here.
+  const automatedCount = automations.filter((s) => s.connected).length + googleImportsLanded;
 
   // Multi-account: a connected plugin source can be connected AGAIN under a new
   // instance id ("spotify-2"). Ephemeral rows live here until the credential is
@@ -260,6 +299,9 @@ export function SourcesPanel({
         />
       );
     }
+    // `job` threads the panel's freshly polled background-job state into the row
+    // (live progress bar); `onSyncStarted` makes a row-initiated sync visible to
+    // the poller right away.
     if (s.id === "github") {
       return (
         <GithubConnect
@@ -269,8 +311,10 @@ export function SourcesPanel({
           due={s.due}
           savingInterval={saving}
           removing={removing}
+          job={s.job ?? null}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
+          onSyncStarted={() => void load()}
         />
       );
     }
@@ -283,8 +327,10 @@ export function SourcesPanel({
           due={s.due}
           savingInterval={saving}
           removing={removing}
+          job={s.job ?? null}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
+          onSyncStarted={() => void load()}
         />
       );
     }
@@ -299,9 +345,10 @@ export function SourcesPanel({
           savingInterval={saving}
           removing={removing}
           credentialOrigin={s.credentialOrigin ?? null}
-          lastRunError={s.lastRunOk === false ? (s.lastRunError ?? "sync failed") : null}
+          job={s.job ?? null}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
+          onSyncStarted={() => void load()}
         />
       );
     }
@@ -332,8 +379,13 @@ export function SourcesPanel({
       </div>
 
       {autoMsg ? (
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-xs text-accent">
-          {syncing ? <Spinner width={13} height={13} /> : <Check width={13} height={13} />}
+        <div
+          className={cn(
+            "flex items-center gap-2 border-b border-border px-4 py-2.5 text-xs",
+            autoFailed ? "bg-destructive/5 text-destructive" : "text-accent",
+          )}
+        >
+          {syncing ? <Spinner width={13} height={13} /> : autoFailed ? <X width={13} height={13} /> : <Check width={13} height={13} />}
           {autoMsg}
         </div>
       ) : null}

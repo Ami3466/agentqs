@@ -513,8 +513,8 @@ export function Chat() {
       return;
     }
     if (cmd === "structure") {
-      push({ role: "note", text: "Structuring runs from the Data inbox — opening it." });
-      router.push("/data");
+      push({ role: "note", text: "Structuring runs from the Pipeline inbox — opening it." });
+      router.push("/pipeline");
       return;
     }
     if (cmd === "sync") {

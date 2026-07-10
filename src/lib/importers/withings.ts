@@ -67,6 +67,14 @@ export const withingsPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Withings access token",
   credentialPlaceholder: "Withings OAuth access token",
+  credentialHelp: {
+    url: "https://developer.withings.com",
+    steps: [
+      "Register a (free) app in the Withings developer portal.",
+      "Mint an access token via their OAuth flow (their docs' \"getting started\" walks it; scope user.metrics).",
+      "Paste it here. Withings tokens expire after ~3 hours — re-paste to sync again (their refresh flow is non-standard and not automated here yet).",
+    ],
+  },
   envKey: "WITHINGS_TOKEN",
   primaryMetric: "weight",
   unit: "kg",

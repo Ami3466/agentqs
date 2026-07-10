@@ -15,72 +15,15 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { importPlugin, fixtureFetch } from "../src/lib/importers/plugin";
+import { importPlugin } from "../src/lib/importers/plugin";
 import { PLUGINS } from "../src/lib/importers/registry";
 import { parseCsv } from "../src/lib/record";
+import { CRED, FIXTURES, fetchForFixture } from "./api-fixtures";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
   console.log(`  ${cond ? "✓" : "✗"} ${label}${extra ? ` — ${extra}` : ""}`);
   if (!cond) failures++;
-}
-
-const FIXTURES: Record<string, string> = {
-  rescuetime: "samples/rescuetime-daily.json",
-  gcal: "samples/gcal-events.json",
-  spotify: "samples/spotify-recent.json",
-  oura: "samples/oura-readiness.json",
-  fitbit: "samples/fitbit-steps.json",
-  strava: "samples/strava-activities.json",
-  lastfm: "samples/lastfm-recent.json",
-  toggl: "samples/toggl-entries.json",
-  todoist: "samples/todoist-completed.json",
-  trakt: "samples/trakt-history.json",
-  notion: "samples/notion-search.json",
-  deezer: "samples/deezer-history.json",
-  swarm: "samples/swarm-checkins.json",
-  mastodon: "samples/mastodon-statuses.json",
-  withings: "samples/withings-measures.json",
-  granola: "samples/granola-documents.json",
-};
-
-// Split-credential sources take "<a>:<b>" in the single credential slot.
-const CRED: Record<string, string> = {
-  lastfm: "APIKEY:testuser",
-  trakt: "CLIENTID:ACCESSTOKEN",
-  mastodon: "mastodon.example:ACCESSTOKEN",
-  granola: "test-refresh-token",
-};
-
-/** Multi-request sources need a fixture keyed by endpoint — and, for the
- *  per-document ones, by the `document_id` the plugin posts. */
-type Fixture = Record<string, unknown>;
-type Router = (href: string, body: Fixture, req: Fixture) => unknown;
-
-const MULTI: Record<string, Router> = {
-  mastodon: (href, body) => (href.includes("/verify_credentials") ? { id: "42" } : body),
-  granola: (href, body, req) => {
-    const byDoc = (key: string) =>
-      (body[key] as Record<string, unknown>)[String(req.document_id)] ?? [];
-    if (href.includes("refresh-access-token")) return body.refresh;
-    if (href.includes("get-documents")) return body.documents;
-    if (href.includes("get-document-panels")) return byDoc("panels");
-    if (href.includes("get-document-transcript")) return byDoc("transcript");
-    return {};
-  },
-};
-
-function fetchForFixture(pluginId: string, body: unknown) {
-  const route = MULTI[pluginId];
-  if (!route) return fixtureFetch(body);
-  return (async (url: string | URL | Request, init?: RequestInit) => {
-    const req = init?.body ? (JSON.parse(String(init.body)) as Fixture) : {};
-    const payload = route(String(url), body as Fixture, req);
-    return new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
 }
 
 async function main() {
@@ -117,6 +60,19 @@ async function main() {
     check(`${plugin.name}: ${plugin.primaryMetric} has real numbers`,
       summary.rows > 0 && withMetric.length > 0,
       `${withMetric.length} days, latest ${plugin.primaryMetric}=${withMetric.at(-1)?.[mi]}`);
+
+    // The bug that hid "today": the summary feed only carries COMPLETED days, so
+    // hours must come from the data API — assert the interval-only day (no pulse
+    // yet) still landed its hours.
+    if (plugin.id === "rescuetime") {
+      const hi = header.indexOf("total_hours");
+      const today = rows.find((r) => r[header.indexOf("date")] === "2026-06-08");
+      check("RescueTime: an in-progress day (no pulse yet) lands its hours",
+        Boolean(today) && Number(today?.[hi]) === 6,
+        `total_hours=${today?.[hi] ?? "missing"}`);
+      check("RescueTime: the in-progress day has no fake pulse",
+        (today?.[mi] ?? "") === "");
+    }
 
     // A rich source (Granola) also lands prose the search index can reach and one
     // event per item on the journal timeline. Both go through importPlugin, so the

@@ -50,6 +50,13 @@ export const deezerPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Deezer access token",
   credentialPlaceholder: "your Deezer OAuth access token",
+  credentialHelp: {
+    url: "https://developers.deezer.com",
+    steps: [
+      "Deezer stopped accepting NEW app registrations — this only works with an existing Deezer API app.",
+      "With an existing app, mint a token via their OAuth flow (scope listening_history) and paste it here.",
+    ],
+  },
   envKey: "DEEZER_TOKEN",
   primaryMetric: "plays",
   unit: "plays",

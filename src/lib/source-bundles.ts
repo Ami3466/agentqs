@@ -26,7 +26,7 @@ export const SOURCE_BUNDLES: SourceBundle[] = [
   {
     // Google archive imports (Takeout / Timeline export / lifetime scripts).
     // The Chrome-extension scrape sources (GOOGLE_PRESET_DAILY_SOURCES) are NOT
-    // part of this bundle — the Data tab's Google card manages those per preset.
+    // part of this bundle — the Pipeline tab's Google card manages those per preset.
     id: "google_takeout",
     name: "Google archive",
     detail: "Google Takeout / archive imports",

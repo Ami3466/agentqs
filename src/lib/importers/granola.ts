@@ -134,6 +134,13 @@ export const granolaPlugin: ImporterPlugin = {
   requiresCredential: false,
   credentialLabel: "Granola refresh token",
   credentialPlaceholder: "auto-detected from the Granola desktop app",
+  credentialHelp: {
+    url: "https://granola.ai",
+    steps: [
+      "Install the Granola desktop app on this machine and sign in.",
+      "agentqs detects the login — press \"Connect (use detected app)\" to import it as a saved credential.",
+    ],
+  },
   envKey: "GRANOLA_REFRESH_TOKEN",
   primaryMetric: "meetings",
   unit: "meetings",

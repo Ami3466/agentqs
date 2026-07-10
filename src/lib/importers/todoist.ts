@@ -48,6 +48,13 @@ export const todoistPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Todoist API token",
   credentialPlaceholder: "your Todoist API token",
+  credentialHelp: {
+    url: "https://app.todoist.com/app/settings/integrations/developer",
+    steps: [
+      "Open Todoist Settings → Integrations → Developer.",
+      "Copy the API token and paste it here.",
+    ],
+  },
   envKey: "TODOIST_TOKEN",
   primaryMetric: "completed",
   unit: "tasks",

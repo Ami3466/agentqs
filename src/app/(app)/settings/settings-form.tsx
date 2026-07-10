@@ -32,7 +32,7 @@ import {
   Wand,
 } from "@/components/icons";
 import { CRON_CMD, CliRow, CopyRow, KeyRow, PH, SYNC_CMD, fixPromptSnip, mcpSnip, skillSnip } from "@/components/connect-api";
-import { Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { SKILLS, type Skill } from "@/lib/skills";
 import type { ChannelReplyPrefs, PublicConfig } from "@/lib/config";
@@ -218,6 +218,8 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [autoStructure, setAutoStructure] = useState(config.autoStructure);
   const [recordInAppRepo, setRecordInAppRepo] = useState(config.recordInAppRepo);
   const [recordPrivateConfirmed, setRecordPrivateConfirmed] = useState(config.recordInAppRepo);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateMsg, setMigrateMsg] = useState("");
   const [voiceProvider, setVoiceProvider] = useState(config.voice.provider);
   const [voiceKey, setVoiceKey] = useState("");
   const [voiceProviderId, setVoiceProviderId] = useState(config.voice.providerId);
@@ -915,24 +917,73 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
           Set with <code className="font-mono">AGENTQS_DATA_DIR</code> (a restart applies it). Keep the broader data
           directory out of git: it also holds config, model downloads, thumbnails, and rebuildable SQLite caches.
         </p>
+        <div className="mt-3 flex items-center gap-2">
+          <Badge
+            tone={config.store.safe ? "accent" : "warning"}
+            title={config.store.issues.join("\n") || "Outside every sync engine's domain."}
+          >
+            {config.store.safe ? (config.store.atDefault ? "Safe location" : "Safe") : "In a synced folder"}
+          </Badge>
+          {config.store.issues.length > 0 ? (
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-fg" title={config.store.issues.join("\n")}>
+              {config.store.issues[0]}
+            </span>
+          ) : null}
+          {!config.store.atDefault ? (
+            <Button
+              variant="ghost"
+              className="shrink-0"
+              title={`Copy the whole store to ${config.store.safeDir}, verify every file, retire the old copy and re-point schedulers. Restart the app afterwards.`}
+              disabled={migrating}
+              onClick={async () => {
+                if (!window.confirm(`Move the store to ${config.store.safeDir}? The app needs a restart afterwards.`)) return;
+                setMigrating(true);
+                setMigrateMsg("");
+                try {
+                  const res = await fetch("/api/store/migrate", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+                  const r = await res.json();
+                  setMigrateMsg(res.ok ? `Moved ${r.files} files to ${r.to} — restart the app to finish.` : r.error || "Migration failed.");
+                } catch {
+                  setMigrateMsg("Migration failed — run `agentqs migrate-store` in a terminal.");
+                } finally {
+                  setMigrating(false);
+                }
+              }}
+            >
+              {migrating ? <Spinner width={13} height={13} /> : null} Move to safe location
+            </Button>
+          ) : null}
+        </div>
+        {migrateMsg ? <p className="mt-2 text-xs text-muted-fg">{migrateMsg}</p> : null}
         <div className="mt-4 border-t border-border pt-4">
-          <Checkbox
-            label="Allow this repo to track data/record"
-            hint="Only enable this if this GitHub repository is private. When off, /data stays ignored and accidental pushes will not include your record."
-            checked={recordInAppRepo}
-            onChange={(checked) => {
-              if (!checked) {
-                setRecordInAppRepo(false);
-                setRecordPrivateConfirmed(false);
-                return;
-              }
-              const ok = window.confirm(
-                "Warning: data/record contains your personal journal record. Only enable this if this GitHub repository is private. If this repo is public, your data can be pushed publicly. Continue?",
-              );
-              setRecordInAppRepo(ok);
-              setRecordPrivateConfirmed(ok);
-            }}
-          />
+          {config.recordInAppRepoApplicable ? (
+            <Checkbox
+              label="Allow this repo to track data/record"
+              hint="Only enable this if this GitHub repository is private. When off, /data stays ignored and accidental pushes will not include your record."
+              checked={recordInAppRepo}
+              onChange={(checked) => {
+                if (!checked) {
+                  setRecordInAppRepo(false);
+                  setRecordPrivateConfirmed(false);
+                  return;
+                }
+                const ok = window.confirm(
+                  "Warning: data/record contains your personal journal record. Only enable this if this GitHub repository is private. If this repo is public, your data can be pushed publicly. Continue?",
+                );
+                setRecordInAppRepo(ok);
+                setRecordPrivateConfirmed(ok);
+              }}
+            />
+          ) : (
+            <>
+              <Field label="Back up the record to GitHub" hint="The record is its own git repo — push it to a PRIVATE repo, or skip this and it stays local.">
+                <CliRow
+                  code={`cd '${config.recordDir}' && git remote add origin <your-private-repo> && git push -u origin main`}
+                  title="The record folder is already a git repository with local history."
+                />
+              </Field>
+            </>
+          )}
         </div>
       </Section>
 
@@ -1048,7 +1099,10 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "GET", path: "/api/log", desc: "Captured log items; POST /api/log/reject {\"id\":\"…\"} undoes an import." },
   { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; DELETE disconnects." },
   { method: "GET", path: "/api/pipeline", desc: "Pipeline truth table: per-source origin, credential provenance, schedule, last run outcome, coverage." },
-  { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source with its service key and run a sync (github, whoop, notion, …)." },
+  { method: "GET", path: "/api/doctor", desc: "Store health: sync-engine exposure (iCloud/Dropbox/OneDrive), evicted files, conflict twins, split stores." },
+  { method: "POST", path: "/api/store/migrate", body: `{"dryRun":true}`, desc: "Move the store to the sync-safe app-data dir (hash-verified; restart after). Omit dryRun to migrate." },
+  { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source: the key is TESTED against the real API first (only a working key is saved), then the sync runs as a background job (202 + job) that survives page reloads — poll GET /api/import/{source} for its phase/progress. Pass {\"test\": true} to probe a credential without saving anything." },
+  { method: "POST", path: "/api/oauth/{source}", body: `{"clientId":"…","clientSecret":"…"}`, desc: "Start the OAuth dance for an expiring-token source (spotify, gcal, fitbit, strava): saves your provider app's credentials and returns the authorize URL. The provider redirects to GET /api/oauth/callback, which stores the tokens; syncs then refresh them automatically. GET /api/import/{source} carries each source's credentialHelp guide + oauth state." },
   { method: "GET", path: "/api/automations", desc: "Browser-import recipes. POST saves one; POST /api/automations/run replays it; DELETE removes it." },
   { method: "GET", path: "/api/skills", desc: "Mentor skills. POST adds or edits one; DELETE removes it." },
   { method: "GET", path: "/api/graphs", desc: "Saved graph definitions. POST replaces the saved set." },
@@ -1454,7 +1508,7 @@ function ChannelCard({
           </div>
         ) : (
           <p className="mt-2 text-xs text-muted-fg">
-            Every message lands in your inbox as a memo — structure it later from the Data tab.
+            Every message lands in your inbox as a memo — structure it later from the Pipeline tab.
           </p>
         )}
       </div>

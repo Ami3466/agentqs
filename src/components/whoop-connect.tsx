@@ -4,16 +4,18 @@ import { useEffect, useState } from "react";
 import { Check, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
-import { Button, Input, cn } from "@/components/ui";
-import { type Interval } from "@/lib/sources";
+import { SyncStatus } from "@/components/sync-status";
+import { Button, Input } from "@/components/ui";
+import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
 
 /**
  * WHOOP connect/sync row — the differentiator, wired to the UNOFFICIAL app login.
  * Two fields (email + password), not a single token: they POST to /api/import/whoop
- * which exchanges them for a bearer token the WHOOP app way, then pulls per-minute
- * heart rate + HRV + recovery + sleep + strain. Bespoke (like GitHub) because that
- * two-field auth + the minute-level stream don't fit the single-credential
- * SourceConnect. Recovery drives the sparkline; the captured minute count is shown.
+ * which LOGS IN first (a bad password fails right here, nothing stored) and then
+ * pulls per-minute heart rate + HRV + recovery + sleep + strain as a background
+ * job — the row shows the job's live progress and it survives page refreshes.
+ * Bespoke (like GitHub) because that two-field auth + the minute-level stream
+ * don't fit the single-credential SourceConnect. Recovery drives the sparkline.
  */
 
 interface Point {
@@ -25,6 +27,8 @@ interface Status {
   email: string;
   hasCredential: boolean;
   syncedAt: string | null;
+  job: SourceJobView | null;
+  lastRun: { at: string; ok: boolean; error?: string } | null;
   days: number;
   latest: number | null;
   average: number | null;
@@ -37,24 +41,29 @@ export function WhoopConnect({
   interval = "off",
   savingInterval = false,
   removing = false,
+  job = null,
   onIntervalChange,
   onRemove,
+  onSyncStarted,
 }: {
   version?: number;
   interval?: Interval;
   due?: boolean;
   savingInterval?: boolean;
   removing?: boolean;
+  /** Live/last background job — the panel polls /api/sources and threads it here. */
+  job?: SourceJobView | null;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
+  /** A sync job was just enqueued — the panel starts polling. */
+  onSyncStarted?: () => void;
 } = {}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false); // the POST round-trip (login test)
   const [error, setError] = useState("");
   const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
 
@@ -67,35 +76,45 @@ export function WhoopConnect({
     void loadStatus();
   }, [version]);
 
+  const liveJob = job ?? status?.job ?? null;
+  const syncing = jobActive(liveJob);
+
   async function sync(withCreds: boolean) {
     const wasConnected = Boolean(status?.connected);
     setBusy(true);
     setError("");
-    setMsg("");
-    const res = await fetch("/api/import/whoop", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(withCreds ? { email, password } : {}),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/import/whoop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(withCreds ? { email, password } : {}),
+      });
+    } catch (e) {
+      setBusy(false);
+      setError((e as Error).message || "Could not reach the app.");
+      return;
+    }
     setBusy(false);
-    const data = await res.json().catch(() => ({}));
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
+      // A bad login fails HERE (tested against the real WHOOP auth) — nothing stored.
       setError(data.error || "Sync failed.");
       return;
     }
     setPassword("");
     setOpen(false);
-    setMsg(
-      `${data.days} day${data.days === 1 ? "" : "s"} · ${data.minutes.toLocaleString()} minute HR samples → ${data.dailyRows} daily rows.`,
-    );
+    // Connected the moment the TESTED login is stored — persist the cadence
+    // chosen in the connect form; the sync continues as a background job.
     if (!wasConnected) onIntervalChange?.(pendingInterval);
     await loadStatus();
-    setTimeout(() => setMsg(""), 6000);
+    onSyncStarted?.();
   }
 
   const Icon = sourceIcon("whoop");
   const connected = status?.connected;
   const canSyncNow = Boolean(status?.hasCredential);
+  const working = busy || syncing;
 
   return (
     <div className="p-4">
@@ -105,7 +124,7 @@ export function WhoopConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">WHOOP</p>
+            <p className="truncate text-sm font-medium text-fg" title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row">WHOOP (per-minute, unofficial)</p>
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
         </div>
@@ -118,16 +137,16 @@ export function WhoopConnect({
           ) : null}
           {connected ? (
             <>
-              <Button size="sm" variant="secondary" onClick={() => void sync(false)} disabled={busy}>
-                {busy ? <Spinner width={14} height={14} /> : null}
-                {busy ? "Syncing…" : "Sync"}
+              <Button size="sm" variant="secondary" onClick={() => void sync(false)} disabled={working}>
+                {working ? <Spinner width={14} height={14} /> : null}
+                {syncing ? "Syncing…" : busy ? "Starting…" : "Sync"}
               </Button>
               {onRemove ? (
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={onRemove}
-                  disabled={removing}
+                  disabled={removing || syncing}
                   title="Remove this automated import"
                 >
                   {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
@@ -140,10 +159,10 @@ export function WhoopConnect({
               size="sm"
               variant="primary"
               onClick={() => (canSyncNow ? void sync(false) : setOpen((v) => !v))}
-              disabled={busy}
+              disabled={working}
             >
-              {busy ? <Spinner width={14} height={14} /> : null}
-              {busy ? "Syncing…" : canSyncNow ? "Sync" : "Connect"}
+              {working ? <Spinner width={14} height={14} /> : null}
+              {syncing ? "Syncing…" : busy ? "Connecting…" : canSyncNow ? "Sync" : "Connect"}
             </Button>
           )}
         </div>
@@ -192,20 +211,26 @@ export function WhoopConnect({
               size="md"
               variant="primary"
               onClick={() => void sync(true)}
-              disabled={busy || !email || !password}
+              disabled={working || !email || !password}
+              title="Logs in to WHOOP first — only a working login is saved"
             >
               {busy ? <Spinner width={16} height={16} /> : null}
-              {busy ? "Connecting…" : "Connect & sync"}
+              {busy ? "Testing login…" : "Connect & sync"}
             </Button>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-fg">Auto-sync</span>
-            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
+            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={working} />
           </div>
         </div>
       ) : null}
 
-      {msg ? <p className={cn("mt-2 pl-12 text-xs text-accent")}>{msg}</p> : null}
+      <SyncStatus
+        job={liveJob}
+        lastRunError={status?.lastRun && !status.lastRun.ok ? (status.lastRun.error ?? "sync failed") : null}
+        className="mt-2 pl-12"
+        onFinished={() => void loadStatus()}
+      />
       {error ? <p className="mt-2 pl-12 text-xs text-destructive">{error}</p> : null}
     </div>
   );

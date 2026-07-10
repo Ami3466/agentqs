@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Photos under the Data tab. All local — EXIF + thumbnails + CLIP embedding run on the
+ * Photos under the Pipeline tab. All local — EXIF + thumbnails + CLIP embedding run on the
  * machine; the ORIGINALS never leave it (only metadata is recorded). GET reports the
  * status the panel shows; POST imports a folder (or the Mac Photos library).
  */

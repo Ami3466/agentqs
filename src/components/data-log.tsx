@@ -43,7 +43,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * The Data-tab Log: every capture that entered the record (drops, memos,
+ * The Pipeline-tab Log: every capture that entered the record (drops, memos,
  * photos), newest first. A row expands to the raw capture + what Structure made
  * of it, with two actions: Reject (undoes the cells it wrote, marks it
  * discarded) and Ask AI (tags the item into Chat to review / improve it).

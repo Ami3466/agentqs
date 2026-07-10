@@ -33,9 +33,9 @@ function runTour() {
         },
       },
       {
-        element: "#tour-tab-data",
+        element: "#tour-tab-pipeline",
         popover: {
-          title: "Data",
+          title: "Pipeline",
           description: "Drop a file or connect a live source. It syncs into one daily record.",
         },
       },

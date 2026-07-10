@@ -30,15 +30,25 @@ import {
 import { readJournal } from "./journal";
 import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
-import { importGithub, resolveGithubToken } from "./importers/github";
-import { importWhoop, whoopFixtureFetch, whoopHrDir, type WhoopCreds } from "./importers/whoop";
-import { importPlugin, resolveCredential, resolveCredentialWithOrigin, resolveSyncCredential, windowDays, type FetchLike } from "./importers/plugin";
+import { importGithub, resolveGithubToken, resolveLogin } from "./importers/github";
+import { ensureSession, importWhoop, whoopFixtureFetch, whoopHrDir, type WhoopCreds } from "./importers/whoop";
+import {
+  importPlugin,
+  resolveCredential,
+  resolveCredentialWithOrigin,
+  resolveSyncCredential,
+  windowDays,
+  type FetchLike,
+} from "./importers/plugin";
+import type { JobProgress } from "./sync-jobs";
+import { freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
 import { recordSyncRun } from "./sync-runs";
 import { pipelineReport } from "./pipeline";
+import { doctorReport, migrateStore } from "./store-doctor";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, structurePending } from "./structure-run";
 import {
@@ -230,6 +240,16 @@ export function pipeline() {
   return pipelineReport();
 }
 
+/** Store health: sync-engine domain, evicted files, conflict twins, split store. */
+export function doctor() {
+  return doctorReport();
+}
+
+/** Move the store to a sync-safe location (default: the platform app-data dir). */
+export function storeMigrate(opts: { to?: string; dryRun?: boolean } = {}) {
+  return migrateStore(opts);
+}
+
 /** Save an API source's credential (Tier-1 plugin). This is "connect a source".
  *  An instance id ("spotify-2") connects an EXTRA account of the same source. */
 export function connectSource(id: string, credential: string): { id: string; saved: boolean } {
@@ -247,6 +267,116 @@ export function connectSource(id: string, credential: string): { id: string; sav
   }
   writeConfig(cfg);
   return { id, saved: true };
+}
+
+export interface CredentialTest {
+  id: string;
+  name: string;
+  ok: true;
+  detail: string; // what the probe proved ("3 days reachable", "@login")
+}
+
+/**
+ * Prove a credential actually works BEFORE it is saved — one cheap authenticated
+ * request against the real API, nothing written. Every connect flow (UI, CLI,
+ * MCP) runs this first so a typo'd key fails loudly at paste time instead of
+ * silently on the next scheduled sync. Throws with the API's own error.
+ */
+export async function testSourceCredential(id: string, credential?: string): Promise<CredentialTest> {
+  if (id === "github") {
+    const token = resolveGithubToken(credential);
+    if (!token) throw new Error("GitHub needs a token — pass one or set GITHUB_TOKEN.");
+    const login = await resolveLogin(token);
+    return { id, name: "GitHub", ok: true, detail: `authenticated as @${login}` };
+  }
+  if (id === "whoop") {
+    const wc = readConfig()?.whoopCreds;
+    if (!wc?.email || !(wc.password || wc.refreshToken)) {
+      throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
+    }
+    await ensureSession(wc);
+    return { id, name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${wc.email}` };
+  }
+  const inst = pluginInstanceById(id);
+  if (!inst) {
+    throw new Error(`Unknown API source "${id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
+  }
+  const { plugin, instanceId } = inst;
+  // Include a DETECTED desktop-app token: testing is read-only, so probing it
+  // before the user opts in is fine — syncing with it still requires connect.
+  // An OAuth grant tests with a freshly minted token, like a real sync would.
+  const cfg = readConfig();
+  const cred = credential?.trim()
+    ? credential.trim()
+    : cfg?.sourceOAuth?.[instanceId]
+      ? await freshOAuthToken(instanceId, cfg)
+      : resolveCredential(plugin, undefined, cfg, instanceId);
+  if (plugin.requiresCredential && !cred) {
+    throw new Error(`${plugin.name} needs a ${plugin.credentialLabel} to test.`);
+  }
+  const win = windowDays(3);
+  const result = await plugin.fetch({ credential: cred, from: win.from, to: win.to });
+  return {
+    id: instanceId,
+    name: plugin.name,
+    ok: true,
+    detail: `${result.table.rows.length} day(s) reachable in the last 3`,
+  };
+}
+
+export interface SourceGuide {
+  id: string;
+  name: string;
+  credentialLabel: string;
+  url: string | null; // where to start (dashboard / token page)
+  steps: string[];
+  /** true → expiring tokens; connect runs the OAuth dance in the web app
+   *  (Pipeline → Connect), which shows the redirect URI to register. */
+  oauth: boolean;
+  redirectUriHint: string; // what the provider app must have registered
+}
+
+/** How to connect a source — the guide behind every connect form, `agentqs
+ *  source guide <id>` and the source_guide MCP tool. Covers the bespoke rows
+ *  (GitHub, WHOOP) too, so no credentialed source is guide-less. */
+export function sourceGuide(id: string): SourceGuide {
+  const redirectUriHint = oauthRedirectUri("http://127.0.0.1:<port>");
+  if (id === "github") {
+    return {
+      id, name: "GitHub", credentialLabel: "personal access token",
+      url: "https://github.com/settings/tokens",
+      steps: [
+        "Create a token (classic with repo scope, or fine-grained with repository read access).",
+        "Paste it in the GitHub row — or set GITHUB_TOKEN.",
+      ],
+      oauth: false, redirectUriHint,
+    };
+  }
+  if (id === "whoop") {
+    return {
+      id, name: "WHOOP", credentialLabel: "email + password",
+      url: null,
+      steps: [
+        "WHOOP connects via the unofficial app login: your account email + password.",
+        "Run 'agentqs whoop connect <email> <password>' or use the WHOOP row — tokens are minted and rotated on sync.",
+      ],
+      oauth: false, redirectUriHint,
+    };
+  }
+  const inst = pluginInstanceById(id);
+  if (!inst) {
+    throw new Error(`Unknown API source "${id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
+  }
+  const { plugin, instanceId } = inst;
+  return {
+    id: instanceId,
+    name: plugin.name,
+    credentialLabel: plugin.credentialLabel,
+    url: plugin.credentialHelp?.url ?? null,
+    steps: plugin.credentialHelp?.steps ?? [`Paste a ${plugin.credentialLabel}.`],
+    oauth: Boolean(plugin.oauth),
+    redirectUriHint,
+  };
 }
 
 /** Import a DETECTED desktop app's login as this source's saved credential —
@@ -309,6 +439,7 @@ function graphKeyReferencesSource(key: string, id: string): boolean {
 
 function forgetSourceConfig(cfg: AppConfig, id: string): void {
   if (cfg.sourceCreds) delete cfg.sourceCreds[id];
+  if (cfg.sourceOAuth) delete cfg.sourceOAuth[id]; // an OAuth grant is a stored credential too
   if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
   if (cfg.sourceIntervals) delete cfg.sourceIntervals[id];
   if (cfg.savedGraphs) {
@@ -434,16 +565,22 @@ export interface SyncResult {
   syncedAt: string;
 }
 
-/** Run one API source now: fetch → merge → rebuild, persisting the sync time.
- *  `fixture` (a JSON file) drives it offline for GitHub-style ships-when tests. */
-export async function syncSource(opts: {
+export interface SyncSourceOpts {
   id: string;
   credential?: string;
   days?: number;
   fixture?: string;
-}): Promise<SyncResult> {
+  login?: string; // github only — public commit sync without a token
+  hrDays?: number; // whoop only — per-minute HR backfill window
+  /** Live phase/percent reporting for the background job bar; optional. */
+  onProgress?: JobProgress;
+}
+
+/** Run one API source now: fetch → merge → rebuild, persisting the sync time.
+ *  `fixture` (a JSON file) drives it offline for GitHub-style ships-when tests. */
+export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
   // Every attempt lands in the run ledger — success and failure — so the
-  // pipeline report and the Data tab can tell a broken sync from a healthy one.
+  // pipeline report and the Pipeline tab can tell a broken sync from a healthy one.
   try {
     const result = await syncSourceInner(opts);
     recordSyncRun(opts.id, true);
@@ -454,23 +591,24 @@ export async function syncSource(opts: {
   }
 }
 
-async function syncSourceInner(opts: {
-  id: string;
-  credential?: string;
-  days?: number;
-  fixture?: string;
-}): Promise<SyncResult> {
+async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
   const rDir = recordDir();
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
   const cfg = readConfig();
   const now = new Date().toISOString();
+  const progress: JobProgress = opts.onProgress ?? (() => {});
 
   if (opts.id === "github") {
     const token = resolveGithubToken(opts.credential);
     const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
-    if (!token && !fetchImpl) throw new Error("GitHub needs a token — pass --credential or set GITHUB_TOKEN.");
-    const s = await importGithub({ token, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    if (!token && !fetchImpl && !opts.login) {
+      throw new Error("GitHub needs a token — pass --credential or set GITHUB_TOKEN.");
+    }
+    progress("fetching commits from GitHub", 15);
+    const s = await importGithub({ token, login: opts.login, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    progress("merging into the record", 75);
     applySavedMerges(rDir); // keep accepted column merges merged on every sync
+    progress("rebuilding the cache", 88);
     const dailyRows = rebuild({ recordDir: rDir }).daily;
     persistSync("github", opts.credential, now);
     return {
@@ -491,8 +629,18 @@ async function syncSourceInner(opts: {
     if (!fetchImpl && !(creds?.email && (creds.password || creds.refreshToken))) {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
-    const s = await importWhoop({ creds: creds!, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    progress("pulling WHOOP days + per-minute heart rate", 15);
+    const s = await importWhoop({
+      creds: creds!,
+      from: win.from,
+      to: win.to,
+      recordDir: rDir,
+      fetchImpl,
+      hrDays: opts.hrDays && opts.hrDays > 0 ? opts.hrDays : undefined,
+    });
+    progress("merging into the record", 75);
     applySavedMerges(rDir);
+    progress("rebuilding the cache", 88);
     const dailyRows = rebuild({ recordDir: rDir }).daily;
     const c2 = readConfig();
     if (c2) {
@@ -501,7 +649,7 @@ async function syncSourceInner(opts: {
       writeConfig(c2);
     }
     return {
-      id: "whoop", name: "WHOOP", from: win.from, to: win.to,
+      id: "whoop", name: "WHOOP (per-minute, unofficial)", from: win.from, to: win.to,
       days: s.daysWithData, metrics: s.metrics, cells: s.cells, dailyRows, syncedAt: now,
     };
   }
@@ -511,9 +659,13 @@ async function syncSourceInner(opts: {
     throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const { plugin, instanceId } = inst;
-  // Gated: a discovered desktop-app token only syncs after the user opted in.
-  const credential = resolveSyncCredential(plugin, opts.credential, cfg, instanceId);
   const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
+  // Gated: a discovered desktop-app token only syncs after the user opted in.
+  // An OAuth grant mints a FRESH access token here (refreshed + persisted), so
+  // expiring-token sources survive scheduled syncs. Fixtures stay offline.
+  const credential = fetchImpl
+    ? resolveSyncCredential(plugin, opts.credential, cfg, instanceId)
+    : await resolveSyncCredentialFresh(plugin, opts.credential, cfg, instanceId);
   if (plugin.requiresCredential && !credential && !fetchImpl) {
     const detected = Boolean(resolveCredential(plugin, undefined, cfg, instanceId));
     throw new Error(
@@ -522,8 +674,11 @@ async function syncSourceInner(opts: {
         : `${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${instanceId} <cred>'.`,
     );
   }
+  progress(`fetching your ${plugin.name} data`, 15);
   const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir, instanceId);
+  progress("merging into the record", 75);
   applySavedMerges(rDir);
+  progress("rebuilding the cache", 88);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   persistSync(instanceId, opts.credential, now);
   return {

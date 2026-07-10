@@ -5,7 +5,7 @@ import { cn } from "./ui";
 
 /**
  * A dependency-free sparkline drawn on the `--accent` token — reused everywhere a
- * number needs its shape over time (the Data-tab commit history, a grounded chat
+ * number needs its shape over time (the Pipeline-tab commit history, a grounded chat
  * reply). Two forms:
  *   - `bar`  — one bar per day, faded on zero days (commits/day style).
  *   - `line` — a smooth trend with a filled area + a dot on the latest point.

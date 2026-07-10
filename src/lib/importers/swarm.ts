@@ -50,6 +50,14 @@ export const swarmPlugin: ImporterPlugin = {
   requiresCredential: true,
   credentialLabel: "Foursquare access token",
   credentialPlaceholder: "your Foursquare OAuth token",
+  credentialHelp: {
+    url: "https://foursquare.com/developers/home",
+    steps: [
+      "Create a project/app in the Foursquare developer console and note its Client ID + Secret.",
+      "Run their OAuth flow once (foursquare.com/oauth2/authenticate → code → /oauth2/access_token, per their docs).",
+      "Paste the resulting user token here — Foursquare user tokens do not expire.",
+    ],
+  },
   envKey: "SWARM_TOKEN",
   primaryMetric: "checkins",
   unit: "check-ins",

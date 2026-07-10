@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { Check, Eye, EyeOff, GitHub, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
-import { Button, Input, cn } from "@/components/ui";
-import { type Interval } from "@/lib/sources";
+import { SyncStatus } from "@/components/sync-status";
+import { Button, Input } from "@/components/ui";
+import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
 
 interface Day {
   date: string;
@@ -15,6 +16,8 @@ interface Status {
   connected: boolean;
   hasToken: boolean;
   syncedAt: string | null;
+  job: SourceJobView | null;
+  lastRun: { at: string; ok: boolean; error?: string } | null;
   total: number;
   series: Day[];
 }
@@ -37,23 +40,28 @@ export function GithubConnect({
   interval = "off",
   savingInterval = false,
   removing = false,
+  job = null,
   onIntervalChange,
   onRemove,
+  onSyncStarted,
 }: {
   version?: number;
   interval?: Interval;
   due?: boolean;
   savingInterval?: boolean;
   removing?: boolean;
+  /** Live/last background job — the panel polls /api/sources and threads it here. */
+  job?: SourceJobView | null;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
+  /** A sync job was just enqueued — the panel starts polling. */
+  onSyncStarted?: () => void;
 } = {}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false); // the POST round-trip (token test)
   const [error, setError] = useState("");
   // Cadence the user picks AS PART OF connecting — defaults to Daily so a freshly
   // connected source actually auto-syncs (they can still choose Manual here).
@@ -70,36 +78,44 @@ export function GithubConnect({
     void loadStatus();
   }, [version]);
 
+  const liveJob = job ?? status?.job ?? null;
+  const syncing = jobActive(liveJob);
+
   async function sync() {
     const wasConnected = Boolean(status?.connected);
     setBusy(true);
     setError("");
-    setMsg("");
-    const res = await fetch("/api/import/github", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(token ? { token } : {}),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/import/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(token ? { token } : {}),
+      });
+    } catch (e) {
+      setBusy(false);
+      setError((e as Error).message || "Could not reach the app.");
+      return;
+    }
     setBusy(false);
-    const data = await res.json().catch(() => ({}));
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
+      // A bad token fails HERE (tested against the real API) — nothing saved.
       setError(data.error || "Sync failed.");
       return;
     }
     setToken("");
     setOpen(false);
-    setMsg(
-      `${data.commits} commits from @${data.login}${data.capped ? " (capped)" : ""} → ${data.dailyRows} daily rows.`,
-    );
-    // First-time connect → persist the cadence chosen in the connect form so the
-    // source starts on a schedule instead of silently defaulting to Manual.
+    // Connected the moment the TESTED token is stored — persist the cadence
+    // chosen in the connect form; the sync continues as a background job.
     if (!wasConnected) onIntervalChange?.(pendingInterval);
     await loadStatus();
-    setTimeout(() => setMsg(""), 6000);
+    onSyncStarted?.();
   }
 
   const connected = status?.connected;
   const canSyncNow = Boolean(status?.hasToken) || Boolean(token);
+  const working = busy || syncing;
 
   return (
     <div className="p-4">
@@ -122,16 +138,16 @@ export function GithubConnect({
           ) : null}
           {connected ? (
             <>
-              <Button size="sm" variant="secondary" onClick={sync} disabled={busy}>
-                {busy ? <Spinner width={14} height={14} /> : null}
-                {busy ? "Syncing…" : "Sync"}
+              <Button size="sm" variant="secondary" onClick={sync} disabled={working}>
+                {working ? <Spinner width={14} height={14} /> : null}
+                {syncing ? "Syncing…" : busy ? "Starting…" : "Sync"}
               </Button>
               {onRemove ? (
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={onRemove}
-                  disabled={removing}
+                  disabled={removing || syncing}
                   title="Remove this automated import"
                 >
                   {removing ? <Spinner width={14} height={14} /> : <Trash width={14} height={14} />}
@@ -144,10 +160,10 @@ export function GithubConnect({
               size="sm"
               variant="primary"
               onClick={() => (canSyncNow ? void sync() : setOpen((v) => !v))}
-              disabled={busy}
+              disabled={working}
             >
-              {busy ? <Spinner width={14} height={14} /> : null}
-              {busy ? "Syncing…" : canSyncNow ? "Sync" : "Connect"}
+              {working ? <Spinner width={14} height={14} /> : null}
+              {syncing ? "Syncing…" : busy ? "Testing token…" : canSyncNow ? "Sync" : "Connect"}
             </Button>
           )}
         </div>
@@ -180,21 +196,30 @@ export function GithubConnect({
                 {showToken ? <EyeOff width={16} height={16} /> : <Eye width={16} height={16} />}
               </button>
             </div>
-            <Button size="md" variant="primary" onClick={sync} disabled={busy || !token}>
+            <Button
+              size="md"
+              variant="primary"
+              onClick={sync}
+              disabled={working || !token}
+              title="Tests the token against the real API first — only a working token is saved"
+            >
               {busy ? <Spinner width={16} height={16} /> : null}
-              {busy ? "Syncing…" : "Connect & sync"}
+              {busy ? "Testing token…" : "Connect & sync"}
             </Button>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-fg">Auto-sync</span>
-            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={busy} />
+            <IntervalSelect value={pendingInterval} onChange={setPendingInterval} disabled={working} />
           </div>
         </div>
       ) : null}
 
-      {msg ? (
-        <p className={cn("mt-2 pl-12 text-xs text-accent")}>{msg}</p>
-      ) : null}
+      <SyncStatus
+        job={liveJob}
+        lastRunError={status?.lastRun && !status.lastRun.ok ? (status.lastRun.error ?? "sync failed") : null}
+        className="mt-2 pl-12"
+        onFinished={() => void loadStatus()}
+      />
       {error ? <p className="mt-2 pl-12 text-xs text-destructive">{error}</p> : null}
     </div>
   );

@@ -8,17 +8,13 @@ export type GoogleScrapePreset =
   | "google_activity_all"
   | "browser_history"
   | "google_search"
-  | "google_image_search"
-  | "google_video_search"
   | "google_maps"
   | "youtube_history"
   | "google_assistant"
-  | "google_play"
   | "google_news"
   | "google_chrome"
   | "google_shopping"
   | "google_translate"
-  | "google_discover"
   | "google_gemini"
   | "google_timeline";
 
@@ -59,7 +55,7 @@ export interface GooglePresetDef {
   dailySource: string;
   /** false → the extension reads the visible DOM instead of the My Activity RPC feed. */
   rpc: boolean;
-  /** Set when Google removed the page this preset scraped. The Data tab keeps
+  /** Set when Google removed the page this preset scraped. The Pipeline tab keeps
    *  showing landed data but renders this guidance INSTEAD of a dead Import
    *  button (clicking through to a page Google redirects away is not a UI). */
   retired?: string;
@@ -67,29 +63,27 @@ export interface GooglePresetDef {
 
 /**
  * THE canonical list of predone Google scraping presets. Every other surface —
- * the ingest/status API routes, the Data-tab "Automated imports" card, the
+ * the ingest/status API routes, the Pipeline-tab "Automated imports" card, the
  * Chrome extension (extensions/google-activity-exporter), and the source
  * bundles — derives from this list; add a preset here and it exists everywhere.
  * Keep extensions/google-activity-exporter/content.js IMPORTERS in sync (the
  * extension is plain JS and cannot import this module).
+ * Google 404s /product/{image_search,video_search,play,discover} (checked live
+ * 2026-07) — verify a product page actually renders before adding a preset.
  */
 export const GOOGLE_PRESETS: GooglePresetDef[] = [
   { id: "google_activity_all", label: "All Google activity", detail: "Every My Activity item across products (overlaps the per-product imports below)", url: "https://myactivity.google.com/myactivity?hl=en_GB", source: "google_activity_scrape", dailySource: "google_activity_scrape", rpc: true },
   { id: "browser_history", label: "Browser history", detail: "Pages you visited, from Web & App Activity", url: "https://myactivity.google.com/search-services/history?hl=en_GB", source: "browser_history_scrape", dailySource: "browser_history_scrape", rpc: true },
   { id: "google_search", label: "Search", detail: "Google Search queries", url: "https://myactivity.google.com/product/search?hl=en_GB", source: "google_search_scrape", dailySource: "google_search_scrape", rpc: true },
-  { id: "google_image_search", label: "Image Search", detail: "Google Image Search activity", url: "https://myactivity.google.com/product/image_search?hl=en_GB", source: "google_image_search_scrape", dailySource: "google_image_search_scrape", rpc: true },
-  { id: "google_video_search", label: "Video Search", detail: "Google Video Search activity", url: "https://myactivity.google.com/product/video_search?hl=en_GB", source: "google_video_search_scrape", dailySource: "google_video_search_scrape", rpc: true },
   { id: "google_maps", label: "Maps", detail: "Google Maps activity", url: "https://myactivity.google.com/product/maps?hl=en_GB", source: "google_maps_scrape", dailySource: "google_maps_scrape", rpc: true },
   { id: "youtube_history", label: "YouTube", detail: "YouTube watch & search history", url: "https://myactivity.google.com/product/youtube?hl=en_GB", source: "youtube_history_scrape", dailySource: "youtube_history_scrape", rpc: true },
   { id: "google_assistant", label: "Assistant", detail: "Google Assistant activity", url: "https://myactivity.google.com/product/assistant?hl=en_GB", source: "google_assistant_scrape", dailySource: "google_assistant_scrape", rpc: true },
-  { id: "google_play", label: "Play", detail: "Google Play activity", url: "https://myactivity.google.com/product/play?hl=en_GB", source: "google_play_scrape", dailySource: "google_play_scrape", rpc: true },
   { id: "google_news", label: "News", detail: "Google News activity", url: "https://myactivity.google.com/product/news?hl=en_GB", source: "google_news_scrape", dailySource: "google_news_scrape", rpc: true },
   { id: "google_chrome", label: "Chrome", detail: "Chrome-sync browsing activity (differs from the local Chrome History file import)", url: "https://myactivity.google.com/product/chrome?hl=en_GB", source: "google_chrome_scrape", dailySource: "google_chrome_scrape", rpc: true },
   { id: "google_shopping", label: "Shopping", detail: "Google Shopping activity", url: "https://myactivity.google.com/product/shopping?hl=en_GB", source: "google_shopping_scrape", dailySource: "google_shopping_scrape", rpc: true },
   { id: "google_translate", label: "Translate", detail: "Google Translate history", url: "https://myactivity.google.com/product/translate?hl=en_GB", source: "google_translate_scrape", dailySource: "google_translate_scrape", rpc: true },
-  { id: "google_discover", label: "Discover", detail: "Google Discover feed activity", url: "https://myactivity.google.com/product/discover?hl=en_GB", source: "google_discover_scrape", dailySource: "google_discover_scrape", rpc: true },
   { id: "google_gemini", label: "Gemini", detail: "Gemini Apps activity", url: "https://myactivity.google.com/product/gemini?hl=en_GB", source: "google_gemini_scrape", dailySource: "google_gemini_scrape", rpc: true },
-  { id: "google_timeline", label: "Timeline", detail: "Maps location history", url: "https://timeline.google.com/maps/timeline", source: "google_timeline_scrape", dailySource: "google_timeline_scrape", rpc: false, retired: "Google moved Timeline into the Maps app on your phone — the web page now just redirects to Maps. Export it on the phone (Maps → Settings → Location → Export Timeline data) and drop the JSON into Data." },
+  { id: "google_timeline", label: "Timeline", detail: "Maps location history", url: "https://timeline.google.com/maps/timeline", source: "google_timeline_scrape", dailySource: "google_timeline_scrape", rpc: false, retired: "Timeline is no longer available on web browsers (timeline.google.com now redirects to Maps), so there is no page to link or scrape. Export it on the phone instead: Google Maps app → your profile picture → Your Timeline → ⋮ → Location and privacy settings → Export Timeline data, then drop the JSON into Data." },
 ];
 
 const PRESETS = Object.fromEntries(GOOGLE_PRESETS.map((p) => [p.id, p])) as Record<GoogleScrapePreset, GooglePresetDef>;
@@ -122,7 +116,7 @@ export function extensionSourceDir(): string {
   return path.join(process.cwd(), "extensions", "google-activity-exporter");
 }
 
-/** Version of the extension the app currently ships. The Data tab compares it to
+/** Version of the extension the app currently ships. The Pipeline tab compares it to
  *  the version the installed extension reports in its ping heartbeat: unpacked
  *  installs never auto-update, so a mismatch is the only signal a user gets to
  *  replace the folder and reload the extension. */

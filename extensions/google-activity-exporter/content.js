@@ -43,17 +43,13 @@
     myActivityImporter("google_activity_all", "All Google activity", "/myactivity?hl=en_GB", "All Google My Activity items"),
     myActivityImporter("browser_history", "Browser history", "/search-services/history?hl=en_GB", "Web & App Activity browsing history"),
     myActivityImporter("google_search", "Search", "/product/search?hl=en_GB", "Google Search activity"),
-    myActivityImporter("google_image_search", "Image Search", "/product/image_search?hl=en_GB", "Google Image Search activity"),
-    myActivityImporter("google_video_search", "Video Search", "/product/video_search?hl=en_GB", "Google Video Search activity"),
     myActivityImporter("google_maps", "Maps", "/product/maps?hl=en_GB", "Google Maps activity"),
     myActivityImporter("youtube_history", "YouTube", "/product/youtube?hl=en_GB", "YouTube watch/search activity"),
     myActivityImporter("google_assistant", "Assistant", "/product/assistant?hl=en_GB", "Google Assistant activity"),
-    myActivityImporter("google_play", "Play", "/product/play?hl=en_GB", "Google Play activity"),
     myActivityImporter("google_news", "News", "/product/news?hl=en_GB", "Google News activity"),
     myActivityImporter("google_chrome", "Chrome", "/product/chrome?hl=en_GB", "Chrome browsing activity"),
     myActivityImporter("google_shopping", "Shopping", "/product/shopping?hl=en_GB", "Google Shopping activity"),
     myActivityImporter("google_translate", "Translate", "/product/translate?hl=en_GB", "Google Translate history"),
-    myActivityImporter("google_discover", "Discover", "/product/discover?hl=en_GB", "Google Discover feed activity"),
     myActivityImporter("google_gemini", "Gemini", "/product/gemini?hl=en_GB", "Gemini Apps activity"),
     {
       id: "google_timeline",
@@ -735,7 +731,7 @@
     }
   }
 
-  // Deep link from the AgentQS Data tab: opening a Google page with
+  // Deep link from the AgentQS Pipeline tab: opening a Google page with
   // #agentqs-import=<presetId> starts that import once the panel is up, so the
   // web app's "Import" button is one click end to end.
   const deepLink = location.hash.match(/agentqs-import=([a-z_]+)/);

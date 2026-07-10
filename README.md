@@ -1,18 +1,12 @@
-<div align="center">
+<img src="public/logo.svg" alt="agentqs" width="160" />**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
-<img src="public/logo.svg" alt="agentqs" width="160" />
-
-**The open-source pipeline for your personal data: 20+ apps synced into one local journal you can graph, chat with and learn from.**
-
-[Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
-
-</div>
+[Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
 ---
 
 There are thousands of products helping companies use their knowledge bases and analytics. Our most important data stays neglected - every person has millions of data points recorded, tracking on purpose or not.
 
-agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your data in. It structures, indexes and embeds everything - then you learn from it with graphs, AI with skills, or voice sessions. Works out of the box in the web app, CLI, Slack or Telegram.
+agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your data in. It structures, indexes and embeds everything into one searchable record - ask it anything, or learn from it with graphs, AI with skills, or voice sessions. Works out of the box in the web app, CLI, Slack or Telegram.
 
 ## Quick start
 
@@ -28,23 +22,10 @@ The agent can import and structure the data already on your machine, connect you
 
 If you want to interact with agentqs through external channels like Slack or Telegram, or build integrations on top of it, deploy it on the cloud.
 
-[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
+![Deploy on FlowEngine](https://flowengine.cloud/button.svg)## Features
 
-## Features
-
-<table>
-  <tr>
-    <td width="25%"><a href="docs/images/data.png"><img src="docs/images/data.png" alt="Data" /></a></td>
-    <td width="25%"><a href="docs/images/journal.png"><img src="docs/images/journal.png" alt="Journal" /></a></td>
-    <td width="25%"><a href="docs/images/graphs.png"><img src="docs/images/graphs.png" alt="Graphs" /></a></td>
-    <td width="25%"><a href="docs/images/chat.png"><img src="docs/images/chat.png" alt="Chat" /></a></td>
-  </tr>
-  <tr>
-    <td align="center" valign="top"><a href="#data"><b>Data</b></a><br/><sub>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</sub></td>
-    <td align="center" valign="top"><a href="#journal"><b>Journal</b></a><br/><sub>View your structured data. Edit and organize.</sub></td>
-    <td align="center" valign="top"><a href="#graphs"><b>Graphs</b></a><br/><sub>Lines and correlations across any data points. Save the views.</sub></td>
-    <td align="center" valign="top"><a href="#chat"><b>Chat</b></a><br/><sub>Add skills, chat with AI, or have a voice session.</sub></td>
-  </tr>
+<table style="min-width: 100px;">
+<colgroup><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"></colgroup><tbody><tr><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/data.png" alt="Pipeline"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/journal.png" alt="Journal"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/graphs.png" alt="Graphs"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/chat.png" alt="Chat"></td></tr><tr><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#data"><strong>Data</strong></a><br>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#journal"><strong>Journal</strong></a><br>View your structured data. Edit and organize.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#graphs"><strong>Graphs</strong></a><br>Lines and correlations across any data points. Save the views.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#chat"><strong>Chat</strong></a><br>Add skills, chat with AI, or have a voice session.</p></td></tr></tbody>
 </table>
 
 ### Journal
@@ -79,7 +60,7 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 **Connect by API or OAuth** - GitHub · WHOOP\* · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
 
-<sub>\* WHOOP connects through the unofficial app login (email + password) - it exports recovery, strain, sleep and per-minute heart rate.</sub>
+\* WHOOP connects through the unofficial app login (email + password) - it exports recovery, strain, sleep and per-minute heart rate.
 
 **Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.
 
@@ -88,6 +69,16 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 **Import files** - drop anything: Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file
 
 Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
+
+## How your data is stored
+
+Everything lives in one data directory you own, in three layers:
+
+- **The record - plain text, the source of truth.** `record/daily/*.csv` holds one row per day per source, numbers first - that's what Graphs and the Journal read. `record/events.jsonl` holds items - a meeting, a page visit, a track - one line each with title, text and link. Memos in `inbox.jsonl`, AI sessions in `sessions.jsonl`. Per-minute streams (WHOOP heart rate) are one small CSV per day, rolled up into daily columns.
+- **Derived indexes - rebuildable, never committed.** A SQLite cache for SQL, a full-text index, on-device embeddings for semantic search, and a photo index. `agentqs rebuild` recreates all of them from the record, byte-identical.
+- **The detail store (`detail.db`) - every point behind the rollups.** Streams too dense for one row per day - per-minute heart rate, every browser visit - live in a local SQLite as normal numeric tables, so chat and `agentqs query` correlate at full grain (`detail.heart_rate`). `daily` keeps one value per day; `detail` keeps them all.
+
+Every new source follows the same rule: numbers go to daily columns; items with text (meetings, emails, messages) go to events, searchable by keyword and meaning; dense streams go to per-day files in the record and are indexed into `detail`, with a daily rollup; photos are indexed on-device. The same explainer lives in the app, behind the **?** next to the Journal, Graphs and Pipeline titles.
 
 ## CLI, API and MCP
 
@@ -126,7 +117,7 @@ npm run build
 npm run dev
 ```
 
-Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`) and can live in a private git repo. Databases and embeddings are derived - `agentqs rebuild` recreates them.
+Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`) and can live in a private git repo. Databases and embeddings are derived - `agentqs rebuild` recreates them. By default the store lives in your platform's app-data folder, out of iCloud/Dropbox/OneDrive's reach - sync engines corrupt live stores. `agentqs doctor` checks yours; `agentqs migrate-store` moves an exposed one to safety.
 
 ### Docker
 
@@ -144,9 +135,7 @@ While the app is running it schedules its own syncs - set a source's interval an
 
 [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`, syncs run around the clock.
 
-[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
-
-Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
+![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 
 ## Good to know
 
