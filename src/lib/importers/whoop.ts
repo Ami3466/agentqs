@@ -64,6 +64,15 @@ interface TokenResponse {
 
 // ---- auth (the unofficial app login) --------------------------------------
 
+/** WHOOP retired the unofficial app-login door (July 2026): api-7.whoop.com was
+ *  deleted from DNS, the api.prod.whoop.com replacement answers "api-server path
+ *  is disabled", and their Auth0 login sits behind a Cloudflare browser
+ *  challenge. A network/404 failure here is THAT, not the user's password —
+ *  say so, and point at the connect that works. */
+const RETIRED_HINT =
+  "WHOOP retired the unofficial app login (its api-7.whoop.com endpoint no longer exists) — your password is fine. " +
+  "Connect the official WHOOP API row instead (recovery, strain & sleep): Pipeline → WHOOP (official API) → Authorize.";
+
 async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): Promise<WhoopSession> {
   let res: Response;
   try {
@@ -72,8 +81,9 @@ async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): P
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
     });
-  } catch (e) {
-    throw new Error(`WHOOP login → ${(e as Error).message}`);
+  } catch {
+    // DNS/connection failure on a deleted host — the endpoint is gone, not flaky.
+    throw new Error(`WHOOP login → ${RETIRED_HINT}`);
   }
   if (!res.ok) {
     let detail = "";
@@ -82,6 +92,7 @@ async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): P
     } catch {
       /* ignore */
     }
+    if (res.status === 404) throw new Error(`WHOOP login → ${RETIRED_HINT}`);
     const hint =
       res.status === 401 || res.status === 403 ? " (wrong email or password?)" : "";
     throw new Error(`WHOOP login → ${res.status}${hint}${detail ? ` — ${detail}` : ""}`);

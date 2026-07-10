@@ -354,11 +354,12 @@ export function sourceGuide(id: string): SourceGuide {
   }
   if (id === "whoop") {
     return {
-      id, name: "WHOOP", credentialLabel: "email + password",
-      url: null,
+      id, name: "WHOOP (per-minute, unofficial)", credentialLabel: "email + password",
+      url: "https://developer-dashboard.whoop.com",
       steps: [
-        "WHOOP connects via the unofficial app login: your account email + password.",
-        "Run 'agentqs whoop connect <email> <password>' or use the WHOOP row — tokens are minted and rotated on sync.",
+        "RETIRED UPSTREAM: WHOOP deleted the unofficial app-login endpoint (api-7.whoop.com) — email + password can no longer sync.",
+        "Use the official WHOOP API row instead: 'agentqs source guide whoop-api' — recovery, strain & sleep via OAuth.",
+        "Per-minute heart rate has no server-reachable API anymore; a browser automation could bring it back later.",
       ],
       oauth: false, redirectUriHint,
     };
