@@ -5,7 +5,7 @@ import { readConfig, writeConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
-import { mergeTokens, whoopHrDir, whoopLogin, type WhoopCreds } from "@/lib/importers/whoop";
+import { ensureSession, mergeTokens, whoopHrDir, whoopLogin, type WhoopCreds } from "@/lib/importers/whoop";
 import { readSyncRuns } from "@/lib/sync-runs";
 import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
 import { wipeDemoOnImport } from "@/lib/demo";
@@ -126,6 +126,15 @@ export async function POST(req: Request) {
   const freshCreds = Boolean(body.email || body.password);
   if (freshCreds || body.test === true) {
     try {
+      if (body.test === true && !password) {
+        // Nothing to password-test: prove the STORED grant the way a sync
+        // would (refresh path — the same verdict as `agentqs source test
+        // whoop`), and persist the rotated tokens.
+        const s = await ensureSession(stored);
+        cfg.whoopCreds = s.creds;
+        writeConfig(cfg);
+        return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });
+      }
       const session = await whoopLogin(email, password);
       if (body.test === true) {
         return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });

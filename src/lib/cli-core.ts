@@ -31,7 +31,7 @@ import { readJournal } from "./journal";
 import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken, resolveLogin } from "./importers/github";
-import { ensureSession, importWhoop, whoopFixtureFetch, whoopHrDir, type WhoopCreds } from "./importers/whoop";
+import { ensureSession, importWhoop, mergeTokens, whoopFixtureFetch, whoopHrDir, whoopLogin, type WhoopCreds } from "./importers/whoop";
 import {
   importPlugin,
   resolveCredential,
@@ -294,7 +294,19 @@ export async function testSourceCredential(id: string, credential?: string): Pro
     if (!wc?.email || !(wc.password || wc.refreshToken)) {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
-    await ensureSession(wc);
+    // ensureSession can ROTATE the refresh token — persist the returned creds
+    // exactly like a sync does, or a mere test invalidates the stored token
+    // and the next scheduled sync fails permanently.
+    const s = await ensureSession(wc);
+    const c2 = readConfig();
+    if (c2) {
+      c2.whoopCreds = s.creds;
+      try {
+        writeConfig(c2);
+      } catch {
+        /* non-fatal — the probe itself succeeded */
+      }
+    }
     return { id, name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${wc.email}` };
   }
   const inst = pluginInstanceById(id);
@@ -397,12 +409,16 @@ export function connectDetectedApp(id: string): { id: string; saved: boolean } {
 /** Connect WHOOP via the unofficial app login — stores email + password (config
  *  0600, never committed); tokens are minted + rotated on the first sync. Two
  *  fields, so it's separate from the single-credential connectSource. */
-export function whoopConnect(email: string, password: string): { email: string; saved: boolean } {
+export async function whoopConnect(email: string, password: string): Promise<{ email: string; saved: boolean }> {
   if (!email?.trim() || !password?.trim()) {
     throw new Error("WHOOP needs both an email and a password.");
   }
+  // Prove the login BEFORE storing — the connect invariant (only a working
+  // credential is ever saved). Keeping the minted tokens also spares the
+  // first sync a second login.
+  const session = await whoopLogin(email.trim(), password.trim());
   const cfg = requireConfig();
-  cfg.whoopCreds = { ...(cfg.whoopCreds ?? {}), email: email.trim(), password: password.trim() };
+  cfg.whoopCreds = mergeTokens({ ...(cfg.whoopCreds ?? {}), email: email.trim(), password: password.trim() }, session);
   writeConfig(cfg);
   return { email: email.trim(), saved: true };
 }

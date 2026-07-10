@@ -221,7 +221,13 @@ export async function startMcpServer(): Promise<void> {
       description: "Save a credential (API key / token) for an API source so it can sync.",
       inputSchema: { source: z.string(), credential: z.string() },
     },
-    async ({ source, credential }) => guard(() => core.connectSource(source, credential)),
+    async ({ source, credential }) =>
+      guard(async () => {
+        // The connect invariant: prove the credential BEFORE storing it —
+        // the same probe the CLI and API routes run.
+        const probe = await core.testSourceCredential(source, credential);
+        return { ...core.connectSource(source, credential), tested: probe.detail };
+      }),
   );
 
   server.registerTool(
@@ -229,7 +235,7 @@ export async function startMcpServer(): Promise<void> {
     {
       title: "Connect WHOOP (unofficial app login)",
       description:
-        "Store your WHOOP email + password to pull per-minute HR + HRV + recovery + sleep + strain. Then `sync whoop`.",
+        "Prove the WHOOP login, then store email + password to pull per-minute HR + HRV + recovery + sleep + strain. Then `sync whoop`.",
       inputSchema: { email: z.string(), password: z.string() },
     },
     async ({ email, password }) => guard(() => core.whoopConnect(email, password)),

@@ -31,16 +31,19 @@ const MAX_PAGES = 40; // 1000 records ≈ years of daily data — a runaway guar
 
 interface WhoopApiCycle {
   id?: number;
-  start?: string; // ISO — the physiological day starts on wake
+  start?: string; // ISO UTC — the physiological day starts on wake
+  timezone_offset?: string; // "+03:00" — the user's local offset for THIS record
   score?: { strain?: number; average_heart_rate?: number; max_heart_rate?: number };
 }
 interface WhoopApiRecovery {
   cycle_id?: number;
   created_at?: string;
+  timezone_offset?: string;
   score?: { recovery_score?: number; resting_heart_rate?: number; hrv_rmssd_milli?: number };
 }
 interface WhoopApiSleep {
-  end?: string; // ISO — keyed to the wake day, like the app
+  end?: string; // ISO UTC — keyed to the wake day, like the app
+  timezone_offset?: string;
   nap?: boolean;
   score?: {
     sleep_performance_percentage?: number;
@@ -104,7 +107,18 @@ export function normalizeWhoopApi(
   to: string,
 ): DailyTable {
   const days = new Map<string, Record<string, string>>();
-  const day = (iso?: string) => (iso ?? "").slice(0, 10);
+  // Timestamps are UTC but every record carries the user's local offset — key
+  // days by the LOCAL calendar day (the app's own labeling, and the unofficial
+  // importer's days[0]), or east-of-UTC users land wake/strain on the previous
+  // UTC day and the two mergeable whoop sources disagree by a day.
+  const day = (iso?: string, offset?: string) => {
+    if (!iso) return "";
+    const m = (offset ?? "").match(/^([+-])(\d{2}):(\d{2})$/);
+    const t = Date.parse(iso);
+    if (!m || !Number.isFinite(t)) return iso.slice(0, 10);
+    const shiftMs = (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) * 60_000;
+    return new Date(t + shiftMs).toISOString().slice(0, 10);
+  };
   const cell = (d: string) => {
     let r = days.get(d);
     if (!r) {
@@ -116,7 +130,7 @@ export function normalizeWhoopApi(
 
   const cycleDay = new Map<number, string>(); // recovery is keyed by cycle, not dated
   for (const c of cycles) {
-    const d = day(c.start);
+    const d = day(c.start, c.timezone_offset);
     if (c.id != null && d) cycleDay.set(c.id, d);
     if (!d || !inWindow(d, from, to)) continue;
     const s = c.score ?? {};
@@ -126,7 +140,7 @@ export function normalizeWhoopApi(
     if (s.max_heart_rate != null) r.hr_max = num(s.max_heart_rate);
   }
   for (const rec of recoveries) {
-    const d = (rec.cycle_id != null ? cycleDay.get(rec.cycle_id) : undefined) ?? day(rec.created_at);
+    const d = (rec.cycle_id != null ? cycleDay.get(rec.cycle_id) : undefined) ?? day(rec.created_at, rec.timezone_offset);
     if (!d || !inWindow(d, from, to)) continue;
     const s = rec.score ?? {};
     const r = cell(d);
@@ -136,7 +150,7 @@ export function normalizeWhoopApi(
   }
   for (const sl of sleeps) {
     if (sl.nap) continue; // naps would double-count the night
-    const d = day(sl.end);
+    const d = day(sl.end, sl.timezone_offset);
     if (!d || !inWindow(d, from, to)) continue;
     const sc = sl.score ?? {};
     const st = sc.stage_summary ?? {};
