@@ -50,7 +50,8 @@ import { recordSyncRun } from "./sync-runs";
 import { pipelineReport } from "./pipeline";
 import { doctorReport, migrateStore } from "./store-doctor";
 import { structureCsv, sourceName } from "./structure";
-import { autoStructureNewItem, structurePending } from "./structure-run";
+import { autoStructureNewItem, csvLossText, notifyCsvLoss, structurePending } from "./structure-run";
+import { looksText, sniffHead, MAX_INBOX_BYTES, MAX_STRUCTURE_BYTES } from "./import-tree";
 import {
   acceptQualityAction,
   applySavedMerges,
@@ -165,6 +166,29 @@ export function logItems(limit = 50) {
 export function inboxPending() {
   const items = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending");
   return { pending: items.length, items };
+}
+
+/** Resolve an inbox capture WITHOUT structuring it — the other half of the
+ *  structuring workflow. "keep" files a PENDING item as a reference memo
+ *  (searchable and recall-able, out of the queue — right for living documents:
+ *  plans, open-items lists, notes with no dated metrics). "discard" drops an
+ *  item of ANY status from every index (junk captures, dismissed
+ *  notifications, un-keeping a reference memo) — idempotent, and it never
+ *  touches merged cells: reverting a STRUCTURED item's data is `logReject`. */
+export function inboxResolve(id: string, action: "keep" | "discard") {
+  if (!id.trim()) throw new Error("Pass an inbox item id.");
+  const rDir = recordDir();
+  const item = readInboxFromRecord(rDir).find((i) => i.id === id);
+  if (!item) throw new Error(`No inbox item "${id}".`);
+  if (action === "keep" && item.status !== "pending") {
+    throw new Error(`Item "${id}" is ${item.status}, not pending${item.status === "structured" ? " — use log reject to revert it" : ""}.`);
+  }
+  const status = action === "keep" ? "reference" : "discarded";
+  if (item.status !== status) {
+    updateInboxItems([{ id, status }], { recordDir: rDir });
+    rebuild({ recordDir: rDir });
+  }
+  return { id, status, pending: readInboxFromRecord(rDir).filter((i) => i.status === "pending").length };
 }
 
 /** Local semantic recall (no API key): meaning-search over memos, sessions and
@@ -809,26 +833,66 @@ export interface ImportRawResult {
 export async function importRaw(opts: { file?: string; text?: string; name?: string }): Promise<ImportRawResult> {
   let text = opts.text;
   let hint = opts.name;
+  let oversized = false;
   if (opts.file) {
+    const st = fs.statSync(opts.file);
+    if (st.isDirectory()) {
+      throw new Error("That's a folder — `agentqs import <folder>` (or the MCP `import_tree` tool) runs the fully accounted folder import.");
+    }
+    if (st.size === 0) throw new Error("Nothing to import — the file is empty.");
+    // Refuse loudly what can't land as text — utf8-reading a binary would put
+    // silent garbage in the record.
+    if (!looksText(sniffHead(opts.file))) {
+      throw new Error(
+        `Binary file — no importer claims it, nothing landed. Try \`agentqs import <folder>\` to route known formats, or a dedicated importer.`,
+      );
+    }
+    if (st.size > MAX_STRUCTURE_BYTES) {
+      throw new Error("Text too large — needs a dedicated importer, nothing landed.");
+    }
+    // Bigger than a memo may be, but clean CSV never lands raw — it structures.
+    oversized = st.size > MAX_INBOX_BYTES;
     text = fs.readFileSync(opts.file, "utf8");
     hint = hint ?? path.basename(opts.file);
   }
   if (text == null || text.trim() === "") throw new Error("Nothing to import — pass a file or --text.");
+  // The {text} path gets the same guards as the file path — a face must not
+  // land what its sibling refuses.
+  if (text.includes("\u0000")) {
+    throw new Error("Binary content — no importer claims it, nothing landed.");
+  }
+  if (Buffer.byteLength(text) > MAX_STRUCTURE_BYTES) {
+    throw new Error("Text too large — needs a dedicated importer, nothing landed.");
+  }
+  oversized = oversized || Buffer.byteLength(text) > MAX_INBOX_BYTES;
+
+  // Clean-CSV fast path probe runs BEFORE the raw landing so an oversized
+  // file is only refused when it would land as an unstructurable megamemo.
+  const structured = structureCsv(text);
+  if (oversized && !structured) {
+    throw new Error("Text too large to land raw — needs a dedicated importer, nothing landed.");
+  }
 
   // A real import clears the demo record BEFORE merging, so real rows never land
   // in demo CSVs that a later wipe would delete (structurePending wipes for prose).
   wipeDemoOnImport();
   const rDir = recordDir();
   const item = appendInboxItem(
-    { text, source: "drop", kind: "file", meta: hint ? { filename: hint } : null },
+    {
+      text: oversized ? `[${hint ?? "import"}: ${Buffer.byteLength(text).toLocaleString()} bytes of clean CSV — merged, body not kept raw]` : text,
+      source: "drop",
+      kind: "file",
+      meta: hint ? { filename: hint } : null,
+    },
     { recordDir: rDir },
   );
-
-  // Clean-CSV fast path: structure now, no LLM, no key needed.
-  const structured = structureCsv(text);
   if (structured) {
     const source = sourceName(hint, "import");
     const merge = mergeDailyCsv(rDir, source, { header: structured.header, rows: structured.rows });
+    // A partial parse must never read as a full landing — the loss becomes a
+    // pending notification and is named in the return note.
+    notifyCsvLoss(rDir, hint, structured);
+    const loss = csvLossText(structured);
     updateInboxItems(
       [{
         id: item.id,
@@ -850,7 +914,7 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
       inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source,
       metrics: merge.metrics, cells: merge.cells, dailyRows,
       pending: countPending(rDir),
-      note: `Structured ${merge.cells} cells into daily/${source}.csv.`,
+      note: `Structured ${merge.cells} cells into daily/${source}.csv.${loss ? ` WARNING — did NOT fully land: ${loss}.` : ""}`,
     };
   }
 
@@ -879,6 +943,14 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
 export async function structure(opts: { id?: string; csv?: string } = {}) {
   return structurePending({ id: opts.id, csv: opts.csv });
 }
+
+/** Folder import with a full accounting — every file in exactly one bucket,
+ *  residue reported loudly, receipt persisted as an inbox notification. */
+export { importTree } from "./import-tree";
+
+/** The index audit: deterministic evidence (impossible dates, one-day sources,
+ *  coverage holes, stale sources, outliers) for an AI review pass. Read-only. */
+export { auditIndex } from "./audit";
 
 // ---- data-quality scanner -----------------------------------------------------
 

@@ -18,6 +18,11 @@ export interface Structured {
   metrics: string[];
   dates: string[]; // distinct, ascending
   cells: number; // non-empty metric cells (= daily rows this produces)
+  // The accounting: what the parse LOST. Callers must surface these — a
+  // "structured" file that silently shed rows is how a record rots.
+  skippedRows: number; // rows whose date cell didn't parse — NOT merged
+  skippedSamples: string[]; // up to 3 raw date cells from skipped rows
+  droppedColumns: number; // empty-header columns that held data — NOT merged
 }
 
 // Header names that unambiguously mark the date column.
@@ -124,12 +129,36 @@ export function structureCsv(text: string): Structured | null {
   const metrics = metricIdx.map((i) => header[i].trim());
   if (metrics.length === 0) return null;
 
+  // An empty-header column only counts as a LOSS if some row holds data there
+  // (a trailing comma makes a harmless phantom column). Rows can also be WIDER
+  // than the header — those overflow cells have no column at all and are lost
+  // the same way.
+  const maxRowLen = rows.reduce((n, r) => Math.max(n, r.length), 0);
+  let droppedColumns = header
+    .map((_, i) => i)
+    .filter((i) => i !== dateCol && header[i].trim() === "")
+    .filter((i) => rows.some((r) => (r[i] ?? "").trim() !== "")).length;
+  for (let i = header.length; i < maxRowLen; i++) {
+    if (rows.some((r) => (r[i] ?? "").trim() !== "")) droppedColumns++;
+  }
+
   const outRows: string[][] = [];
   const dateSet = new Set<string>();
+  const skippedSamples: string[] = [];
+  let skippedRows = 0;
   let cells = 0;
   for (const r of rows) {
-    const date = normalizeDate((r[dateCol] ?? "").trim());
-    if (!date) continue;
+    const raw = (r[dateCol] ?? "").trim();
+    const date = normalizeDate(raw);
+    if (!date) {
+      // A row without a parseable date carries data only if any metric cell
+      // is non-empty — a blank spacer line is not a loss.
+      if (metricIdx.some((i) => (r[i] ?? "").trim() !== "")) {
+        skippedRows++;
+        if (skippedSamples.length < 3) skippedSamples.push(raw || "(empty date)");
+      }
+      continue;
+    }
     const row = [date];
     for (const i of metricIdx) {
       const v = (r[i] ?? "").trim();
@@ -147,6 +176,9 @@ export function structureCsv(text: string): Structured | null {
     metrics,
     dates: [...dateSet].sort(),
     cells,
+    skippedRows,
+    skippedSamples,
+    droppedColumns,
   };
 }
 

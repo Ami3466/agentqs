@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
 import { JournalSearch } from "./journal-search";
@@ -165,6 +165,26 @@ export function JournalWorkspace() {
     }
   }, []);
 
+  /** A filter is a question about the WHOLE record — answering it from the
+   * 180-day window silently lies (a source whose data is older shows as one
+   * day). The first time any filter narrows the view, upgrade to full history.
+   * One auto attempt only: a failed days=all fetch must NOT relaunch itself
+   * forever (needsFull would stay true) — the table's manual button remains. */
+  const fullAttempted = useRef(false);
+  const windowed = !!data && !fullHistory && data.days.length < data.totalDays;
+  const oldestLoaded = data?.days.length ? data.days[data.days.length - 1].date : "";
+  const needsFull =
+    windowed &&
+    (typeFilter !== "all" ||
+      (!!dateFrom && dateFrom < oldestLoaded) ||
+      (!!dateTo && dateTo < oldestLoaded));
+  useEffect(() => {
+    if (needsFull && !loadingFull && !fullAttempted.current) {
+      fullAttempted.current = true;
+      void loadFullHistory();
+    }
+  }, [needsFull, loadingFull, loadFullHistory]);
+
   /** Quiet refetch (column scanner merges): refresh the data in place without
    * flipping `loading`, so the Table — and the scanner's result panel — stay
    * mounted. */
@@ -259,7 +279,11 @@ export function JournalWorkspace() {
                 <X width={12} height={12} />
                 Clear
               </Button>
-              {filtered ? (
+              {loadingFull ? (
+                <span className="flex items-center gap-1 text-[11px] text-muted-fg">
+                  <Spinner width={11} height={11} /> loading full history…
+                </span>
+              ) : filtered ? (
                 <span className="text-[11px] text-muted-fg">
                   {filtered.days.length.toLocaleString()} day
                   {filtered.days.length === 1 ? "" : "s"} match

@@ -26,13 +26,15 @@ Add `--json` to any CLI command for machine-readable output.
      document must NEVER collapse onto the capture day. Facts stated "as of" the
      writing date belong on the writing date; a fact about `2024-07-30` belongs
      on `2024-07-30`.
-   - only facts explicitly stated in the note; nothing worth structuring -> skip
-     the item (it stays as a searchable memo) or discard it.
+   - only facts explicitly stated in the note; nothing worth structuring ->
+     `agentqs inbox keep <id>` (a living document/plan stays as a searchable
+     reference memo) or `agentqs inbox discard <id>` (junk, drops it from every
+     index). Never leave an unstructurable item pending.
 3. `agentqs structure --id <id> --csv '<csv>'` (or `--csv-file <path>`).
    The product validates, merges into `record/daily/`, marks the item structured,
    and records exact undo metadata. `agentqs log reject <id>` reverts it.
 
-MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
+MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, action}`.
 
 ### Answer questions about the record (chat without a key)
 
@@ -47,7 +49,15 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
 
 ### Everything else (already key-free)
 
-- `agentqs import <file>` - land any file; clean CSV structures instantly.
+- `agentqs import <path>` - land any file (clean CSV structures instantly) or a
+  WHOLE FOLDER: every file ends in exactly one bucket (structured / inbox /
+  routed-to-importer / ignored / residue), the accounting is persisted as an
+  inbox notification (one receipt per folder, latest run wins), and residue -
+  files nothing claimed - exits 1. Idempotent: re-importing adds nothing twice.
+  After a folder import, run the "Run next" importer commands from the receipt,
+  then structure/keep the raw text items. MCP tool: `import_tree`. CLI/MCP
+  only, deliberately no API route: a synchronous multi-GB walk would block the
+  web server; the web face for files is the dropzone.
 - `agentqs doctor` - store health: is the store inside a sync-engine domain
   (iCloud/Dropbox/OneDrive), any cloud-evicted files, "X 2" conflict twins,
   split stores. Exit 1 when unsafe. MCP tool: `doctor`; API: GET `/api/doctor`.
@@ -55,6 +65,12 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}`.
   sync-safe app-data dir: hash-verified copy, source retired (never deleted),
   launchd/crontab re-pointed. Stop the app first, restart after. MCP:
   `migrate_store`; API: POST `/api/store/migrate`.
+- `agentqs audit` - index audit: DETERMINISTIC evidence for an AI review pass -
+  impossible dates, single-day sources, coverage holes, gone-quiet sources,
+  outlier values. YOU judge each finding (real quiet vs dead import, unit bug
+  vs true spike) and fix through the product: `journal-edit` for junk cells,
+  re-run the named import, `scan` for duplicate columns. Read-only. MCP tool:
+  `audit`; API: GET `/api/audit`.
 - `agentqs scan [--fix]` - data-quality scan: duplicate daily columns (one
   metric imported manually AND by a sync), dead all-zero columns, and messy
   numeric values (units, thousands separators, junk placeholders). Findings

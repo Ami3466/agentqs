@@ -1,7 +1,8 @@
 import { execFileSync } from "child_process";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { appendEvents, mergeDailyCsv, rebuild, serializeCsv } from "../src/lib/record";
+import { appendEvents, appendInboxItems, mergeDailyCsv, rebuild, serializeCsv } from "../src/lib/record";
 import { recordDir } from "../src/lib/paths";
 
 function args(name: string): string[] {
@@ -27,7 +28,36 @@ function unzipList(zip: string): string[] {
 }
 
 function unzipText(zip: string, member: string): string {
-  return execFileSync("unzip", ["-p", zip, member], { encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 });
+  const run = (args: string[]) =>
+    execFileSync("unzip", ["-p", zip, ...args], { encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 });
+  try {
+    return run([member]);
+  } catch (err) {
+    // A non-ASCII member name (e.g. a Hebrew calendar) rarely survives the
+    // -Z1 → -p roundtrip: zip name encodings vary by archiver and the listing
+    // decode is lossy (unzip even prints `?` for bytes it can't show). Recover
+    // by globbing the name's ASCII skeleton — `?`/non-ASCII runs wildcarded —
+    // and excluding every other member the glob would also catch.
+    const parts = member.split(/[^\x20-\x3e\x40-\x7e]+/); // non-ASCII and `?` break parts
+    if (parts.length < 2) throw err;
+    const list = unzipList(zip);
+    // Two members garbling to the SAME listing string are indistinguishable —
+    // the glob would concatenate both. Bail rather than merge two files.
+    if (list.filter((m) => m === member).length > 1) throw err;
+    // `*` matches zero chars, so the mirror regex must too, or a glob-matching
+    // sibling escapes the exclusion list and streams in concatenated.
+    const re = new RegExp(
+      `^${parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s\\S]*")}$`,
+    );
+    const escGlob = (s: string) => s.replace(/[[\]*?\\]/g, (c) => `\\${c}`);
+    const others = list.filter((m) => m !== member && re.test(m));
+    if (others.some((m) => m.split(/[^\x20-\x3e\x40-\x7e]+/).length > 1)) throw err; // two garbled names: ambiguous
+    const glob = parts.map(escGlob).join("*");
+    console.warn(`recovered non-ascii member via glob: ${member}`);
+    // -x args are ALSO glob patterns — escape them or a name with [ ] * ?
+    // silently fails to be excluded.
+    return run([glob, ...(others.length ? ["-x", ...others.map(escGlob)] : [])]);
+  }
 }
 
 function stripHtml(input: string): string {
@@ -183,6 +213,8 @@ function calendarAgg(): CalendarAgg {
 }
 
 const calendarDaily = new Map<string, CalendarAgg>();
+const calendarEventRows: Parameters<typeof appendEvents>[0] = [];
+const calendarSkippedMembers: string[] = [];
 let calendarFiles = 0;
 let calendarEvents = 0;
 let calendarSkipped = 0;
@@ -333,7 +365,22 @@ function parseIcsDate(line: string | undefined): { date: string; at: Date | null
     ? new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)))
     : new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
   if (!Number.isFinite(at.getTime())) return null;
-  return { date: at.toISOString().slice(0, 10), at, allDay: false };
+  // Day attribution: a calendar event belongs to the day the user LIVED it,
+  // not the UTC day. Non-Z stamps already carry the wall-clock day; Z stamps
+  // are converted to this machine's timezone (a 01:00 meeting in Israel is
+  // 22:00Z the day before — slicing the ISO string put it on the wrong day).
+  const date = z ? localDate(at) : `${y}-${mo}-${d}`;
+  return { date, at, allDay: false };
+}
+
+function localDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** RFC 5545 TEXT unescape: \n → newline, \, \; \\ → literal. */
+function unescapeIcsText(s: string): string {
+  return s.replace(/\\([\\;,nN])/g, (_, c) => (c === "n" || c === "N" ? "\n" : c));
 }
 
 function importCalendarIcs(zip: string, member: string): void {
@@ -343,6 +390,7 @@ function importCalendarIcs(zip: string, member: string): void {
     text = unzipText(zip, member);
   } catch {
     calendarSkipped++;
+    calendarSkippedMembers.push(`${path.basename(zip)}: ${member}`);
     return;
   }
   const lines = unfoldIcs(text);
@@ -357,19 +405,35 @@ function importCalendarIcs(zip: string, member: string): void {
       const status = event.find((l) => l.startsWith("STATUS:"))?.slice("STATUS:".length).trim().toUpperCase();
       const start = parseIcsDate(event.find((l) => l.startsWith("DTSTART")));
       const end = parseIcsDate(event.find((l) => l.startsWith("DTEND")));
+      const summaryLine = event.find((l) => /^SUMMARY[;:]/.test(l));
+      const summary = summaryLine ? unescapeIcsText(summaryLine.slice(summaryLine.indexOf(":") + 1).trim()) : "";
       event = null;
       if (!start || status === "CANCELLED") continue;
       calendarEvents++;
       const agg = calendarDaily.get(start.date) ?? calendarAgg();
       agg.events++;
       agg.calendars.add(calendar);
+      let minutes = 0;
       if (start.allDay) {
         agg.allDayEvents++;
       } else {
         agg.timedEvents++;
-        if (start.at && end?.at && end.at > start.at) agg.eventMinutes += (end.at.getTime() - start.at.getTime()) / 60000;
+        if (start.at && end?.at && end.at > start.at) {
+          // A multi-day event contributes at most one day to its start date —
+          // a year-long event used to land as 524,220 "meeting minutes".
+          minutes = Math.min((end.at.getTime() - start.at.getTime()) / 60000, 1440);
+          agg.eventMinutes += minutes;
+        }
       }
       calendarDaily.set(start.date, agg);
+      calendarEventRows.push({
+        source: "google_calendar_takeout",
+        date: start.date,
+        ts: start.at ? start.at.toISOString() : undefined,
+        title: summary || "(untitled event)",
+        text: [calendar, summary].filter(Boolean).join(" - ") || "Calendar event",
+        meta: { calendar, allDay: start.allDay, ...(minutes ? { minutes: Math.round(minutes) } : {}) },
+      });
       continue;
     }
     if (event) event.push(line);
@@ -543,12 +607,35 @@ const eventWrite = appendEvents(
   { recordDir: recordDir() },
 );
 
+// Calendar events land in the events store too — titles become searchable
+// (recall/FTS), not just daily counts.
+const calendarEventWrite = appendEvents(calendarEventRows, { recordDir: recordDir() });
+
+// A skipped member is DATA THAT DID NOT LAND — persist it as a pending
+// notification (stable id: same skip never re-notifies), never just a console
+// line that scrolls away.
+if (calendarSkippedMembers.length) {
+  const skipId = crypto.createHash("sha256").update(calendarSkippedMembers.join("\n")).digest("hex").slice(0, 16);
+  appendInboxItems(
+    [{
+      id: `takeout-skip-${skipId}`,
+      text:
+        `Takeout import skipped ${calendarSkippedMembers.length} calendar file(s) — this data is NOT in the record:\n` +
+        calendarSkippedMembers.map((m) => `  ${m}`).join("\n"),
+      source: "import",
+      kind: "notification",
+      meta: { kind: "import-skip", members: calendarSkippedMembers },
+    }],
+    { recordDir: recordDir() },
+  );
+}
+
 const rebuilt = rebuild();
 console.log(`archives=${zips.length}`);
 console.log(`myactivity_files=${activityFiles} raw_items=${activityRaw.length} days=${activityRows.length} merged_cells=${myActivityMerge.cells}`);
 console.log(`timeline_files=${timelineFiles} segments=${timelineSegments} days=${timelineRows.length} merged_cells=${timelineMerge.cells}`);
 console.log(`fit_files=${fitFiles} points=${fitPoints} days=${fitRows.length} merged_cells=${fitMerge.cells}`);
-console.log(`calendar_files=${calendarFiles} skipped=${calendarSkipped} events=${calendarEvents} days=${calendarRows.length} merged_cells=${calendarMerge.cells}`);
+console.log(`calendar_files=${calendarFiles} skipped=${calendarSkipped} events=${calendarEvents} days=${calendarRows.length} merged_cells=${calendarMerge.cells} indexed_events=${calendarEventWrite.added}`);
 console.log(`maps_places_files=${mapsPlacesFiles} items=${mapsPlacesItems} days=${mapsPlacesRows.length} merged_cells=${mapsPlacesMerge.cells}`);
 console.log(`event_rows_added=${eventWrite.added} event_rows_total=${eventWrite.total}`);
 console.log(`out=${outDir}`);

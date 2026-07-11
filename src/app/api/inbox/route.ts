@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItem, readInboxFromRecord, rebuild, updateInboxItems } from "@/lib/record";
+import { appendInboxItem, readInboxFromRecord, rebuild } from "@/lib/record";
+import { inboxResolve } from "@/lib/cli-core";
+import { MAX_INBOX_BYTES } from "@/lib/import-tree";
 import { autoStructureNewItem } from "@/lib/structure-run";
 
 export const runtime = "nodejs";
@@ -44,6 +46,19 @@ export async function POST(req: Request) {
   if (!text) {
     return NextResponse.json({ error: "A memo needs some text." }, { status: 400 });
   }
+  // Same guards as importRaw — the web face must not land what the CLI refuses.
+  if (text.includes("\u0000")) {
+    return NextResponse.json({ error: "That looks like a binary file — no importer claims it, nothing landed." }, { status: 400 });
+  }
+  if (Buffer.byteLength(text) > MAX_INBOX_BYTES) {
+    // This route lands the raw body verbatim (structuring is a separate,
+    // optional step) — a megabody would sit in inbox.jsonl forever. Big clean
+    // CSVs go through `agentqs import`, which merges without keeping the raw.
+    return NextResponse.json(
+      { error: "Text too large to land raw — import it with `agentqs import <file>` instead." },
+      { status: 400 },
+    );
+  }
 
   const item = appendInboxItem(
     { text, source: body.source || "memo", kind: body.kind, meta: body.meta },
@@ -65,7 +80,16 @@ export async function POST(req: Request) {
   });
 }
 
-/** Discard a pending capture (status → discarded), then rebuild. `?id=<id>`. */
+/** Missing id → 404; exists-but-wrong-state → 409 — a state conflict must not
+ * read as "that id never existed" to an agent following the docs. */
+function resolveError(e: unknown): NextResponse {
+  const msg = e instanceof Error ? e.message : String(e);
+  return NextResponse.json({ error: msg }, { status: msg.startsWith("No inbox item") ? 404 : 409 });
+}
+
+/** Discard a capture of any status (status → discarded, idempotent), then
+ * rebuild. `?id=<id>`. Never touches merged cells — reverting a structured
+ * item's data is the Log's Reject. */
 export async function DELETE(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -74,12 +98,28 @@ export async function DELETE(req: Request) {
   if (!id) {
     return NextResponse.json({ error: "Pass an item id to discard." }, { status: 400 });
   }
-  const n = updateInboxItems([{ id, status: "discarded" }], { recordDir: recordDir() });
-  if (!n) {
-    return NextResponse.json({ error: "No inbox item with that id." }, { status: 404 });
+  try {
+    const r = inboxResolve(id, "discard");
+    return NextResponse.json({ ok: true, pending: r.pending });
+  } catch (e) {
+    return resolveError(e);
   }
-  rebuild({ recordDir: recordDir() });
+}
 
-  const pending = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length;
-  return NextResponse.json({ ok: true, pending });
+/** Keep a pending capture as a reference memo (status → reference): searchable
+ * and recall-able, out of the pending queue. `{id}`. */
+export async function PATCH(req: Request) {
+  if (!getCurrentUser()) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const body = (await req.json().catch(() => ({}))) as { id?: string };
+  if (!body.id) {
+    return NextResponse.json({ error: "Pass an item id to keep." }, { status: 400 });
+  }
+  try {
+    const r = inboxResolve(body.id, "keep");
+    return NextResponse.json({ ok: true, pending: r.pending });
+  } catch (e) {
+    return resolveError(e);
+  }
 }

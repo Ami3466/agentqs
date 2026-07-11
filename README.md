@@ -43,7 +43,7 @@ If you want to interact with agentqs through external channels like Slack or Tel
 
 ### Journal
 
-One daily record of everything: sleep, steps, mood, focus, screen time, workouts, commits - plain CSVs you own, as a table or a timeline. **Scan data** keeps it clean: duplicate columns merge, dead columns drop, messy values get fixed. One click each, all undoable.
+One daily record of everything: sleep, steps, mood, focus, screen time, workouts, commits - plain CSVs you own, as a table or a timeline. **Scan data** keeps it clean: duplicate columns merge, dead columns drop, messy values get fixed. One click each, all undoable. `agentqs audit` hands your AI agent the evidence for a deeper review - impossible dates, coverage holes, sources gone quiet, outlier values.
 
 ### Data
 
@@ -79,7 +79,7 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 **Schedule scraping with Playwright** - for anything without an API: record the click-path to your data once, store the login, set an interval - it replays headless and lands like any other source. A Google MyActivity scraper ships out of the box.
 
-**Import files** - drop anything: Google Takeout archives · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file
+**Import files** - drop anything: Google Takeout archives (calendar event titles land searchable) · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file. Point `agentqs import` at a whole folder and every file is accounted for - structured, landed raw, routed to its importer, or reported as residue in a saved receipt; nothing is silently skipped
 
 Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
 

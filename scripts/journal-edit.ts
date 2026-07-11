@@ -14,10 +14,13 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import {
+  appendInboxItem,
   applyDailyEdits,
   mergeDailyCsv,
+  readInboxFromRecord,
   type DailyEdit,
 } from "../src/lib/record";
+import { inboxResolve } from "../src/lib/cli-core";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -112,6 +115,33 @@ applyDailyEdits(
   { recordDir: rDir },
 );
 check("whoop.csv deleted", !fs.existsSync(csv("whoop")));
+
+// ---- 6. inboxResolve: keep → reference, discard → discarded, pending only ---
+console.log("\ninboxResolve keep/discard");
+const dataDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-resolve-"));
+process.env.AGENTQS_DATA_DIR = dataDir2;
+const rDir2 = path.join(dataDir2, "record");
+const keepMe = appendInboxItem({ text: "# Plans\nA living document, no dated metrics." }, { recordDir: rDir2 });
+const dropMe = appendInboxItem({ text: "Name\nQ1\nQ2" }, { recordDir: rDir2 });
+const kept = inboxResolve(keepMe.id, "keep");
+check("keep → reference", kept.status === "reference", JSON.stringify(kept));
+const dropped = inboxResolve(dropMe.id, "discard");
+check("discard → discarded", dropped.status === "discarded", JSON.stringify(dropped));
+check("pending queue drained", dropped.pending === 0, `pending=${dropped.pending}`);
+const statuses = new Map(readInboxFromRecord(rDir2).map((i) => [i.id, i.status]));
+check("statuses persisted in the record", statuses.get(keepMe.id) === "reference" && statuses.get(dropMe.id) === "discarded");
+let rejected = "";
+try {
+  inboxResolve(keepMe.id, "keep"); // keep is pending-only
+} catch (e) {
+  rejected = e instanceof Error ? e.message : String(e);
+}
+check("keep refuses a non-pending item", rejected.includes("reference"), rejected);
+const unkept = inboxResolve(keepMe.id, "discard"); // discard works on ANY status (un-keep)
+check("discard un-keeps a reference memo", unkept.status === "discarded");
+check("discard is idempotent", inboxResolve(keepMe.id, "discard").status === "discarded");
+delete process.env.AGENTQS_DATA_DIR;
+fs.rmSync(dataDir2, { recursive: true, force: true });
 
 fs.rmSync(rDir, { recursive: true, force: true });
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed");
