@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Spinner, Wand, X } from "@/components/icons";
+import { Bookmark, Spinner, Wand, X } from "@/components/icons";
 import { ago, Button, cn, TabBar } from "@/components/ui";
 import { DataQualityPanel } from "./data-quality";
 
@@ -62,9 +62,13 @@ export function InboxPanel({
   const load = useCallback(async () => {
     const res = await fetch("/api/inbox");
     if (!res.ok) return;
-    const data = (await res.json()) as { pending: number; items: Item[] };
+    const data = (await res.json()) as { pending: number; items: Item[]; notifications?: Item[] };
     setPending(data.pending);
-    setItems(data.items);
+    // Generic import notifications (folder receipts, CSV-loss warnings) have no
+    // fix action for the Data quality tab, so THIS list is where they surface —
+    // a pending warning nobody can see is a silent skip with extra steps.
+    const generic = (data.notifications ?? []).filter((n) => !n.id.startsWith("colscan-"));
+    setItems([...generic, ...data.items]);
   }, []);
 
   useEffect(() => {
@@ -153,6 +157,20 @@ export function InboxPanel({
     }
   }
 
+  async function keep(id: string) {
+    setBusy(id);
+    try {
+      const res = await fetch("/api/inbox", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const anyBusy = busy !== null;
   const q = query.trim().toLowerCase();
   const filteredItems = q
@@ -230,19 +248,30 @@ export function InboxPanel({
                   <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{it.kind}</span>
                   <span>{ago(it.ts)}</span>
                   <span className="ml-auto flex items-center gap-1">
+                    {it.kind !== "notification" ? (
+                      <button
+                        type="button"
+                        onClick={() => structure(it.id)}
+                        disabled={anyBusy}
+                        title="Structure this item"
+                        className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 normal-case text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
+                      >
+                        {busy === it.id ? (
+                          <Spinner width={12} height={12} />
+                        ) : (
+                          <Wand width={12} height={12} />
+                        )}
+                        Structure
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      onClick={() => structure(it.id)}
+                      onClick={() => keep(it.id)}
                       disabled={anyBusy}
-                      title="Structure this item"
-                      className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 normal-case text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
+                      title="Keep as reference — searchable, nothing to extract"
+                      className="rounded p-0.5 text-muted-fg transition-colors hover:text-fg disabled:opacity-40"
                     >
-                      {busy === it.id ? (
-                        <Spinner width={12} height={12} />
-                      ) : (
-                        <Wand width={12} height={12} />
-                      )}
-                      Structure
+                      <Bookmark width={12} height={12} />
                     </button>
                     <button
                       type="button"

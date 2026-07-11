@@ -768,11 +768,13 @@ export function removeEventsBySource(
   return removed;
 }
 
-/** Patch inbox items in place by id (e.g. mark `structured` / `discarded`).
+/** Patch inbox items in place by id (e.g. mark `structured` / `discarded`, or
+ * refresh a living notification's text — a folder-import receipt keeps ONE id
+ * per folder and always shows the latest run).
  * Rewrites the whole file once, preserving every other field on each line and
  * any lines it can't parse. Returns how many items matched a patch. */
 export function updateInboxItems(
-  patches: Array<{ id: string; status?: string; meta?: unknown }>,
+  patches: Array<{ id: string; status?: string; meta?: unknown; text?: string }>,
   opts: { recordDir?: string; dataDir?: string } = {},
 ): number {
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
@@ -795,6 +797,7 @@ export function updateInboxItems(
     if (patch) {
       if (patch.status !== undefined) obj.status = patch.status;
       if (patch.meta !== undefined) obj.meta = patch.meta;
+      if (patch.text !== undefined) obj.text = patch.text;
       updated++;
     }
     out.push(JSON.stringify(obj));

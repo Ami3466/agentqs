@@ -1089,7 +1089,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
 const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[] = [
   { method: "POST", path: "/api/chat", body: `{"message":"…"}`, desc: "Ask your record — grounded answer with sources." },
   { method: "POST", path: "/api/search", body: `{"query":"…","limit":5}`, desc: "Semantic search — closest days plus a ready answer." },
-  { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens. GET lists pending captures; DELETE discards one." },
+  { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens. GET lists pending captures; DELETE discards one; PATCH {id} keeps one as a searchable reference memo." },
   { method: "POST", path: "/api/structure", body: `{"id":"…"}`, desc: "Structure a pending capture into daily rows with the configured AI (or pass all: true). Pass csv with the extracted date,… rows to structure key-free — same contract as the CLI/MCP tool." },
   { method: "POST", path: "/api/scan", body: `{}`, desc: "Scan data quality: duplicate columns, dead all-zero columns, messy values; findings queue as inbox notifications. GET lists open findings; fix: true applies them all." },
   { method: "GET", path: "/api/journal", desc: "List journal entries (?days=30, ?numeric=1)." },
@@ -1100,6 +1100,7 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; DELETE disconnects." },
   { method: "GET", path: "/api/pipeline", desc: "Pipeline truth table: per-source origin, credential provenance, schedule, last run outcome, coverage." },
   { method: "GET", path: "/api/doctor", desc: "Store health: sync-engine exposure (iCloud/Dropbox/OneDrive), evicted files, conflict twins, split stores." },
+  { method: "GET", path: "/api/audit", desc: "Index audit: deterministic evidence for an AI review — impossible dates, one-day sources, coverage holes, stale sources, outlier values." },
   { method: "POST", path: "/api/store/migrate", body: `{"dryRun":true}`, desc: "Move the store to the sync-safe app-data dir (hash-verified; restart after). Omit dryRun to migrate." },
   { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source: the key is TESTED against the real API first (only a working key is saved), then the sync runs as a background job (202 + job) that survives page reloads — poll GET /api/import/{source} for its phase/progress. Pass {\"test\": true} to probe a credential without saving anything." },
   { method: "POST", path: "/api/oauth/{source}", body: `{"clientId":"…","clientSecret":"…"}`, desc: "Start the OAuth dance for an expiring-token source (spotify, gcal, fitbit, strava): saves your provider app's credentials and returns the authorize URL. The provider redirects to GET /api/oauth/callback, which stores the tokens; syncs then refresh them automatically. GET /api/import/{source} carries each source's credentialHelp guide + oauth state." },

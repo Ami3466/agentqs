@@ -5,10 +5,18 @@
  * — clean CSV maps straight to columns (free, no LLM); prose goes through the
  * model to the same wide shape (paid, only here). Server-only (fs + provider).
  */
+import crypto from "crypto";
 import { activeLlm, autoStructureEnabled, readConfig } from "./config";
 import { wipeDemoOnImport } from "./demo";
 import { recordDir } from "./paths";
-import { mergeDailyCsv, readInboxFromRecord, rebuild, updateInboxItems, type InboxItem } from "./record";
+import {
+  appendInboxItems,
+  mergeDailyCsv,
+  readInboxFromRecord,
+  rebuild,
+  updateInboxItems,
+  type InboxItem,
+} from "./record";
 import { llmComplete } from "./llm";
 import { acceptQualityAction, columnGuard, qualityActionOf } from "./column-scan";
 import {
@@ -17,7 +25,49 @@ import {
   proseExtractionUser,
   sourceName,
   structureCsv,
+  type Structured,
 } from "./structure";
+
+/** One line naming what a CSV parse lost — shared by errors and notifications. */
+export function csvLossText(s: Structured): string {
+  const parts: string[] = [];
+  if (s.skippedRows) {
+    parts.push(
+      `${s.skippedRows} row(s) with data but no parseable date (e.g. ${s.skippedSamples.map((x) => `"${x}"`).join(", ")})`,
+    );
+  }
+  if (s.droppedColumns) parts.push(`${s.droppedColumns} column(s) with data but an empty header`);
+  return parts.join("; ");
+}
+
+/** A "structured" file that silently shed rows is how a record rots — persist
+ *  the loss as a pending notification. ONE per file (stable id from the hint),
+ *  latest run wins: partially fixing a file and re-importing must update the
+ *  warning, not stack a contradictory second one. Used by every channel that
+ *  structures a FILE the user can't regenerate on the spot; agent-supplied CSV
+ *  is rejected outright instead. */
+export function notifyCsvLoss(rDir: string, hint: string | undefined, s: Structured): number {
+  const loss = csvLossText(s);
+  if (!loss) return 0;
+  const text = `CSV import${hint ? ` "${hint}"` : ""} did NOT fully land: ${loss}. The other rows merged; fix the file and re-import to recover these.`;
+  const id = `csvloss-${crypto.createHash("sha256").update(hint ?? text).digest("hex").slice(0, 16)}`;
+  const item = {
+    text,
+    status: "pending",
+    meta: {
+      kind: "import-loss",
+      hint: hint ?? null,
+      skippedRows: s.skippedRows,
+      skippedSamples: s.skippedSamples,
+      droppedColumns: s.droppedColumns,
+    },
+  };
+  const patched = updateInboxItems([{ id, ...item }], { recordDir: rDir });
+  if (!patched) {
+    appendInboxItems([{ id, source: "import", kind: "notification", ...item }], { recordDir: rDir });
+  }
+  return 1;
+}
 
 export type StructureRoute = "csv" | "llm" | "agent" | "fix";
 export type StructureStatus = "structured" | "empty" | "error";
@@ -159,6 +209,18 @@ export async function structurePending(
     let route: StructureRoute = opts.csv ? "agent" : "csv";
     let source: string;
 
+    // Agent-supplied CSV is rejected ATOMICALLY on any loss — the agent can fix
+    // the dates and resend, so nothing is merged from a CSV that sheds rows.
+    if (structured && opts.csv && (structured.skippedRows || structured.droppedColumns)) {
+      results.push({
+        id: item.id,
+        route: "agent",
+        status: "error",
+        message: `Nothing merged — the CSV loses data: ${csvLossText(structured)}. Every row needs a YYYY-MM-DD date and every column a header; fix and resend.`,
+      });
+      continue;
+    }
+
     if (structured) {
       source = sourceName(hint, opts.csv ? "notes" : "import");
     } else if (opts.csv) {
@@ -206,6 +268,12 @@ export async function structurePending(
     }
 
     const merge = mergeDailyCsv(rDir, source, { header: structured.header, rows: structured.rows });
+    // A FILE that sheds rows gets a persisted loss notification — the user
+    // can fix the file and re-import. LLM output shedding rows is the model's
+    // formatting, not the user's data: "fix the file" would be nonsense, so
+    // the loss travels in the result message instead.
+    if (route === "csv") notifyCsvLoss(rDir, hint, structured);
+    const llmLoss = route === "llm" ? csvLossText(structured) : "";
     mutated = true;
     patches.push({
       id: item.id,
@@ -230,6 +298,7 @@ export async function structurePending(
       rowsAdded: merge.cells,
       metrics: merge.metrics,
       dates: merge.dates.length,
+      ...(llmLoss ? { message: `Model output lost data: ${llmLoss}. Re-structure the item if those facts matter.` } : {}),
     });
   }
 

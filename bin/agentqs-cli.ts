@@ -539,12 +539,43 @@ automation
 
 // ---- import (escape hatch) + structure ------------------------------------
 program
-  .command("import <file>")
-  .description("import any file into the record (CSV structures instantly)")
-  .option("-n, --name <source>", "source name for the daily table")
-  .action(async (file: string, opts: { name?: string }) => {
+  .command("import <path>")
+  .description("import a file or a whole folder (CSV structures instantly; a folder gets a full accounting — exit 1 on residue)")
+  .option("-n, --name <source>", "source name for the daily table (single file only)")
+  .action(async (target: string, opts: { name?: string }) => {
     try {
-      out(await core.importRaw({ file, name: opts.name }), (d) => d.note);
+      if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
+        const r = core.importTree(target);
+        // Print the persisted receipt itself — console and inbox must never
+        // tell different stories about the same run.
+        out(r, (d) =>
+          `${d.summary}\n${d.residue.length ? "Residue left — receipt is pending in the inbox." : "Everything accounted for — receipt saved."}`,
+        );
+        if (r.residue.length) process.exit(1);
+        return;
+      }
+      out(await core.importRaw({ file: target, name: opts.name }), (d) => d.note);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
+  .command("audit")
+  .description("index audit: deterministic evidence for an AI review — impossible dates, one-day sources, coverage holes, stale sources, outliers")
+  .action(() => {
+    try {
+      out(core.auditIndex(), (d) => {
+        if (!d.findings.length) return `Audited ${d.sources} sources — no evidence of index damage.`;
+        const lines = [`Audited ${d.sources} sources — ${d.findings.length} finding(s) to judge:`];
+        for (const f of d.findings) {
+          lines.push(`\n● ${f.kind}  ${f.source}${f.metric ? `.${f.metric}` : ""}`);
+          lines.push(`  ${f.detail}`);
+          for (const e of f.evidence) lines.push(`    ${e}`);
+        }
+        lines.push("\nJudge each finding, then fix via journal-edit / re-import / scan merges; file real losses as notifications.");
+        return lines.join("\n");
+      });
     } catch (e) {
       die(e);
     }
@@ -566,7 +597,7 @@ program
     }
   });
 
-program
+const inboxCmd = program
   .command("inbox")
   .description("pending captures with full text (the input for `structure --id --csv`)")
   .action(() => {
@@ -575,6 +606,28 @@ program
         d.items.map((i: { id: string; ts: string; source: string; kind: string; text: string }) => `${i.id}  ${i.ts.slice(0, 10)}  ${i.source}/${i.kind}  ${i.text.slice(0, 80).replace(/\n/g, " ")}`).join("\n") ||
         "Inbox empty.",
       );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+inboxCmd
+  .command("keep <id>")
+  .description("resolve a pending capture as a reference memo (searchable, no dated metrics to extract)")
+  .action((id: string) => {
+    try {
+      out(core.inboxResolve(id, "keep"), (d) => `Kept as reference; ${d.pending} still pending.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+inboxCmd
+  .command("discard <id>")
+  .description("drop a pending capture from the record and every index")
+  .action((id: string) => {
+    try {
+      out(core.inboxResolve(id, "discard"), (d) => `Discarded; ${d.pending} still pending.`);
     } catch (e) {
       die(e);
     }

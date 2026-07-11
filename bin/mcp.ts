@@ -164,6 +164,20 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "import_tree",
+    {
+      title: "Import a whole folder, fully accounted",
+      description:
+        "Walk a folder and land everything: clean CSVs structure instantly, text lands raw for the structuring agent, " +
+        "known formats (Takeout zips, Chrome History, iPhone backups, photos) are routed to their importer commands. " +
+        "EVERY file ends in exactly one bucket; residue (files nothing claims) is returned AND persisted as a pending " +
+        "inbox notification — nothing is ever silently skipped. Idempotent: re-importing the same folder adds nothing twice.",
+      inputSchema: { dir: z.string() },
+    },
+    async ({ dir }) => guard(() => core.importTree(dir)),
+  );
+
+  server.registerTool(
     "structure",
     {
       title: "Structure pending captures",
@@ -189,6 +203,19 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "inbox_resolve",
+    {
+      title: "Resolve a pending capture without structuring",
+      description:
+        "The other half of the structuring workflow, for items with no dated metrics to extract: " +
+        "action \"keep\" files the capture as a reference memo (searchable + recall-able, out of the pending queue — living documents, plans, notes); " +
+        "action \"discard\" drops it from the record and every index (empty or junk captures).",
+      inputSchema: { id: z.string(), action: z.enum(["keep", "discard"]) },
+    },
+    async ({ id, action }) => guard(() => core.inboxResolve(id, action)),
+  );
+
+  server.registerTool(
     "scan",
     {
       title: "Scan data quality",
@@ -200,6 +227,20 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { fix: z.boolean().optional() },
     },
     async ({ fix }) => guard(() => core.scan({ fix })),
+  );
+
+  server.registerTool(
+    "audit",
+    {
+      title: "Audit the index (deterministic evidence for AI review)",
+      description:
+        "Evidence packet for an index review: impossible dates, single-day sources, coverage holes, gone-quiet sources, " +
+        "outlier values — computed deterministically, no AI. YOU judge each finding (real quiet vs dead import, unit bug vs " +
+        "true spike), then fix through the product: journal-edit for junk cells, re-run the named import, `scan` for duplicate " +
+        "columns, or file a notification. Read-only — it never changes the record itself.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.auditIndex()),
   );
 
   server.registerTool(
