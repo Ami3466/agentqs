@@ -20,6 +20,7 @@ import os from "os";
 import path from "path";
 import Database from "better-sqlite3";
 import { unixMsToWebkit } from "../src/lib/importers/files/chrome";
+import { unixMsToMacAbsolute } from "../src/lib/importers/files/safari";
 
 const REPO = process.cwd();
 const TSX = path.join(REPO, "node_modules/.bin/tsx");
@@ -115,7 +116,7 @@ function seedSafariHistory(file: string): void {
   insItem.run(1, "https://developer.apple.com/docs");
   insItem.run(2, "https://news.ycombinator.com/item?id=3");
   insItem.run(3, "https://example.com/outside-window");
-  const mac = (iso: string) => Date.parse(iso) / 1000 - 978_307_200;
+  const mac = (iso: string) => unixMsToMacAbsolute(Date.parse(iso));
   const insVisit = db.prepare("INSERT INTO history_visits (history_item,visit_time) VALUES (?,?)");
   // 2026-06-10 → 2 visits · 2026-06-11 → 1 visit · one out-of-window
   insVisit.run(1, mac("2026-06-10T08:00:00Z"));
@@ -126,10 +127,13 @@ function seedSafariHistory(file: string): void {
 }
 
 /** Build a tiny Apple Health export.xml: two devices counting the same steps
- *  (dedup must keep the best, not the sum), HR samples, sleep segments. */
+ *  (dedup must keep the best, not the sum), HR samples, sleep segments,
+ *  locale units (mi/kJ must convert), and a double-logged workout. */
 function seedAppleHealth(file: string): void {
-  const rec = (type: string, source: string, start: string, end: string, value: string) =>
-    `  <Record type="${type}" sourceName="${source}" unit="count" startDate="${start}" endDate="${end}" value="${value}"/>`;
+  const rec = (type: string, source: string, start: string, end: string, value: string, unit = "count") =>
+    `  <Record type="${type}" sourceName="${source}" unit="${unit}" startDate="${start}" endDate="${end}" value="${value}"/>`;
+  const workout = (source: string, start: string, end: string) =>
+    `  <Workout workoutActivityType="HKWorkoutActivityTypeRunning" sourceName="${source}" startDate="${start}" endDate="${end}" duration="40"/>`;
   fs.writeFileSync(
     file,
     [
@@ -147,9 +151,16 @@ function seedAppleHealth(file: string): void {
       rec("HKCategoryTypeIdentifierSleepAnalysis", "Watch", "2024-05-15 23:30:00 +0300", "2024-05-16 00:30:00 +0300", "HKCategoryValueSleepAnalysisAsleepCore"),
       rec("HKCategoryTypeIdentifierSleepAnalysis", "Watch", "2024-05-16 00:30:00 +0300", "2024-05-16 01:00:00 +0300", "HKCategoryValueSleepAnalysisAsleepREM"),
       rec("HKCategoryTypeIdentifierSleepAnalysis", "Watch", "2024-05-15 23:00:00 +0300", "2024-05-16 01:10:00 +0300", "HKCategoryValueSleepAnalysisInBed"),
+      // 2024-05-17 locale units: a US phone exports mi and kJ — both must convert
+      rec("HKQuantityTypeIdentifierDistanceWalkingRunning", "iPhone", "2024-05-17 08:00:00 +0300", "2024-05-17 09:00:00 +0300", "2", "mi"),
+      rec("HKQuantityTypeIdentifierActiveEnergyBurned", "iPhone", "2024-05-17 08:00:00 +0300", "2024-05-17 09:00:00 +0300", "1000", "kJ"),
       // out-of-window record must be filtered by from/to
       rec("HKQuantityTypeIdentifierStepCount", "iPhone", "2023-01-01 08:00:00 +0200", "2023-01-01 09:00:00 +0200", "999"),
-      `  <Workout workoutActivityType="HKWorkoutActivityTypeRunning" sourceName="Watch" startDate="2024-05-15 18:00:00 +0300" endDate="2024-05-15 18:40:00 +0300" duration="40"/>`,
+      // the same evening run logged by the Watch AND Strava (overlap → 1),
+      // plus a separate morning run → the day holds 2 workouts, not 3
+      workout("Watch", "2024-05-15 18:00:00 +0300", "2024-05-15 18:40:00 +0300"),
+      workout("Strava", "2024-05-15 18:01:00 +0300", "2024-05-15 18:39:00 +0300"),
+      workout("Watch", "2024-05-15 06:00:00 +0300", "2024-05-15 06:30:00 +0300"),
       `</HealthData>`,
     ].join("\n"),
   );
@@ -333,10 +344,10 @@ function main(): void {
     "--json",
   ]);
   const ahRes = JSON.parse(ahOut) as { cells: number; daysWithData: number; metrics: string[] };
-  check("2 days landed", ahRes.daysWithData === 2, `${ahRes.daysWithData} days`);
+  check("3 days landed", ahRes.daysWithData === 3, `${ahRes.daysWithData} days`);
   check(
     "metrics match the existing health_daily columns",
-    ["steps", "distance_km", "asleep_min", "hr_avg", "workouts"].every((m) => ahRes.metrics.includes(m)),
+    ["steps", "distance_km", "asleep_min", "hr_avg", "workouts", "active_energy_kcal"].every((m) => ahRes.metrics.includes(m)),
     ahRes.metrics.join(", "),
   );
   const db3 = new Database(dbFile, { readonly: true });
@@ -349,6 +360,18 @@ function main(): void {
     .prepare("SELECT value_num AS n FROM daily WHERE source='health_daily' AND date='2024-05-16' AND metric='asleep_min'")
     .get() as { n: number } | undefined;
   check("sleep minutes summed from Asleep segments only (90)", sleep?.n === 90, `asleep_min=${sleep?.n}`);
+  const dist = db3
+    .prepare("SELECT value_num AS n FROM daily WHERE source='health_daily' AND date='2024-05-17' AND metric='distance_km'")
+    .get() as { n: number } | undefined;
+  check("locale units: 2 mi lands as 3.22 km, not 2", dist?.n === 3.22, `distance_km=${dist?.n}`);
+  const energy = db3
+    .prepare("SELECT value_num AS n FROM daily WHERE source='health_daily' AND date='2024-05-17' AND metric='active_energy_kcal'")
+    .get() as { n: number } | undefined;
+  check("locale units: 1000 kJ lands as 239 kcal", energy?.n === 239, `active_energy_kcal=${energy?.n}`);
+  const workouts = db3
+    .prepare("SELECT value_num AS n FROM daily WHERE source='health_daily' AND date='2024-05-15' AND metric='workouts'")
+    .get() as { n: number } | undefined;
+  check("workout dedup: Watch+Strava same run counts once (2 workouts, not 3)", workouts?.n === 2, `workouts=${workouts?.n}`);
   db3.close();
 
   // ---- daemon sync: git is the sync layer ---------------------------------

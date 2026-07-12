@@ -26,6 +26,7 @@ import Database from "better-sqlite3";
 import {
   importFile,
   resolveFilePath,
+  wantsFullHistory,
 } from "../src/lib/importers/file-plugin";
 import { FILE_IMPORTERS } from "../src/lib/importers/files/registry";
 import { windowDays } from "../src/lib/importers/plugin";
@@ -96,7 +97,10 @@ async function ingest(args: Args): Promise<IngestResult> {
       continue;
     }
     try {
-      const s = await importFile(importer, { path: filePath, from: win.from, to: win.to }, rDir);
+      // A lifetime export found at a default path (Apple Health export.zip)
+      // must not be trimmed to the daemon's rolling window.
+      const from = !args.days && wantsFullHistory(importer, filePath) ? "0001-01-01" : win.from;
+      const s = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
       imported.push({ id: importer.id, path: filePath, days: s.daysWithData, cells: s.cells });
       anyImported = true;
     } catch (e) {

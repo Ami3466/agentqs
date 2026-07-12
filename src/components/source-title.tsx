@@ -32,8 +32,10 @@ export function SourceTitle({
     );
   }
   return (
+    // prefetch off: dozens of rows would each prefetch the same client-filtered page
     <Link
       href={`/journal?source=${encodeURIComponent(id)}`}
+      prefetch={false}
       className={cn(base, "block hover:text-accent hover:underline")}
       title={title ?? `See all ${name} data in the Journal`}
     >

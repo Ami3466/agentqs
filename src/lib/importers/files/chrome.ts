@@ -94,11 +94,6 @@ export async function openSqliteCopy(src: string, what: string) {
   }
   const { default: Database } = await import("better-sqlite3");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-sqlite-"));
-  const dest = path.join(tmpDir, path.basename(src));
-  fs.copyFileSync(src, dest);
-  for (const ext of ["-wal", "-shm"]) {
-    if (fs.existsSync(src + ext)) fs.copyFileSync(src + ext, dest + ext);
-  }
   const cleanup = () => {
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -107,11 +102,23 @@ export async function openSqliteCopy(src: string, what: string) {
     }
   };
   try {
+    const dest = path.join(tmpDir, path.basename(src));
+    fs.copyFileSync(src, dest);
+    for (const ext of ["-wal", "-shm"]) {
+      if (fs.existsSync(src + ext)) fs.copyFileSync(src + ext, dest + ext);
+    }
     const db = new Database(dest, { readonly: true, fileMustExist: true });
     return { db, cleanup };
   } catch (e) {
     cleanup();
-    throw new Error(`${src} is not a readable ${what} database (${(e as Error).message})`);
+    const err = e as NodeJS.ErrnoException;
+    // The copy is the first read of the app's own file — on macOS a permission
+    // error here means the terminal lacks Full Disk Access, not a broken file.
+    const fda =
+      (err.code === "EPERM" || err.code === "EACCES") && process.platform === "darwin"
+        ? " — grant your terminal Full Disk Access (System Settings → Privacy & Security → Full Disk Access), then retry"
+        : "";
+    throw new Error(`${src} is not a readable ${what} database (${err.message})${fda}`);
   }
 }
 
@@ -223,6 +230,9 @@ export const chromeImporter: FileImporter = {
   live: true,
   primaryMetric: "visits",
   unit: "visits",
+  // The live History DB is a rolling window; a Takeout JSON is a one-shot
+  // lifetime export and defaults to full history.
+  fullHistoryDefault: (p) => /\.json$/i.test(p),
   defaultPaths: chromeDefaultPaths,
   read(ctx: FileImportContext): Promise<FileImportResult> {
     return readChromeHistory(ctx.path, ctx.from, ctx.to);

@@ -40,11 +40,28 @@ fs.writeFileSync(path.join(tree, "blob.bin"), Buffer.from([0, 1, 2, 0, 255, 254,
 fs.mkdirSync(path.join(tree, "sub"));
 fs.writeFileSync(path.join(tree, "sub", "empty.txt"), "");
 fs.writeFileSync(path.join(tree, "sub", "photo.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+// Apple Health / Safari routing fixtures: a REAL Health export.xml (bare +
+// zipped), the CDA companion, an imposter zip whose export.xml is NOT Health
+// data, and a Safari History.db (sqlite magic + its table names).
+const healthXmlBody = `<?xml version="1.0"?>\n<!DOCTYPE HealthData []>\n<HealthData locale="en_US">\n</HealthData>\n`;
+fs.writeFileSync(path.join(tree, "export.xml"), healthXmlBody);
+fs.writeFileSync(path.join(tree, "export_cda.xml"), `<?xml version="1.0"?>\n<ClinicalDocument xmlns="urn:hl7-org:v3">\n</ClinicalDocument>\n`);
+const safariDb = Buffer.alloc(4096);
+safariDb.write("SQLite format 3\0", 0, "latin1");
+fs.writeFileSync(path.join(tree, "History.db"), safariDb);
 let zipOk = false;
 try {
   fs.mkdirSync(path.join(tree, "zipsrc", "Takeout"), { recursive: true });
   fs.writeFileSync(path.join(tree, "zipsrc", "Takeout", "x.txt"), "hello");
   execFileSync("zip", ["-q", "-r", path.join(tree, "takeout.zip"), "Takeout"], { cwd: path.join(tree, "zipsrc") });
+  fs.mkdirSync(path.join(tree, "zipsrc", "apple_health_export"), { recursive: true });
+  fs.writeFileSync(path.join(tree, "zipsrc", "apple_health_export", "export.xml"), healthXmlBody);
+  execFileSync("zip", ["-q", "-r", path.join(tree, "health.zip"), "apple_health_export"], { cwd: path.join(tree, "zipsrc") });
+  fs.rmSync(path.join(tree, "zipsrc", "apple_health_export"), { recursive: true });
+  // Imposter: some other product's export.xml inside a zip — must NOT claim Health.
+  fs.mkdirSync(path.join(tree, "zipsrc", "vendor"), { recursive: true });
+  fs.writeFileSync(path.join(tree, "zipsrc", "vendor", "export.xml"), `<?xml version="1.0"?>\n<catalog><item/></catalog>\n`);
+  execFileSync("zip", ["-q", "-r", path.join(tree, "vendor.zip"), "vendor"], { cwd: path.join(tree, "zipsrc") });
   fs.rmSync(path.join(tree, "zipsrc"), { recursive: true });
   zipOk = true;
 } catch {
@@ -64,6 +81,29 @@ check("empty file ignored", byPath.get(path.join("sub", "empty.txt"))?.bucket ==
 check("binary is residue", byPath.get("blob.bin")?.bucket === "residue", byPath.get("blob.bin")?.detail);
 check("photo routed to photos importer", byPath.get(path.join("sub", "photo.jpg"))?.bucket === "importer");
 if (zipOk) check("takeout zip routed to its importer", byPath.get("takeout.zip")?.bucket === "importer", byPath.get("takeout.zip")?.detail);
+check(
+  "bare Health export.xml routed to health_daily",
+  byPath.get("export.xml")?.bucket === "importer" && !!byPath.get("export.xml")?.detail.includes("health_daily"),
+  byPath.get("export.xml")?.detail,
+);
+check("export_cda.xml (CDA companion) ignored, not residue", byPath.get("export_cda.xml")?.bucket === "ignored", byPath.get("export_cda.xml")?.detail);
+check(
+  "History.db routed to the safari importer",
+  byPath.get("History.db")?.bucket === "importer" && !!byPath.get("History.db")?.detail.includes("safari"),
+  byPath.get("History.db")?.detail,
+);
+if (zipOk) {
+  check(
+    "Health export.zip routed to health_daily (member sniffed)",
+    byPath.get("health.zip")?.bucket === "importer" && !!byPath.get("health.zip")?.detail.includes("health_daily"),
+    byPath.get("health.zip")?.detail,
+  );
+  check(
+    "imposter zip with a non-Health export.xml is residue, not claimed",
+    byPath.get("vendor.zip")?.bucket === "residue",
+    `${byPath.get("vendor.zip")?.bucket}: ${byPath.get("vendor.zip")?.detail}`,
+  );
+}
 const bucketSum = Object.values(r1.buckets).reduce((a, b) => a + b, 0);
 check("buckets sum to files (nothing silent)", bucketSum === r1.files, `${bucketSum}/${r1.files}`);
 

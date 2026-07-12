@@ -26,6 +26,7 @@ interface Point {
 interface Status {
   connected: boolean;
   email: string;
+  hasData: boolean;
   hasCredential: boolean;
   syncedAt: string | null;
   job: SourceJobView | null;
@@ -125,7 +126,7 @@ export function WhoopConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <SourceTitle id="whoop" name="WHOOP (per-minute, unofficial)" hasData={(status?.days ?? 0) > 0} title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row" />
+            <SourceTitle id="whoop" name="WHOOP (per-minute, unofficial)" hasData={Boolean(status?.hasData)} title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row" />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
         </div>

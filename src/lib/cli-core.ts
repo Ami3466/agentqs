@@ -43,7 +43,7 @@ import {
 import type { JobProgress } from "./sync-jobs";
 import { freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, PLUGINS } from "./importers/registry";
-import { importFile, resolveFilePath } from "./importers/file-plugin";
+import { importFile, resolveFilePath, wantsFullHistory } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
 import { recordSyncRun } from "./sync-runs";
@@ -797,7 +797,7 @@ async function syncFileSourceInner(opts: {
   const rDir = recordDir();
   // A one-shot lifetime export (Takeout JSON, Apple Health) defaults to ALL
   // history — a rolling 90-day window would silently discard most of it.
-  const fullHistory = importer.fullHistoryDefault || (importer.id === "chrome" && /\.json$/i.test(filePath));
+  const fullHistory = wantsFullHistory(importer, filePath);
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
   const from = opts.days && opts.days > 0 ? win.from : fullHistory ? "0001-01-01" : win.from;
   const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);

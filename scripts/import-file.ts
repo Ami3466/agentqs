@@ -30,6 +30,7 @@ import Database from "better-sqlite3";
 import {
   importFile,
   resolveFilePath,
+  wantsFullHistory,
   type FileImporter,
 } from "../src/lib/importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "../src/lib/importers/files/registry";
@@ -103,9 +104,9 @@ async function main(): Promise<void> {
 
   const rDir = args.record ?? recordDir(args.data);
   const dbFile = dbPath(args.data);
-  const takeoutJson = importer.id === "chrome" && /\.json$/i.test(filePath);
+  const fullHistory = wantsFullHistory(importer, filePath);
   const win = windowDays(args.days ? Number(args.days) : 90);
-  const from = args.from ?? (!args.days && takeoutJson ? "0001-01-01" : win.from);
+  const from = args.from ?? (!args.days && fullHistory ? "0001-01-01" : win.from);
   const to = args.to ?? win.to;
 
   let summary;

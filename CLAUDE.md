@@ -82,7 +82,9 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   (export.zip / export.xml; Health -> profile -> Export All Health Data) and
   backfills the existing health_daily table - lifetime by default, device-
   deduped (iPhone + Watch never double-count). `safari` reads
-  ~/Library/Safari/History.db (needs Full Disk Access).
+  ~/Library/Safari/History.db (needs Full Disk Access). CLI/MCP/daemon only,
+  deliberately no API route: these read files on YOUR disk, which the web
+  server can't reach; the web face for files is the dropzone.
 - `agentqs source guide <id>` - HOW to connect a source: where its credential
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form

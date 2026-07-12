@@ -42,8 +42,9 @@ export interface FileImporter {
   primaryMetric: string;
   unit?: string;
   /** One-shot lifetime exports (Apple Health) default to ALL history rather
-   *  than the rolling sync window. */
-  fullHistoryDefault?: boolean;
+   *  than the rolling sync window. A function makes the call per file — Chrome
+   *  is a rolling DB normally but a lifetime export when fed Takeout JSON. */
+  fullHistoryDefault?: boolean | ((path: string) => boolean);
   /** Default OS locations to probe when `--path` is omitted (platform-aware). */
   defaultPaths(): string[];
   /** Read the local file and normalize a window into the wide daily table. */
@@ -82,6 +83,14 @@ export async function importFile(
     daysWithData: merge.dates.length,
     meta: result.meta,
   };
+}
+
+/** ONE decision for every face (CLI/MCP sync, import:file script, daemon):
+ *  does this file default to ALL history? A rolling 90-day window on a
+ *  one-shot lifetime export would silently discard most of it. */
+export function wantsFullHistory(importer: FileImporter, filePath: string): boolean {
+  const d = importer.fullHistoryDefault;
+  return typeof d === "function" ? d(filePath) : Boolean(d);
 }
 
 /** Expand a leading `~` to the user's home directory. */
