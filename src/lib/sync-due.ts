@@ -1,7 +1,7 @@
 import { readConfig } from "./config";
 import { recordDir } from "./paths";
 import { buildSources } from "./source-registry";
-import type { SourceView } from "./sources";
+import { isDue, type SourceView } from "./sources";
 import { recordDueRun } from "./sync-runs";
 
 /**
@@ -67,6 +67,20 @@ export async function syncDue(runners?: DueRunners, dir: string = recordDir()): 
       synced.push({ id: s.id, name: s.name, kind, ok: true });
     } catch (e) {
       failed.push({ id: s.id, name: s.name, kind, ok: false, error: (e as Error).message });
+    }
+  }
+  // The GitHub record backup rides the same sweep: not a source (no credential
+  // row, no daily CSV), but due-ness and failure visibility work identically —
+  // a failing push shows up next to a failing sync, never silently. The Drive
+  // backup needs no hook here: gdrive_backup IS a scheduled source above.
+  const gh = readConfig()?.backup?.github;
+  if (gh?.remote && isDue(gh.lastAt ?? null, gh.interval ?? "daily")) {
+    try {
+      const { backupGithub } = await import("./backup");
+      await backupGithub();
+      synced.push({ id: "backup_github", name: "GitHub backup", kind: "api", ok: true });
+    } catch (e) {
+      failed.push({ id: "backup_github", name: "GitHub backup", kind: "api", ok: false, error: (e as Error).message });
     }
   }
   return { due: synced.length + failed.length, synced, failed, skipped };

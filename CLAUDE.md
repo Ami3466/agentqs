@@ -65,6 +65,19 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   sync-safe app-data dir: hash-verified copy, source retired (never deleted),
   launchd/crontab re-pointed. Stop the app first, restart after. MCP:
   `migrate_store`; API: POST `/api/store/migrate`.
+- `agentqs backup` - off-site copies, two targets that together cover every
+  byte: `backup github --remote <url>` pushes a SNAPSHOT branch of the record
+  to a private repo (plumbing against a temp index - the record repo's own
+  branches/history never leave the machine; files past GitHub's 100MB limit
+  are excluded LOUDLY and named in the result); `backup drive` uploads the
+  whole store (record + config.json) as ONE tar+AES-256-GCM archive to Google
+  Drive, rotated to the newest `keep` (8). Drive connects like any OAuth
+  source (`gdrive_backup`, drive.file scope) and rides the source interval;
+  the GitHub side rides `sync --due` (daily). `backup passphrase --generate`
+  first - archives are unreadable without it. `backup restore <file>|--latest
+  --out <dir>` decrypts into a FRESH dir, never over the live store. `backup
+  status` = "when did my data last leave this machine?". MCP: `backup_run`,
+  `backup_status`; API: GET/POST `/api/backup`.
 - `agentqs audit` - index audit: DETERMINISTIC evidence for an AI review pass -
   impossible dates, single-day sources, coverage holes, gone-quiet sources,
   outlier values. YOU judge each finding (real quiet vs dead import, unit bug

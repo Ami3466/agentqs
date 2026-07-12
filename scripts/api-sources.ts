@@ -18,6 +18,7 @@ import path from "path";
 import { importPlugin } from "../src/lib/importers/plugin";
 import { PLUGINS } from "../src/lib/importers/registry";
 import { parseCsv } from "../src/lib/record";
+import { writeConfig, type AppConfig } from "../src/lib/config";
 import { CRED, FIXTURES, fetchForFixture } from "./api-fixtures";
 
 let failures = 0;
@@ -31,6 +32,18 @@ async function main() {
   const recordDir = path.join(root, "record");
   const from = "2026-06-01";
   const to = "2026-06-30";
+  // Hermetic store: gdrive_backup's sync archives dataDir() itself, so the run
+  // must resolve to THIS temp root (with the passphrase its brain requires),
+  // never the real record.
+  process.env.AGENTQS_DATA_DIR = root;
+  writeConfig({
+    username: "t",
+    passwordHash: "x",
+    sessionSecret: "s",
+    theme: "system",
+    createdAt: new Date().toISOString(),
+    backup: { passphrase: "fixture-pass" },
+  } as AppConfig);
 
   console.log(`\nAPI-first — driving ${PLUGINS.length} API plugins through the real import path\n`);
 

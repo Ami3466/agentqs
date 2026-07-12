@@ -16,6 +16,7 @@ import { mastodonPlugin } from "./mastodon";
 import { withingsPlugin } from "./withings";
 import { granolaPlugin } from "./granola";
 import { whoopApiPlugin } from "./whoop-api";
+import { gdriveBackupPlugin } from "./gdrive-backup";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
@@ -47,6 +48,10 @@ export const PLUGINS: ImporterPlugin[] = [
   mastodonPlugin,
   withingsPlugin,
   granolaPlugin,
+  // Not an importer: the encrypted-Drive BACKUP target. It lives here because a
+  // registry entry is what buys the OAuth dance, the schedule and the Pipeline
+  // row — its sync uploads an archive and lands only the backup_mb receipt.
+  gdriveBackupPlugin,
 ];
 
 export function pluginById(id: string): ImporterPlugin | undefined {

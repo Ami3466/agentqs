@@ -245,6 +245,34 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "backup_status",
+    {
+      title: "Off-site backup status",
+      description:
+        "Both backup targets at a glance: the GitHub snapshot branch (configured remote, schedule, last push, last error) and " +
+        "the encrypted Google Drive archive (grant connected, passphrase set, schedule, last upload, last error). " +
+        "Answer \"when did my data last leave this machine?\" from here.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.backupStatus()),
+  );
+
+  server.registerTool(
+    "backup_run",
+    {
+      title: "Run a backup now",
+      description:
+        "target \"github\" snapshots the plain-text record and pushes it to the configured private repo (files over GitHub's " +
+        "100MB limit are excluded loudly — the Drive archive covers them); target \"drive\" tars the WHOLE store, encrypts it " +
+        "(AES-256-GCM with the configured passphrase) and uploads one archive via the gdrive_backup grant, rotating old ones. " +
+        "Both also run on schedule (`sync --due` / the source interval) — this is the run-it-now face.",
+      inputSchema: { target: z.enum(["github", "drive"]) },
+    },
+    async ({ target }) =>
+      guard(() => (target === "github" ? core.backupGithub({}) : core.syncSource({ id: "gdrive_backup" }))),
+  );
+
+  server.registerTool(
     "recall",
     {
       title: "Semantic recall (local, no key)",

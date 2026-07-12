@@ -1,0 +1,3 @@
+{
+  "note": "gdrive_backup needs no fixture DATA — its sync archives the (temp) store itself. The fake Drive endpoints live in scripts/api-fixtures.ts (MULTI.gdrive_backup)."
+}
