@@ -77,7 +77,12 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   queue as inbox notifications (kind `notification`, shown in Pipeline -> Data
   quality); structuring one applies the fix - merges keep the auto-synced
   column and save a rule so future imports stay merged. MCP tool: `scan`.
-- `agentqs source file chrome|iphone` - local file importers.
+- `agentqs source file chrome|safari|iphone|health_daily` - local file
+  importers. `health_daily` streams the iPhone Health app's export
+  (export.zip / export.xml; Health -> profile -> Export All Health Data) and
+  backfills the existing health_daily table - lifetime by default, device-
+  deduped (iPhone + Watch never double-count). `safari` reads
+  ~/Library/Safari/History.db (needs Full Disk Access).
 - `agentqs source guide <id>` - HOW to connect a source: where its credential
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form

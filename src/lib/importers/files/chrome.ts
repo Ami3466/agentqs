@@ -47,8 +47,10 @@ interface UnixVisitRow {
   url: string;
 }
 
-/** Roll raw (timestamp, url) rows up into the wide per-day daily table. */
-function normalizeVisits(rows: Array<{ t: number; url: string }>, from: string, to: string, toUnixMs: (t: number) => number): DailyTable {
+/** Roll raw (timestamp, url) rows up into the wide per-day daily table.
+ *  Shared by every browser-history importer (Chrome, Safari) — same columns,
+ *  each supplies its own epoch converter. */
+export function normalizeVisits(rows: Array<{ t: number; url: string }>, from: string, to: string, toUnixMs: (t: number) => number): DailyTable {
   const header = ["date", "visits", "pages", "domains"];
   const fromDay = from;
   const toDay = to;
@@ -83,14 +85,16 @@ export function normalizeChromeTakeoutVisits(rows: UnixVisitRow[], from: string,
   return normalizeVisits(rows, from, to, (us) => Math.floor(us / 1000));
 }
 
-/** Copy the (possibly locked) History DB to a temp dir and open it read-only. */
-async function openHistoryCopy(src: string) {
+/** Copy a (possibly locked, WAL-sidecarred) live SQLite DB to a temp dir and
+ *  open the copy read-only — never touch the app's own file. Shared by every
+ *  importer that reads a browser/OS database. */
+export async function openSqliteCopy(src: string, what: string) {
   if (!fs.existsSync(src)) {
-    throw new Error(`Chrome History file not found at ${src}`);
+    throw new Error(`${what} file not found at ${src}`);
   }
   const { default: Database } = await import("better-sqlite3");
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-chrome-"));
-  const dest = path.join(tmpDir, "History");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-sqlite-"));
+  const dest = path.join(tmpDir, path.basename(src));
   fs.copyFileSync(src, dest);
   for (const ext of ["-wal", "-shm"]) {
     if (fs.existsSync(src + ext)) fs.copyFileSync(src + ext, dest + ext);
@@ -107,7 +111,7 @@ async function openHistoryCopy(src: string) {
     return { db, cleanup };
   } catch (e) {
     cleanup();
-    throw new Error(`${src} is not a readable Chrome History database (${(e as Error).message})`);
+    throw new Error(`${src} is not a readable ${what} database (${(e as Error).message})`);
   }
 }
 
@@ -119,7 +123,7 @@ export async function readChromeHistory(
 ): Promise<FileImportResult> {
   if (/\.json$/i.test(file)) return readChromeTakeoutHistory(file, from, to);
 
-  const { db, cleanup } = await openHistoryCopy(file);
+  const { db, cleanup } = await openSqliteCopy(file, "Chrome History");
   try {
     const hasVisits = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('visits','urls')")

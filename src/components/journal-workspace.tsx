@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
 import { JournalSearch } from "./journal-search";
@@ -53,7 +54,11 @@ export function JournalWorkspace() {
   const [loadingFull, setLoadingFull] = useState(false);
 
   // ---- filters (date range + data type) ----
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  // Deep link from the Pipeline tab: /journal?source=<id> opens pre-filtered to
+  // that source. useSearchParams (not window.location) so a client-side
+  // navigation sees the NEW url on first render.
+  const urlSource = useSearchParams().get("source");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>(urlSource ? `src:${urlSource}` : "all");
   const [range, setRange] = useState<GraphRangePreset>("all");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -130,6 +135,24 @@ export function JournalWorkspace() {
     const saved = localStorage.getItem(MODE_KEY);
     if (saved === "table" || saved === "timeline") setMode(saved);
   }, []);
+
+  // Mirror the source filter into the URL so a reload keeps it, Clear really
+  // clears it, and the filtered view is shareable/bookmarkable.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const next = typeFilter.startsWith("src:") ? typeFilter.slice(4) : null;
+    if ((url.searchParams.get("source") ?? null) === next) return;
+    if (next) url.searchParams.set("source", next);
+    else url.searchParams.delete("source");
+    window.history.replaceState(null, "", url);
+  }, [typeFilter]);
+
+  // Follow LATER url changes too (back/forward between filtered views).
+  useEffect(() => {
+    setTypeFilter((cur) =>
+      urlSource ? `src:${urlSource}` : cur.startsWith("src:") ? "all" : cur,
+    );
+  }, [urlSource]);
 
   const [loadError, setLoadError] = useState(false);
 
@@ -255,6 +278,11 @@ export function JournalWorkspace() {
                 {s}
               </option>
             ))}
+            {/* Deep-linked source with no daily columns (e.g. events-only) —
+                keep the select honest instead of snapping back to "All data". */}
+            {typeFilter.startsWith("src:") && !sources.includes(typeFilter.slice(4)) ? (
+              <option value={typeFilter}>{typeFilter.slice(4)}</option>
+            ) : null}
             {hasMemos ? <option value="memos">Memos</option> : null}
             {hasSessions ? <option value="sessions">Sessions</option> : null}
             {typeFilter.startsWith("met:") ? (

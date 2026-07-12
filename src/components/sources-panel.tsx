@@ -5,6 +5,7 @@ import { Check, ChevronDown, Inbox, Plus, RefreshCw, sourceIcon, Spinner, Trash,
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
+import { SourceTitle } from "@/components/source-title";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
@@ -597,7 +598,7 @@ function GoogleImporterCard({
             return (
               <div key={item.id} className="flex items-center gap-3 px-3 py-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-fg">{item.label}</p>
+                  <SourceTitle id={item.source} name={item.label} hasData={item.status.exists} className="text-[13px]" />
                   <p className="truncate text-xs text-muted-fg">
                     {item.status.exists
                       ? (item.status.events > 0 ? `${item.status.events.toLocaleString()} events · ` : "") +
@@ -755,7 +756,8 @@ function SourceRow({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-medium text-fg">{name}</p>
+          {/* Bundles aggregate several daily sources — no single Journal filter. */}
+          <SourceTitle id={id} name={name} hasData={(source.hasData ?? connected) && !source.bundle} />
           {stale ? (
             <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
               stale

@@ -102,6 +102,59 @@ function seedChromeTakeout(file: string): void {
   );
 }
 
+/** Build a synthetic Safari History.db (Mac-absolute-second timestamps). */
+function seedSafariHistory(file: string): void {
+  const db = new Database(file);
+  db.exec(`
+    CREATE TABLE history_items (id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER);
+    CREATE TABLE history_visits (
+      id INTEGER PRIMARY KEY, history_item INTEGER, visit_time REAL, title TEXT
+    );
+  `);
+  const insItem = db.prepare("INSERT INTO history_items (id,url,visit_count) VALUES (?,?,1)");
+  insItem.run(1, "https://developer.apple.com/docs");
+  insItem.run(2, "https://news.ycombinator.com/item?id=3");
+  insItem.run(3, "https://example.com/outside-window");
+  const mac = (iso: string) => Date.parse(iso) / 1000 - 978_307_200;
+  const insVisit = db.prepare("INSERT INTO history_visits (history_item,visit_time) VALUES (?,?)");
+  // 2026-06-10 → 2 visits · 2026-06-11 → 1 visit · one out-of-window
+  insVisit.run(1, mac("2026-06-10T08:00:00Z"));
+  insVisit.run(2, mac("2026-06-10T09:00:00Z"));
+  insVisit.run(1, mac("2026-06-11T10:00:00Z"));
+  insVisit.run(3, mac("2026-05-01T10:00:00Z"));
+  db.close();
+}
+
+/** Build a tiny Apple Health export.xml: two devices counting the same steps
+ *  (dedup must keep the best, not the sum), HR samples, sleep segments. */
+function seedAppleHealth(file: string): void {
+  const rec = (type: string, source: string, start: string, end: string, value: string) =>
+    `  <Record type="${type}" sourceName="${source}" unit="count" startDate="${start}" endDate="${end}" value="${value}"/>`;
+  fs.writeFileSync(
+    file,
+    [
+      `<?xml version="1.0" encoding="UTF-8"?>`,
+      `<!DOCTYPE HealthData []>`,
+      `<HealthData locale="en_IL">`,
+      // 2024-05-15 steps: iPhone 4000+3000=7000, Watch 8000 → day keeps 8000
+      rec("HKQuantityTypeIdentifierStepCount", "iPhone", "2024-05-15 08:00:00 +0300", "2024-05-15 09:00:00 +0300", "4000"),
+      rec("HKQuantityTypeIdentifierStepCount", "iPhone", "2024-05-15 10:00:00 +0300", "2024-05-15 11:00:00 +0300", "3000"),
+      rec("HKQuantityTypeIdentifierStepCount", "Watch", "2024-05-15 08:00:00 +0300", "2024-05-15 20:00:00 +0300", "8000"),
+      rec("HKQuantityTypeIdentifierDistanceWalkingRunning", "Watch", "2024-05-15 08:00:00 +0300", "2024-05-15 20:00:00 +0300", "6.4"),
+      rec("HKQuantityTypeIdentifierHeartRate", "Watch", "2024-05-15 08:00:00 +0300", "2024-05-15 08:00:00 +0300", "60"),
+      rec("HKQuantityTypeIdentifierHeartRate", "Watch", "2024-05-15 09:00:00 +0300", "2024-05-15 09:00:00 +0300", "80"),
+      // 2024-05-16 sleep: two Asleep segments (60 + 30) + one InBed that must NOT count
+      rec("HKCategoryTypeIdentifierSleepAnalysis", "Watch", "2024-05-15 23:30:00 +0300", "2024-05-16 00:30:00 +0300", "HKCategoryValueSleepAnalysisAsleepCore"),
+      rec("HKCategoryTypeIdentifierSleepAnalysis", "Watch", "2024-05-16 00:30:00 +0300", "2024-05-16 01:00:00 +0300", "HKCategoryValueSleepAnalysisAsleepREM"),
+      rec("HKCategoryTypeIdentifierSleepAnalysis", "Watch", "2024-05-15 23:00:00 +0300", "2024-05-16 01:10:00 +0300", "HKCategoryValueSleepAnalysisInBed"),
+      // out-of-window record must be filtered by from/to
+      rec("HKQuantityTypeIdentifierStepCount", "iPhone", "2023-01-01 08:00:00 +0200", "2023-01-01 09:00:00 +0200", "999"),
+      `  <Workout workoutActivityType="HKWorkoutActivityTypeRunning" sourceName="Watch" startDate="2024-05-15 18:00:00 +0300" endDate="2024-05-15 18:40:00 +0300" duration="40"/>`,
+      `</HealthData>`,
+    ].join("\n"),
+  );
+}
+
 /** Build a minimal iOS backup: Manifest.db (Files table) + Info.plist. */
 function seedIphoneBackup(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -241,6 +294,62 @@ function main(): void {
     .get() as { n: number } | undefined;
   check("iphone snapshot landed in daily table", files?.n === 6, `files_backed_up=${files?.n}`);
   db2.close();
+
+  // ---- Safari history -----------------------------------------------------
+  console.log("\nSafari History.db → import:file command → record");
+  const safariDb = path.join(root, "History.db");
+  seedSafariHistory(safariDb);
+  const sfOut = runCli("import-file.ts", [
+    "--source", "safari",
+    "--path", safariDb,
+    "--record", recordDir,
+    "--data", root,
+    "--from", from,
+    "--to", to,
+    "--rebuild",
+    "--json",
+  ]);
+  const sfRes = JSON.parse(sfOut) as { cells: number; daysWithData: number; meta?: { visitsScanned?: number } };
+  const safariCsv = path.join(recordDir, "daily", "safari.csv");
+  check("record/daily/safari.csv written", fs.existsSync(safariCsv));
+  check(
+    "same columns as Chrome (date,visits,pages,domains)",
+    fs.readFileSync(safariCsv, "utf8").split(/\r?\n/)[0] === "date,visits,pages,domains",
+  );
+  check("2 days landed, out-of-window visit excluded by the bounded scan", sfRes.daysWithData === 2 && sfRes.meta?.visitsScanned === 3, `${sfRes.daysWithData} days, ${sfRes.meta?.visitsScanned} scanned`);
+
+  // ---- Apple Health export ------------------------------------------------
+  console.log("\nApple Health export.xml → health_daily backfill");
+  const healthXml = path.join(root, "export.xml");
+  seedAppleHealth(healthXml);
+  const ahOut = runCli("import-file.ts", [
+    "--source", "health_daily",
+    "--path", healthXml,
+    "--record", recordDir,
+    "--data", root,
+    "--from", "2024-05-01",
+    "--to", "2024-05-31",
+    "--rebuild",
+    "--json",
+  ]);
+  const ahRes = JSON.parse(ahOut) as { cells: number; daysWithData: number; metrics: string[] };
+  check("2 days landed", ahRes.daysWithData === 2, `${ahRes.daysWithData} days`);
+  check(
+    "metrics match the existing health_daily columns",
+    ["steps", "distance_km", "asleep_min", "hr_avg", "workouts"].every((m) => ahRes.metrics.includes(m)),
+    ahRes.metrics.join(", "),
+  );
+  const db3 = new Database(dbFile, { readonly: true });
+  const steps = db3
+    .prepare("SELECT value_num AS n FROM daily WHERE source='health_daily' AND date='2024-05-15' AND metric='steps'")
+    .get() as { n: number } | undefined;
+  // iPhone logged 4000+3000, Watch logged 8000 → the day keeps its best device, never the double-counted sum.
+  check("device dedup: best source wins (8000), not the cross-device sum", steps?.n === 8000, `steps=${steps?.n}`);
+  const sleep = db3
+    .prepare("SELECT value_num AS n FROM daily WHERE source='health_daily' AND date='2024-05-16' AND metric='asleep_min'")
+    .get() as { n: number } | undefined;
+  check("sleep minutes summed from Asleep segments only (90)", sleep?.n === 90, `asleep_min=${sleep?.n}`);
+  db3.close();
 
   // ---- daemon sync: git is the sync layer ---------------------------------
   console.log("\ndaemon sync → commit the record repo (git = the sync layer)");

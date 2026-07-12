@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, Check, Clock, Play, RefreshCw, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
+import { SourceTitle } from "@/components/source-title";
 import { Badge, Button } from "@/components/ui";
 import { ago, type Interval, type SourceView } from "@/lib/sources";
 
@@ -55,7 +56,7 @@ export function AutomationRow({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">{name}</p>
+            <SourceTitle id={id} name={name} hasData={Boolean(source.hasData)} />
             <Badge>automation</Badge>
             {failed ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-medium text-warning">

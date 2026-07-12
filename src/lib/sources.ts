@@ -97,6 +97,9 @@ export interface SourceView {
   automationStatus?: "ok" | "error" | null; // last replay outcome (automation rows)
   automationError?: string | null; // last replay error, if any
   plugin?: boolean; // a Tier-1 plugin source — supports extra accounts ("<id>-2" instances)
+  /** An aggregate of several record sources (e.g. a Takeout archive) — its id is
+   *  not a `daily.source` value, so no single-source Journal filter exists for it. */
+  bundle?: boolean;
   /** Provenance of the working credential: "saved" = the user connected it,
    *  "env" = environment variable, "discovered" = auto-detected from the
    *  source's local desktop app (the user never connected it — surface that). */

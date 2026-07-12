@@ -367,6 +367,8 @@ function bundleRow(cfg: AppConfig | null, dir: string, bundle: SourceBundle): So
     due: false,
     syncEndpoint: null,
     live: true,
+    bundle: true,
+    hasData: true, // a bundle row only exists once member files hold rows
   };
 }
 
@@ -384,15 +386,17 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
   } catch {
     /* keep raw url */
   }
+  const landed = hasRows(file);
   const detail =
     recipe.lastStatus === "error"
       ? `${host} · last run failed`
-      : `${host} · ${hasRows(file) ? "last run ok" : "no data yet"}`;
+      : `${host} · ${landed ? "last run ok" : "no data yet"}`;
   return {
     id: recipe.id,
     name: recipe.name,
     kind: "api",
     detail,
+    hasData: landed,
     connected: true, // a configured automation always lives under Automated imports
     interval,
     lastSync,

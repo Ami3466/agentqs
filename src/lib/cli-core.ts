@@ -795,9 +795,11 @@ async function syncFileSourceInner(opts: {
     );
   }
   const rDir = recordDir();
-  const takeoutJson = importer.id === "chrome" && /\.json$/i.test(filePath);
+  // A one-shot lifetime export (Takeout JSON, Apple Health) defaults to ALL
+  // history — a rolling 90-day window would silently discard most of it.
+  const fullHistory = importer.fullHistoryDefault || (importer.id === "chrome" && /\.json$/i.test(filePath));
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
-  const from = opts.days && opts.days > 0 ? win.from : takeoutJson ? "0001-01-01" : win.from;
+  const from = opts.days && opts.days > 0 ? win.from : fullHistory ? "0001-01-01" : win.from;
   const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
   applySavedMerges(rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
