@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCopy } from "@/components/connect-api";
 import { Check, Copy, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
+import { SourceTitle } from "@/components/source-title";
 import { SyncStatus } from "@/components/sync-status";
 import { Badge, Button, Input } from "@/components/ui";
 import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
@@ -224,7 +225,7 @@ export function SourceConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">{status?.name ?? id}</p>
+            <SourceTitle id={id} name={status?.name ?? id} hasData={Boolean(status?.hasData)} />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
             {!connected && status?.hasData ? (
               <Badge title="Rows from this source exist in your record (imported), but the app holds no authorization to sync more. Connect to keep it updated.">

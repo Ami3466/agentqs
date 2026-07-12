@@ -223,6 +223,8 @@ export function importTree(root: string): ImportTreeReport {
           push("residue", "unreadable archive", bytes);
         } else if (members.some((m) => m.startsWith("Takeout/"))) {
           push("importer", `npx tsx scripts/import-google-takeout-archive.ts --zip ${shq(file)}`, bytes);
+        } else if (members.some((m) => /(^|\/)export\.xml$/i.test(m))) {
+          push("importer", `agentqs source file health_daily --path ${shq(file)}`, bytes);
         } else {
           push("residue", "archive — unpack it or add an importer", bytes);
         }
@@ -230,12 +232,19 @@ export function importTree(root: string): ImportTreeReport {
       }
       if (isSqlite(head)) {
         if (name === "History") push("importer", `agentqs source file chrome --path ${shq(file)}`, bytes);
+        else if (name === "History.db") push("importer", `agentqs source file safari --path ${shq(file)}`, bytes);
         else if (name === "Manifest.db") push("importer", `agentqs source file iphone --path ${shq(path.dirname(file))}`, bytes);
         else push("residue", "sqlite database — no importer claims it", bytes);
         continue;
       }
       if (IMAGE_EXT.has(ext(name))) {
         push("importer", `agentqs photos import ${shq(path.dirname(file))}`, bytes);
+        continue;
+      }
+
+      // A bare Apple Health export.xml is a lifetime dataset, not a memo.
+      if (/^export(_cda)?\.xml$/i.test(name) && head.toString("utf8").includes("HealthData")) {
+        push("importer", `agentqs source file health_daily --path ${shq(file)}`, bytes);
         continue;
       }
 

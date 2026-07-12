@@ -427,9 +427,9 @@ source
 
 source
   .command("file <id>")
-  .description("import a Tier-2 local file source: chrome | iphone")
-  .option("-p, --path <file>", "explicit file/backup path")
-  .option("-d, --days <n>", "trailing window; Chrome Takeout JSON defaults to all", (v) => parseInt(v, 10))
+  .description("import a Tier-2 local file source: chrome | safari | iphone | health_daily (Apple Health export)")
+  .option("-p, --path <file>", "explicit file/backup/export path")
+  .option("-d, --days <n>", "trailing window; lifetime exports (Takeout JSON, Apple Health) default to all", (v) => parseInt(v, 10))
   .action(async (id: string, opts: { path?: string; days?: number }) => {
     try {
       const r = await core.syncFileSource({ id, path: opts.path, days: opts.days });

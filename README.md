@@ -47,7 +47,7 @@ One daily record of everything: sleep, steps, mood, focus, screen time, workouts
 
 ### Data
 
-Connect a source, or drop any file and hit **Structure** - it lands in your record. Clean CSVs map instantly, no LLM. Every capture is logged: structured, pending or rejected, and everything is revertible.
+Connect a source, or drop any file and hit **Structure** - it lands in your record. Clean CSVs map instantly, no LLM. Every capture is logged: structured, pending or rejected, and everything is revertible. Click any source's name to jump to the Journal filtered to just its data (`/journal?source=<id>`).
 
 ### Graphs
 
@@ -79,7 +79,7 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 **Schedule scraping with Playwright** - for anything without an API: record the click-path to your data once, store the login, set an interval - it replays headless and lands like any other source. A Google MyActivity scraper ships out of the box.
 
-**Import files** - drop anything: Google Takeout archives (calendar event titles land searchable) · Google Timeline · Chrome browser history · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file. Point `agentqs import` at a whole folder and every file is accounted for - structured, landed raw, routed to its importer, or reported as residue in a saved receipt; nothing is silently skipped
+**Import files** - drop anything: Google Takeout archives (calendar event titles land searchable) · Apple Health export.zip (steps, sleep, HR, workouts - lifetime, device-deduped) · Chrome and Safari browser history · Google Timeline · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file. Point `agentqs import` at a whole folder and every file is accounted for - structured, landed raw, routed to its importer, or reported as residue in a saved receipt; nothing is silently skipped
 
 Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
 

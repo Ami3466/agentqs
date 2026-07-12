@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, Eye, EyeOff, GitHub, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
+import { SourceTitle } from "@/components/source-title";
 import { SyncStatus } from "@/components/sync-status";
 import { Button, Input } from "@/components/ui";
 import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
@@ -125,7 +126,7 @@ export function GithubConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">GitHub</p>
+            <SourceTitle id="github" name="GitHub" hasData={(status?.total ?? 0) > 0} />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
         </div>

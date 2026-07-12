@@ -41,6 +41,9 @@ export interface FileImporter {
   /** The metric column the Pipeline-tab headline / sparkline reads. */
   primaryMetric: string;
   unit?: string;
+  /** One-shot lifetime exports (Apple Health) default to ALL history rather
+   *  than the rolling sync window. */
+  fullHistoryDefault?: boolean;
   /** Default OS locations to probe when `--path` is omitted (platform-aware). */
   defaultPaths(): string[];
   /** Read the local file and normalize a window into the wide daily table. */

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
+import { SourceTitle } from "@/components/source-title";
 import { SyncStatus } from "@/components/sync-status";
 import { Button, Input } from "@/components/ui";
 import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
@@ -124,7 +125,7 @@ export function WhoopConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg" title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row">WHOOP (per-minute, unofficial)</p>
+            <SourceTitle id="whoop" name="WHOOP (per-minute, unofficial)" hasData={(status?.days ?? 0) > 0} title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row" />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
         </div>
