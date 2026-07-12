@@ -1,6 +1,8 @@
 # ---- deps: install node_modules from lockfile ----
 FROM node:20-alpine AS deps
 WORKDIR /app
+# native deps (better-sqlite3) have no musl prebuilt → node-gyp needs a toolchain
+RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json* ./
 RUN npm ci
 
