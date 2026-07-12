@@ -23,6 +23,11 @@ const MAC_EPOCH_OFFSET_S = 978_307_200;
 export function macAbsoluteToUnixMs(s: number): number {
   return Math.round((s + MAC_EPOCH_OFFSET_S) * 1000);
 }
+/** Inverse — mirrors chrome.ts's unixMsToWebkit so tests/seeders never
+ *  hand-roll the epoch offset. */
+export function unixMsToMacAbsolute(ms: number): number {
+  return ms / 1000 - MAC_EPOCH_OFFSET_S;
+}
 
 /** Read a date window out of a Safari History.db file. */
 export async function readSafariHistory(

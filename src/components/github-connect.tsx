@@ -15,6 +15,7 @@ interface Day {
 }
 interface Status {
   connected: boolean;
+  hasData: boolean;
   hasToken: boolean;
   syncedAt: string | null;
   job: SourceJobView | null;
@@ -126,7 +127,7 @@ export function GithubConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <SourceTitle id="github" name="GitHub" hasData={(status?.total ?? 0) > 0} />
+            <SourceTitle id="github" name="GitHub" hasData={Boolean(status?.hasData)} />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
         </div>

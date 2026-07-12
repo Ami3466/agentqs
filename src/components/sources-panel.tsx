@@ -598,7 +598,14 @@ function GoogleImporterCard({
             return (
               <div key={item.id} className="flex items-center gap-3 px-3 py-2">
                 <div className="min-w-0 flex-1">
-                  <SourceTitle id={item.source} name={item.label} hasData={item.status.exists} className="text-[13px]" />
+                  <SourceTitle
+                    id={item.source}
+                    name={item.label}
+                    // exists=true covers a started-but-empty import — only link
+                    // once days/events actually landed.
+                    hasData={item.status.days > 0 || item.status.events > 0}
+                    className="text-[13px]"
+                  />
                   <p className="truncate text-xs text-muted-fg">
                     {item.status.exists
                       ? (item.status.events > 0 ? `${item.status.events.toLocaleString()} events · ` : "") +

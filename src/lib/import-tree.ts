@@ -125,6 +125,21 @@ function zipMembers(file: string): string[] | null {
   }
 }
 
+/** First bytes of one zip member ("" when unreadable). unzip's member arg is a
+ *  GLOB, so metacharacters are escaped; `head` caps the pipe so a multi-GB
+ *  member never buffers. */
+function zipMemberHead(file: string, member: string, bytes = 4096): string {
+  const glob = member.replace(/[[\]*?\\]/g, (c) => `\\${c}`);
+  try {
+    return execFileSync("sh", ["-c", `unzip -p ${shq(file)} ${shq(glob)} | head -c ${bytes}`], {
+      encoding: "utf8",
+      maxBuffer: bytes * 2,
+    });
+  } catch {
+    return "";
+  }
+}
+
 function stableId(rel: string, content: Buffer | string): string {
   return crypto
     .createHash("sha256")
@@ -223,7 +238,15 @@ export function importTree(root: string): ImportTreeReport {
           push("residue", "unreadable archive", bytes);
         } else if (members.some((m) => m.startsWith("Takeout/"))) {
           push("importer", `npx tsx scripts/import-google-takeout-archive.ts --zip ${shq(file)}`, bytes);
-        } else if (members.some((m) => /(^|\/)export\.xml$/i.test(m))) {
+        } else if (
+          members.some(
+            (m) =>
+              // export.xml is a generic name — claim the zip for Apple Health
+              // only when the member really is a HealthData document, or a
+              // false claim would exit 0 and the file would never land.
+              /(^|\/)export\.xml$/i.test(m) && zipMemberHead(file, m).includes("HealthData"),
+          )
+        ) {
           push("importer", `agentqs source file health_daily --path ${shq(file)}`, bytes);
         } else {
           push("residue", "archive — unpack it or add an importer", bytes);
@@ -243,8 +266,16 @@ export function importTree(root: string): ImportTreeReport {
       }
 
       // A bare Apple Health export.xml is a lifetime dataset, not a memo.
-      if (/^export(_cda)?\.xml$/i.test(name) && head.toString("utf8").includes("HealthData")) {
+      if (/^export\.xml$/i.test(name) && head.toString("utf8").includes("HealthData")) {
         push("importer", `agentqs source file health_daily --path ${shq(file)}`, bytes);
+        continue;
+      }
+      // Its export_cda.xml sibling is the clinical CDA rendering (starts
+      // <ClinicalDocument, usually >25MB) — no importer parses it, and the
+      // metrics all live in export.xml. Ignore it rather than fail Apple's own
+      // export folder as residue.
+      if (/^export_cda\.xml$/i.test(name) && head.toString("utf8").includes("ClinicalDocument")) {
+        push("ignored", "Apple Health CDA companion (metrics live in export.xml)", bytes);
         continue;
       }
 

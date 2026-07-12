@@ -329,6 +329,9 @@ function recordSourceRows(cfg: AppConfig | null, dir: string, owned: Set<string>
       kind: "manual",
       detail: "record import",
       connected: true,
+      // A header-only CSV (an import that landed zero rows) must not present
+      // as data — the Pipeline row's Journal link keys off this.
+      hasData: hasRows(file),
       interval,
       lastSync,
       stale: isStale(lastSync, interval),

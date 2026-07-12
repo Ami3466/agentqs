@@ -147,7 +147,8 @@ export function JournalWorkspace() {
     window.history.replaceState(null, "", url);
   }, [typeFilter]);
 
-  // Follow LATER url changes too (back/forward between filtered views).
+  // Follow LATER url changes too — a same-route navigation (the Journal tab
+  // link, a history jump) drops or changes ?source while this stays mounted.
   useEffect(() => {
     setTypeFilter((cur) =>
       urlSource ? `src:${urlSource}` : cur.startsWith("src:") ? "all" : cur,
@@ -156,16 +157,24 @@ export function JournalWorkspace() {
 
   const [loadError, setLoadError] = useState(false);
 
+  // Read the current deep link inside load() without recreating it — a
+  // deep-linked filter is a whole-record question, so fetch full history
+  // up front instead of a throwaway 180-day window.
+  const urlSourceRef = useRef(urlSource);
+  urlSourceRef.current = urlSource;
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(false);
+    const all = Boolean(urlSourceRef.current);
     const [d, v] = await Promise.all([
-      fetchJournalRetrying("/api/journal?days=180"),
+      fetchJournalRetrying(all ? "/api/journal?days=all" : "/api/journal?days=180"),
       fetch("/api/journal/views")
         .then((r) => (r.ok ? (r.json() as Promise<{ views: JournalView[] }>) : { views: [] }))
         .catch(() => ({ views: [] as JournalView[] })),
     ]);
     setData(d);
+    if (all && d) setFullHistory(true);
     setViews(v?.views ?? []);
     setLoadError(!d);
     setLoading(false);

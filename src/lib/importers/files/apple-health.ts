@@ -27,11 +27,18 @@ import type { FileImporter, FileImportContext, FileImportResult } from "../file-
  * each timestamp — Apple writes them in the device's timezone).
  */
 
-const QUANTITY_SUM: Record<string, { metric: string; scale?: number }> = {
+/** Unit → factor into the metric's canonical unit. Apple writes the export in
+ *  the device's LOCALE units (a US phone exports distance as mi, energy can be
+ *  kJ/Cal) — summing raw values would silently land wrong numbers. Unknown
+ *  units fall back to 1 rather than dropping the record. */
+const KM_PER: Record<string, number> = { km: 1, mi: 1.609344, m: 0.001, yd: 0.0009144, ft: 0.0003048 };
+const KCAL_PER: Record<string, number> = { kcal: 1, Cal: 1, cal: 0.001, kJ: 0.239006, J: 0.000239006 };
+
+const QUANTITY_SUM: Record<string, { metric: string; units?: Record<string, number> }> = {
   HKQuantityTypeIdentifierStepCount: { metric: "steps" },
-  HKQuantityTypeIdentifierDistanceWalkingRunning: { metric: "distance_km" },
+  HKQuantityTypeIdentifierDistanceWalkingRunning: { metric: "distance_km", units: KM_PER },
   HKQuantityTypeIdentifierFlightsClimbed: { metric: "flights" },
-  HKQuantityTypeIdentifierActiveEnergyBurned: { metric: "active_energy_kcal" },
+  HKQuantityTypeIdentifierActiveEnergyBurned: { metric: "active_energy_kcal", units: KCAL_PER },
 };
 const QUANTITY_AVG: Record<string, string> = {
   HKQuantityTypeIdentifierHeartRate: "hr_avg",
@@ -43,8 +50,17 @@ const HEADER = [
   "hr_avg", "resting_hr", "asleep_min", "workouts",
 ];
 
+// Precompiled per attribute — attr() runs 3-6× per line on a file of tens of
+// millions of lines; compiling the regex fresh each call dominated the parse.
+const ATTR_RE: Record<string, RegExp> = Object.fromEntries(
+  ["type", "value", "unit", "endDate", "startDate", "sourceName"].map((name) => [
+    name,
+    new RegExp(`\\b${name}="([^"]*)"`),
+  ]),
+);
+
 function attr(line: string, name: string): string {
-  const m = line.match(new RegExp(`\\b${name}="([^"]*)"`));
+  const m = line.match(ATTR_RE[name]);
   return m ? m[1] : "";
 }
 
@@ -61,73 +77,108 @@ interface DayAgg {
   sums: Map<string, Map<string, number>>; // metric → sourceName → sum
   // averages: pooled samples
   avgs: Map<string, { sum: number; n: number }>; // metric → accumulator
-  workouts: number;
+  // [start, end] epoch-ms pairs — overlaps merge at table time so the same
+  // run logged by the Watch AND a third-party app counts once
+  workouts: Array<[number, number]>;
+  undatedWorkouts: number; // unparseable timestamps still count, undeduped
 }
 
 function dayAgg(): DayAgg {
-  return { sums: new Map(), avgs: new Map(), workouts: 0 };
+  return { sums: new Map(), avgs: new Map(), workouts: [], undatedWorkouts: 0 };
+}
+
+/** Count intervals after merging overlaps (two devices logging one session). */
+function mergedCount(spans: Array<[number, number]>): number {
+  if (!spans.length) return 0;
+  const sorted = [...spans].sort((a, b) => a[0] - b[0]);
+  let count = 1;
+  let end = sorted[0][1];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i][0] >= end) count++;
+    end = Math.max(end, sorted[i][1]);
+  }
+  return count;
 }
 
 class HealthRollup {
   days = new Map<string, DayAgg>();
   records = 0;
+  // Import window — records outside it never touch the maps (a --days 30 run
+  // must not aggregate ten years just to throw them away at table time).
+  constructor(private from: string = "0001-01-01", private to: string = "9999-12-31") {}
 
   private day(date: string): DayAgg {
-    const d = this.days.get(date) ?? dayAgg();
-    this.days.set(date, d);
+    let d = this.days.get(date);
+    if (!d) {
+      d = dayAgg();
+      this.days.set(date, d);
+    }
     return d;
   }
 
-  private addSum(date: string, metric: string, source: string, value: number): void {
-    const perSource = this.day(date).sums.get(metric) ?? new Map<string, number>();
+  private addSum(d: DayAgg, metric: string, source: string, value: number): void {
+    let perSource = d.sums.get(metric);
+    if (!perSource) {
+      perSource = new Map<string, number>();
+      d.sums.set(metric, perSource);
+    }
     perSource.set(source, (perSource.get(source) ?? 0) + value);
-    this.day(date).sums.set(metric, perSource);
   }
 
   line(raw: string): void {
     const line = raw.trimStart();
     if (line.startsWith("<Record ")) {
+      // Type first: untracked types (Basal energy, audio exposure, …) dominate
+      // an export — they must not pay for the other attribute scans.
       const type = attr(line, "type");
+      const sum = QUANTITY_SUM[type];
+      const avgMetric = sum ? undefined : QUANTITY_AVG[type];
+      const sleep = !sum && !avgMetric && type === "HKCategoryTypeIdentifierSleepAnalysis";
+      if (!sum && !avgMetric && !sleep) return;
       const end = attr(line, "endDate");
       const date = end.slice(0, 10);
-      if (!/^\d{4}-\d\d-\d\d$/.test(date)) return;
-      const source = attr(line, "sourceName") || "unknown";
-      const sum = QUANTITY_SUM[type];
+      if (!/^\d{4}-\d\d-\d\d$/.test(date) || date < this.from || date > this.to) return;
       if (sum) {
         const v = Number(attr(line, "value"));
         if (Number.isFinite(v)) {
           this.records++;
-          this.addSum(date, sum.metric, source, v * (sum.scale ?? 1));
+          const factor = sum.units ? (sum.units[attr(line, "unit")] ?? 1) : 1;
+          this.addSum(this.day(date), sum.metric, attr(line, "sourceName") || "unknown", v * factor);
         }
         return;
       }
-      const avgMetric = QUANTITY_AVG[type];
       if (avgMetric) {
         const v = Number(attr(line, "value"));
         if (!Number.isFinite(v)) return;
         this.records++;
-        const acc = this.day(date).avgs.get(avgMetric) ?? { sum: 0, n: 0 };
+        const d = this.day(date);
+        let acc = d.avgs.get(avgMetric);
+        if (!acc) {
+          acc = { sum: 0, n: 0 };
+          d.avgs.set(avgMetric, acc);
+        }
         acc.sum += v;
         acc.n++;
-        this.day(date).avgs.set(avgMetric, acc);
         return;
       }
-      if (type === "HKCategoryTypeIdentifierSleepAnalysis") {
-        // Asleep segments only — InBed/Awake are not sleep.
-        if (!/Asleep/.test(attr(line, "value"))) return;
-        const s = parseAppleDate(attr(line, "startDate"));
-        const e = parseAppleDate(end);
-        if (s == null || e == null || e <= s) return;
-        this.records++;
-        this.addSum(date, "asleep_min", source, (e - s) / 60_000);
-      }
+      // Sleep: Asleep segments only — InBed/Awake are not sleep.
+      if (!/Asleep/.test(attr(line, "value"))) return;
+      const s = parseAppleDate(attr(line, "startDate"));
+      const e = parseAppleDate(end);
+      if (s == null || e == null || e <= s) return;
+      this.records++;
+      this.addSum(this.day(date), "asleep_min", attr(line, "sourceName") || "unknown", (e - s) / 60_000);
       return;
     }
     if (line.startsWith("<Workout ")) {
-      const date = attr(line, "endDate").slice(0, 10);
-      if (!/^\d{4}-\d\d-\d\d$/.test(date)) return;
+      const end = attr(line, "endDate");
+      const date = end.slice(0, 10);
+      if (!/^\d{4}-\d\d-\d\d$/.test(date) || date < this.from || date > this.to) return;
       this.records++;
-      this.day(date).workouts++;
+      const s = parseAppleDate(attr(line, "startDate"));
+      const e = parseAppleDate(end);
+      if (s != null && e != null && e > s) this.day(date).workouts.push([s, e]);
+      else this.day(date).undatedWorkouts++;
     }
   }
 
@@ -155,20 +206,29 @@ class HealthRollup {
           avg("hr_avg"),
           avg("resting_hr"),
           best("asleep_min", (n) => String(Math.round(n))),
-          d.workouts ? String(d.workouts) : "",
+          mergedCount(d.workouts) + d.undatedWorkouts
+            ? String(mergedCount(d.workouts) + d.undatedWorkouts)
+            : "",
         ];
       });
     return { header: HEADER, rows };
   }
 }
 
+/** unzip's member argument is a GLOB — a rezipped export whose member path
+ *  holds `[ ] * ?` would extract nothing without escaping (same trap the
+ *  Takeout archive importer documents). */
+function escGlob(s: string): string {
+  return s.replace(/[[\]*?\\]/g, (c) => `\\${c}`);
+}
+
 /** Resolve the export.xml stream behind a zip / folder / bare xml path. */
-function openExportStream(file: string): { stream: Readable; done: () => void } {
+function openExportStream(file: string): { stream: Readable; done: () => void; verify: () => Promise<void> } {
   const stat = fs.statSync(file);
   if (stat.isDirectory()) {
     const xml = path.join(file, "export.xml");
     if (!fs.existsSync(xml)) throw new Error(`no export.xml inside ${file} — point at the Health export folder, zip, or xml.`);
-    return { stream: fs.createReadStream(xml), done: () => {} };
+    return { stream: fs.createReadStream(xml), done: () => {}, verify: async () => {} };
   }
   if (/\.zip$/i.test(file)) {
     const members = execFileSync("unzip", ["-Z1", file], { encoding: "utf8", maxBuffer: 1024 * 1024 * 50 })
@@ -176,22 +236,39 @@ function openExportStream(file: string): { stream: Readable; done: () => void } 
       .filter(Boolean);
     const member = members.find((m) => /(^|\/)export\.xml$/i.test(m));
     if (!member) throw new Error(`${file} holds no export.xml — is this the Health app's export.zip?`);
-    const child = spawn("unzip", ["-p", file, member], { stdio: ["ignore", "pipe", "ignore"] });
-    return { stream: child.stdout, done: () => child.kill() };
+    const child = spawn("unzip", ["-p", file, escGlob(member)], { stdio: ["ignore", "pipe", "ignore"] });
+    // A corrupt/truncated zip makes unzip die MID-STREAM after emitting part of
+    // the XML — without checking the exit code that would land a silently
+    // partial lifetime history.
+    const exited = new Promise<number | null>((resolve, reject) => {
+      child.on("close", resolve);
+      child.on("error", reject); // e.g. unzip not installed
+    });
+    return {
+      stream: child.stdout,
+      done: () => child.kill(),
+      verify: async () => {
+        const code = await exited;
+        if (code !== 0) {
+          throw new Error(`unzip exited with code ${code} reading ${file} — the export.zip looks corrupt or truncated.`);
+        }
+      },
+    };
   }
-  return { stream: fs.createReadStream(file), done: () => {} };
+  return { stream: fs.createReadStream(file), done: () => {}, verify: async () => {} };
 }
 
 /** Stream-parse an Apple Health export into the wide daily table. */
 export async function readAppleHealth(file: string, from: string, to: string): Promise<FileImportResult> {
-  const rollup = new HealthRollup();
-  const { stream, done } = openExportStream(file);
+  const rollup = new HealthRollup(from, to);
+  const { stream, done, verify } = openExportStream(file);
   try {
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
     for await (const line of rl) rollup.line(line);
   } finally {
-    done();
+    done(); // no-op after a clean drain; kills the unzip child if the loop threw
   }
+  await verify();
   if (rollup.records === 0) {
     throw new Error("no Health records found — expected <Record>/<Workout> lines from the Health app's export.xml.");
   }

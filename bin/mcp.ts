@@ -147,7 +147,8 @@ export async function startMcpServer(): Promise<void> {
     "sync_file",
     {
       title: "Import a local file source",
-      description: "Tier-2 local importers that read your disk: chrome (history), iphone (backup).",
+      description:
+        "Tier-2 local importers that read your disk: chrome (history), safari (History.db), iphone (backup), health_daily (Apple Health export.zip/xml — lifetime by default).",
       inputSchema: { source: z.string(), path: z.string().optional(), days: z.number().int().positive().optional() },
     },
     async ({ source, path, days }) => guard(() => core.syncFileSource({ id: source, path, days })),
