@@ -23,6 +23,7 @@ import { importWhoop, whoopFixtureFetch } from "../src/lib/importers/whoop";
 import { rebuild } from "../src/lib/record";
 import { readDailySummary } from "../src/lib/daily";
 import { readGrounding, groundedCrossSourceAnswer } from "../src/lib/grounding";
+import { writeConfig, type AppConfig } from "../src/lib/config";
 import { CRED, FIXTURES, fetchForFixture } from "./api-fixtures";
 
 let failures = 0;
@@ -37,6 +38,18 @@ async function main() {
   const dbFile = path.join(root, "agentqs.db");
   const from = "2026-06-01";
   const to = "2026-06-30";
+  // Hermetic store: gdrive_backup's sync archives dataDir() itself, so the run
+  // must resolve to THIS temp root (with the passphrase its brain requires),
+  // never the real record.
+  process.env.AGENTQS_DATA_DIR = root;
+  writeConfig({
+    username: "t",
+    passwordHash: "x",
+    sessionSecret: "s",
+    theme: "system",
+    createdAt: new Date().toISOString(),
+    backup: { passphrase: "fixture-pass" },
+  } as AppConfig);
 
   console.log("\nSeeding one daily record from 4 live sources + WHOOP (unofficial)…\n");
 

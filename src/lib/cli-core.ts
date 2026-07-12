@@ -351,6 +351,12 @@ export async function testSourceCredential(id: string, credential?: string): Pro
     throw new Error(`${plugin.name} needs a ${plugin.credentialLabel} to test.`);
   }
   const win = windowDays(3);
+  // A plugin with a dedicated probe (fetch() has real side effects — gdrive_backup
+  // uploads an archive) proves the credential without running the side effect.
+  if (plugin.probe) {
+    const detail = await plugin.probe({ credential: cred, from: win.from, to: win.to });
+    return { id: instanceId, name: plugin.name, ok: true, detail };
+  }
   const result = await plugin.fetch({ credential: cred, from: win.from, to: win.to });
   return {
     id: instanceId,
@@ -953,6 +959,32 @@ export { importTree } from "./import-tree";
 /** The index audit: deterministic evidence (impossible dates, one-day sources,
  *  coverage holes, stale sources, outliers) for an AI review pass. Read-only. */
 export { auditIndex } from "./audit";
+
+// ---- off-site backups -----------------------------------------------------------
+
+/** GitHub snapshot branch + encrypted Drive archive + restore. The Drive RUN
+ *  is `syncSource({id:"gdrive_backup"})` — the plugin's sync IS the backup. */
+export { backupGithub, backupStatus, setBackupPassphrase } from "./backup";
+
+/** Decrypt + unpack an archive into a FRESH directory — local file or the
+ *  newest one in Drive (`latest`, needs the connected gdrive_backup grant). */
+export async function backupRestore(opts: {
+  file?: string;
+  latest?: boolean;
+  out: string;
+  passphrase?: string;
+}) {
+  const { restoreArchive } = await import("./backup");
+  if (!opts.latest) return restoreArchive(opts);
+  const inst = pluginInstanceById("gdrive_backup");
+  const cred = inst
+    ? await resolveSyncCredentialFresh(inst.plugin, undefined, readConfig(), inst.instanceId)
+    : undefined;
+  if (!cred) {
+    throw new Error("Google Drive backup isn't connected — authorize gdrive_backup in Pipeline → Connect first.");
+  }
+  return restoreArchive({ ...opts, credential: cred });
+}
 
 // ---- data-quality scanner -----------------------------------------------------
 

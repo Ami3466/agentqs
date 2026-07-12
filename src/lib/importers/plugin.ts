@@ -121,6 +121,10 @@ export interface ImporterPlugin {
    *  holds a login on this machine (Granola). Base account only, like `envKey`,
    *  so extra accounts never silently inherit the desktop login. */
   discoverCredential?(): string | undefined;
+  /** Cheap credential proof for `source test` — a source whose fetch() has a
+   *  real side effect (gdrive_backup uploads an archive) MUST set one, so a
+   *  test never runs the side effect. Returns the human detail line. */
+  probe?(ctx: ImporterContext): Promise<string>;
   /** Fetch a window and normalize it into the wide daily table. */
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }

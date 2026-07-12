@@ -648,6 +648,82 @@ program
     }
   });
 
+// ---- backup ---------------------------------------------------------------
+const backup = program
+  .command("backup")
+  .description("off-site copies: GitHub snapshot branch of the record + encrypted Google Drive archive of the whole store");
+backup
+  .command("github")
+  .description("snapshot the record and push it to the private backup repo (files over GitHub's limit excluded loudly)")
+  .option("--remote <url>", "PRIVATE GitHub repo URL (saved for future runs)")
+  .option("--branch <name>", "remote branch (default main)")
+  .option("--token <pat>", "GitHub PAT for https pushes (saved; falls back to githubToken / ambient git auth)")
+  .action(async (opts: { remote?: string; branch?: string; token?: string }) => {
+    try {
+      out(await core.backupGithub(opts), (d) => d.message);
+    } catch (e) {
+      die(e);
+    }
+  });
+backup
+  .command("drive")
+  .description("encrypt the store and upload one archive to Drive now (connect gdrive_backup + set a passphrase first)")
+  .action(async () => {
+    try {
+      out(await core.syncSource({ id: "gdrive_backup" }), (d) => `Archive uploaded — receipt on ${d.to} (${d.cells} cell).`);
+    } catch (e) {
+      die(e);
+    }
+  });
+backup
+  .command("passphrase [value]")
+  .description("set the archive passphrase — store a copy OFF this machine; archives are unreadable without it")
+  .option("--generate", "generate a strong one and print it ONCE")
+  .action((value: string | undefined, opts: { generate?: boolean }) => {
+    try {
+      out(core.setBackupPassphrase({ value, generate: opts.generate }), (d) =>
+        d.generated
+          ? `Passphrase set: ${d.generated}\nStore it somewhere safe NOW — it is not shown again, and archives are unreadable without it.`
+          : "Passphrase set.",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+backup
+  .command("status")
+  .description("both targets: configured / connected, schedule, last run, last error")
+  .action(() => {
+    try {
+      out(core.backupStatus(), (d) => {
+        const gh = d.github;
+        const dr = d.drive;
+        return [
+          `github  ${gh.configured ? `→ ${gh.remote} (${gh.branch}), ${gh.interval}` : "not configured — `agentqs backup github --remote <url>`"}${gh.lastAt ? `, last ${gh.lastAt}` : ""}${gh.lastError ? `\n        LAST ERROR: ${gh.lastError}` : ""}`,
+          `drive   ${dr.connected ? "connected" : "not connected — authorize gdrive_backup in Pipeline → Connect"}, passphrase ${dr.passphraseSet ? "set" : "NOT SET"}, schedule ${dr.interval}, keep ${dr.keep}${dr.lastAt ? `, last ${dr.lastAt} (${dr.lastFile})` : ""}${dr.lastError ? `\n        LAST ERROR: ${dr.lastError}` : ""}`,
+        ].join("\n");
+      });
+    } catch (e) {
+      die(e);
+    }
+  });
+backup
+  .command("restore [file]")
+  .description("decrypt + unpack an archive into a FRESH directory (never over the live store)")
+  .option("--latest", "download the newest archive from Drive instead of a local file")
+  .option("--out <dir>", "destination directory (must be new or empty)")
+  .option("--passphrase <p>", "override the configured passphrase")
+  .action(async (file: string | undefined, opts: { latest?: boolean; out?: string; passphrase?: string }) => {
+    try {
+      if (!opts.out) throw new Error("Pass --out <dir> — restores always land in a fresh directory.");
+      out(await core.backupRestore({ file, latest: opts.latest, out: opts.out, passphrase: opts.passphrase }), (d) =>
+        `Restored ${d.archive || "archive"} → ${d.out} (${d.members.join(", ")}). Point AGENTQS_DATA_DIR there to use it.`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
 // ---- config ---------------------------------------------------------------
 const config = program.command("config").description("provider, model, key, theme");
 config

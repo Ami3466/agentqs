@@ -79,6 +79,36 @@ export interface OAuthGrant {
   expiresAt?: string; // ISO — syncs refresh before use once past
 }
 
+/** Off-site backups (`agentqs backup`, src/lib/backup.ts). GitHub gets a
+ *  size-capped snapshot branch of the plain-text record; Drive gets the WHOLE
+ *  store as one AES-256-GCM archive — together they cover every byte. */
+export interface GithubBackupConfig {
+  remote: string; // https/ssh URL of the PRIVATE backup repo
+  branch?: string; // remote branch the snapshot lands on (default "main")
+  token?: string; // PAT for https pushes; falls back to githubToken / ambient git auth
+  interval?: Interval; // `sync --due` cadence (default daily)
+  lastAt?: string;
+  lastCommit?: string;
+  lastError?: string;
+}
+
+export interface DriveBackupConfig {
+  folderId?: string; // Drive folder the archives land in (created on first run)
+  keep?: number; // archives kept before rotation (default 8)
+  lastAt?: string;
+  lastFile?: string;
+  lastBytes?: number;
+  lastError?: string;
+}
+
+export interface BackupConfig {
+  github?: GithubBackupConfig;
+  drive?: DriveBackupConfig;
+  /** Encrypts every Drive archive. Losing it makes existing archives
+   *  unreadable — the CLI tells the user to store a copy off this machine. */
+  passphrase?: string;
+}
+
 /** The in-flight authorize dance (one at a time): the `state` nonce the callback
  *  must echo, and the exact redirect URI the code exchange must repeat. */
 export interface OAuthPending {
@@ -124,6 +154,7 @@ export interface AppConfig {
   demoSeeded?: boolean; // generic demo data is loaded; auto-wiped on the first real import
   autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)
   columnMerges?: ColumnMergeRule[]; // accepted duplicate-column merges, re-applied on every import (column scanner)
+  backup?: BackupConfig; // off-site backups: GitHub snapshot branch + encrypted Drive archive
 }
 
 /** Are semantic embeddings on at all? Default true — the Settings checkbox flips it off. */

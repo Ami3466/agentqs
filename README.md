@@ -155,6 +155,7 @@ Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a s
 ## Good to know
 
 - **Private by default.** Data stays in your data directory. Model calls only get what you ask to send.
+- **Off-site backups built in.** `agentqs backup github --remote <url>` pushes a snapshot of your plain-text record to a private repo (files past GitHub's size limit are excluded and named, never silently dropped), and `agentqs backup drive` uploads the whole store as one AES-256-GCM-encrypted archive to your Google Drive on a schedule - `agentqs backup restore` brings either back.
 - **Token use is explicit.** Capture and search are local. AI runs only when you chat, structure prose, or run a channel - CLI-agent workflows skip it entirely.
 
 ## License
