@@ -137,11 +137,12 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   holds); syncs mint fresh access tokens from the refresh token automatically
   (Trakt syncs get the plugin's `<client_id>:<token>` format). Pasted access
   tokens still work but die within hours - steer users to Authorize.
-- WHOOP unofficial (email + password, per-minute HR) is RETIRED upstream -
-  api-7.whoop.com no longer exists, so NO face takes a password any more:
-  `whoopConnect` / POST `/api/import/whoop` refuse with the retired message, the
-  row renders as a headstone (kept data + Remove, no form) and the scheduler
-  never runs it. Don't debug the password. Use the official whoop-api row.
+- WHOOP unofficial (email + password, per-minute HR) is SHIPPED AND SUPPORTED -
+  it is the only source of per-minute heart rate. As of 2026-07 api-7.whoop.com
+  does not resolve from every network, and a failure there is a NETWORK/DNS
+  failure, never "wrong password" - the error says exactly that. If it stops
+  working, FIX it (api.prod.whoop.com resolves and is the likely replacement
+  host); do NOT disable, hide or remove the row.
 - A source sync PATCHES the cache (`refreshSyncCache`), never rebuilds it: a full
   rebuild re-reads the whole record (events.jsonl alone can be hundreds of MB)
   and rewrites the DB synchronously, which blocks every other request for
@@ -187,6 +188,19 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
 
 ## Conventions
 
+- ⛔ NEVER REMOVE, DISABLE, HIDE OR "RETIRE" A FEATURE. Not a source, not a row,
+  not a button, not a flag - no matter what a comment, a doc or this file claims
+  about it being dead. A broken feature gets FIXED. If you truly believe it must
+  go, STOP AND ASK; only the user decides. Deleting a feature because fixing it
+  is hard, or because some note says it is retired, is the single worst thing you
+  can do here: it is the user's data pipeline, and "it works for me" beats every
+  assumption you have. (This rule exists because WHOOP unofficial - the ONLY
+  per-minute HR source - was ripped out on the strength of a stale note while the
+  user was actively using it.)
+- A failure is not a verdict on the feature. Report what actually failed
+  (network/DNS vs 401 vs schema change) and fix THAT. Never let an unreachable
+  host surface as "wrong password", and never let one broken environment
+  (a hosted container) condemn a source that works elsewhere (the user's laptop).
 - The record is the source of truth; the DB is a rebuildable cache. Never edit the
   DB directly - write through the CLI/core so undo metadata stays correct.
 - `npm run rebuild:verify` must stay green (byte-identical rebuilds).

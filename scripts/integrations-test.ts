@@ -10,10 +10,7 @@
  *   2. A cold container's first DNS lookup failed, and undici's bare
  *      "fetch failed" reached the user as "Spotify recently-played → fetch
  *      failed" — which reads like a bad key. One blip must not fail a connect.
- *   3. WHOOP's unofficial login is gone upstream (api-7.whoop.com no longer
- *      resolves). Every face still took a password and blamed the user for the
- *      DNS failure.
- *   4. Granola's guide promised "agentqs detects your login" to a server that
+ *   3. Granola's guide promised "agentqs detects your login" to a server that
  *      physically cannot see the user's Mac.
  *
  * Deterministic, temp data dir, no network. Run: npm run integrations:test
@@ -28,8 +25,6 @@ process.env.AGENTQS_DATA_DIR = dataDir;
 import { originOf, requestOrigin } from "../src/lib/request-origin";
 import { netFetch, type FetchLike } from "../src/lib/importers/plugin";
 import { granolaPlugin } from "../src/lib/importers/granola";
-import { WHOOP_RETIRED } from "../src/lib/importers/whoop";
-import { sourceGuide, whoopConnect } from "../src/lib/cli-core";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -102,16 +97,7 @@ async function main() {
   const bugErr = await netFetch("https://x.test/", {}, bug).catch((e) => (e as Error).message);
   check("a programmer error passes through untouched", bugErr === "fixture: unexpected URL" && called === 1, `${called} call(s)`);
 
-  // 3. WHOOP unofficial is retired — no face may take a password for a host that
-  //    no longer exists, and the message must exonerate the user's password.
-  const whoopErr = await whoopConnect("me@example.com", "hunter2").then(() => "", (e) => (e as Error).message);
-  check("whoopConnect refuses instead of failing on DNS", whoopErr === WHOOP_RETIRED, whoopErr);
-  check("…and tells the user their password is fine", whoopErr.includes("your password is fine"));
-  check("…and points at the connect that works", whoopErr.includes("official WHOOP API"));
-  const guide = sourceGuide("whoop");
-  check("the WHOOP guide leads with RETIRED", guide.steps[0].startsWith("RETIRED UPSTREAM"), guide.steps[0]);
-
-  // 4. Granola's guide must work for someone whose agentqs is NOT on their Mac:
+  // 3. Granola's guide must work for someone whose agentqs is NOT on their Mac:
   //    the paste path first, detection as the local-only convenience it is.
   const steps = granolaPlugin.credentialHelp?.steps ?? [];
   check("the Granola guide gives the file to read", steps.some((s) => s.includes("supabase.json")), steps.join(" | "));
