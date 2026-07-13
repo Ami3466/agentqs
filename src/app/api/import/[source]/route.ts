@@ -34,6 +34,10 @@ function status({ plugin, instanceId }: PluginInstance) {
     id: instanceId,
     name: pluginInstanceName({ plugin, instanceId }),
     detail: plugin.detail,
+    // Why this source can't hand over its full history (a hard API ceiling —
+    // RescueTime's rolling fortnight, Spotify's last 50 plays). Shown on the row, so
+    // "only 19 days?" is answered where it is asked instead of reading as a bug.
+    historyNote: plugin.historyNote ?? null,
     live: plugin.live,
     connected: state.connected,
     hasData: state.hasData,

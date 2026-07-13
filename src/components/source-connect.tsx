@@ -27,6 +27,9 @@ interface Status {
   id: string;
   name: string;
   detail: string;
+  /** Why this API can't give its full history — shown on the row so a hard ceiling
+   *  ("RescueTime only exposes ~2 weeks") never reads as a broken import. */
+  historyNote: string | null;
   live: boolean;
   connected: boolean;
   hasData: boolean;
@@ -299,6 +302,14 @@ export function SourceConnect({
         <div className="mt-3 pl-12">
           <Spark data={status.series} />
         </div>
+      ) : null}
+
+      {/* A hard API ceiling, stated where the user asks "why so few days?" — only
+          once the source is actually pulling, or it is noise on a Connect button. */}
+      {connected && status?.historyNote ? (
+        <p className="mt-2 pl-12 text-xs text-muted-fg" title={status.historyNote}>
+          <span className="font-medium text-fg">Why so few days?</span> {status.historyNote}
+        </p>
       ) : null}
 
       {open && !connected ? (
