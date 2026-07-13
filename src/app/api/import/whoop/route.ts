@@ -5,7 +5,17 @@ import { readConfig, writeConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
-import { ensureSession, mergeTokens, whoopHrDir, whoopLogin, type WhoopCreds } from "@/lib/importers/whoop";
+import {
+  ensureSession,
+  isWhoopInstance,
+  mergeTokens,
+  setWhoopCreds,
+  whoopCredsFor,
+  whoopHrDir,
+  whoopLogin,
+  type WhoopCreds,
+} from "@/lib/importers/whoop";
+import { whoopInstanceName } from "@/lib/cli-core";
 import { readSyncRuns } from "@/lib/sync-runs";
 import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
 import { wipeDemoOnImport } from "@/lib/demo";
@@ -19,13 +29,19 @@ interface Point {
   value: number;
 }
 
-function whoopCsvPath(): string {
-  return path.join(recordDir(), "daily", "whoop.csv");
+/** The WHOOP account this request is for — base "whoop" or an extra "whoop-2". */
+function instanceOf(req: Request): string {
+  const id = new URL(req.url).searchParams.get("instance")?.trim() || "whoop";
+  return isWhoopInstance(id) ? id : "whoop";
+}
+
+function whoopCsvPath(instanceId: string): string {
+  return path.join(recordDir(), "daily", `${instanceId}.csv`);
 }
 
 /** Count the per-minute heart-rate samples captured across all day files. */
-function countMinutes(): number {
-  const dir = whoopHrDir(recordDir());
+function countMinutes(instanceId: string): number {
+  const dir = whoopHrDir(recordDir(), instanceId);
   let minutes = 0;
   try {
     for (const f of fs.readdirSync(dir)) {
@@ -40,24 +56,25 @@ function countMinutes(): number {
 }
 
 /** Current WHOOP state, read straight from the record. Never leaks the password. */
-function status() {
+function status(instanceId: string) {
   const cfg = readConfig();
-  const wc = cfg?.whoopCreds;
-  const file = whoopCsvPath();
+  const wc = whoopCredsFor(cfg, instanceId);
+  const file = whoopCsvPath(instanceId);
   const out = {
+    id: instanceId,
     // connected ⇔ stored credentials (the rule everywhere); data rows are hasData.
     connected: Boolean(wc?.email && (wc?.password || wc?.refreshToken)),
     hasData: false,
     email: wc?.email ?? "",
     hasPassword: Boolean(wc?.password),
     hasCredential: Boolean(wc?.email && (wc?.password || wc?.refreshToken)),
-    syncedAt: cfg?.sourceSyncedAt?.whoop ?? null,
-    job: readSyncJob("whoop"),
-    lastRun: readSyncRuns().runs["whoop"] ?? null,
+    syncedAt: cfg?.sourceSyncedAt?.[instanceId] ?? null,
+    job: readSyncJob(instanceId),
+    lastRun: readSyncRuns().runs[instanceId] ?? null,
     days: 0,
     latest: null as number | null,
     average: null as number | null,
-    minutes: countMinutes(),
+    minutes: countMinutes(instanceId),
     series: [] as Point[],
   };
   if (!fs.existsSync(file)) return out;
@@ -84,11 +101,11 @@ function status() {
   return out;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  return NextResponse.json(status());
+  return NextResponse.json(status(instanceOf(req)));
 }
 
 /**
@@ -101,6 +118,8 @@ export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const instanceId = instanceOf(req);
+  const name = whoopInstanceName(instanceId);
   const body = (await req.json().catch(() => ({}))) as {
     email?: string;
     password?: string;
@@ -111,7 +130,7 @@ export async function POST(req: Request) {
   const cfg = readConfig();
   if (!cfg) return NextResponse.json({ error: "Not set up." }, { status: 400 });
 
-  const stored = cfg.whoopCreds ?? ({} as WhoopCreds);
+  const stored = whoopCredsFor(cfg, instanceId) ?? ({} as WhoopCreds);
   const email = (body.email ?? stored.email ?? "").trim();
   const password = (body.password ?? stored.password ?? "").trim();
   if (!email || !(password || stored.refreshToken)) {
@@ -131,15 +150,15 @@ export async function POST(req: Request) {
         // would (refresh path — the same verdict as `agentqs source test
         // whoop`), and persist the rotated tokens.
         const s = await ensureSession(stored);
-        cfg.whoopCreds = s.creds;
+        setWhoopCreds(cfg, instanceId, s.creds);
         writeConfig(cfg);
-        return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });
+        return NextResponse.json({ id: instanceId, name, ok: true, detail: `logged in as ${email}` });
       }
       const session = await whoopLogin(email, password);
       if (body.test === true) {
-        return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });
+        return NextResponse.json({ id: instanceId, name, ok: true, detail: `logged in as ${email}` });
       }
-      cfg.whoopCreds = mergeTokens({ ...stored, email, password }, session);
+      setWhoopCreds(cfg, instanceId, mergeTokens({ ...stored, email, password }, session));
       writeConfig(cfg);
     } catch (e) {
       return NextResponse.json({ error: `WHOOP login failed — ${(e as Error).message}` }, { status: 400 });
@@ -150,10 +169,10 @@ export async function POST(req: Request) {
 
   const days = body.days && body.days > 0 ? body.days : undefined;
   const hrDays = body.hrDays && body.hrDays > 0 ? body.hrDays : undefined;
-  const job = startSyncJob("whoop", async (progress) => {
-    const r = await syncSource({ id: "whoop", days, hrDays, onProgress: progress });
+  const job = startSyncJob(instanceId, async (progress) => {
+    const r = await syncSource({ id: instanceId, days, hrDays, onProgress: progress });
     return { days: r.days, dailyRows: r.dailyRows };
   });
 
-  return NextResponse.json({ ok: true, id: "whoop", name: "WHOOP (per-minute, unofficial)", job }, { status: 202 });
+  return NextResponse.json({ ok: true, id: instanceId, name, job }, { status: 202 });
 }

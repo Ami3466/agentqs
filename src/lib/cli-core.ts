@@ -34,12 +34,18 @@ import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken, resolveLogin } from "./importers/github";
 import {
+  clearWhoopCreds,
   ensureSession,
   importWhoop,
+  isWhoopInstance,
   mergeTokens,
+  setWhoopCreds,
+  whoopCredsFor,
   whoopFixtureFetch,
+  whoopHasCredential,
   whoopHrDir,
   whoopLogin,
+  WHOOP_BASE_ID,
   type WhoopCreds,
 } from "./importers/whoop";
 import {
@@ -323,25 +329,25 @@ export async function testSourceCredential(id: string, credential?: string): Pro
     const login = await resolveLogin(token);
     return { id, name: "GitHub", ok: true, detail: `authenticated as @${login}` };
   }
-  if (id === "whoop") {
-    const wc = readConfig()?.whoopCreds;
-    if (!wc?.email || !(wc.password || wc.refreshToken)) {
+  if (isWhoopInstance(id)) {
+    const wc = whoopCredsFor(readConfig(), id);
+    if (!whoopHasCredential(wc)) {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
     // ensureSession can ROTATE the refresh token — persist the returned creds
     // exactly like a sync does, or a mere test invalidates the stored token
     // and the next scheduled sync fails permanently.
-    const s = await ensureSession(wc);
+    const s = await ensureSession(wc!);
     const c2 = readConfig();
     if (c2) {
-      c2.whoopCreds = s.creds;
+      setWhoopCreds(c2, id, s.creds);
       try {
         writeConfig(c2);
       } catch {
         /* non-fatal — the probe itself succeeded */
       }
     }
-    return { id, name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${wc.email}` };
+    return { id, name: whoopInstanceName(id), ok: true, detail: `logged in as ${wc!.email}` };
   }
   const inst = pluginInstanceById(id);
   if (!inst) {
@@ -471,21 +477,37 @@ export function connectDetectedApp(id: string): { id: string; saved: boolean } {
   return connectSource(id, credential);
 }
 
-/** Connect WHOOP via the unofficial app login — stores email + password (config
- *  0600, never committed); tokens are minted + rotated on the first sync. Two
- *  fields, so it's separate from the single-credential connectSource. */
-export async function whoopConnect(email: string, password: string): Promise<{ email: string; saved: boolean }> {
+/** Display name for a WHOOP account — the base is unlabelled, extras are numbered
+ *  ("WHOOP · account 2") so two athletes' rows are distinguishable. */
+export function whoopInstanceName(instanceId: string): string {
+  const base = "WHOOP (per-minute, unofficial)";
+  const m = instanceId.match(/^whoop-(\d+)$/);
+  return m ? `WHOOP · account ${m[1]} (per-minute, unofficial)` : base;
+}
+
+/** Connect a WHOOP account via the unofficial app login — stores email + password
+ *  (config 0600, never committed); tokens are minted + rotated on the first sync.
+ *  `instanceId` (default "whoop") is the account: a second athlete connects as
+ *  "whoop-2" into its own slot, file and schedule. Two fields, so it's separate
+ *  from the single-credential connectSource. */
+export async function whoopConnect(
+  email: string,
+  password: string,
+  instanceId: string = WHOOP_BASE_ID,
+): Promise<{ email: string; saved: boolean; id: string }> {
   if (!email?.trim() || !password?.trim()) {
     throw new Error("WHOOP needs both an email and a password.");
   }
+  if (!isWhoopInstance(instanceId)) throw new Error(`"${instanceId}" is not a WHOOP account id.`);
   // Prove the login BEFORE storing — the connect invariant (only a working
   // credential is ever saved). Keeping the minted tokens also spares the
   // first sync a second login.
   const session = await whoopLogin(email.trim(), password.trim());
   const cfg = requireConfig();
-  cfg.whoopCreds = mergeTokens({ ...(cfg.whoopCreds ?? {}), email: email.trim(), password: password.trim() }, session);
+  const prev = whoopCredsFor(cfg, instanceId) ?? {};
+  setWhoopCreds(cfg, instanceId, mergeTokens({ ...prev, email: email.trim(), password: password.trim() }, session));
   writeConfig(cfg);
-  return { email: email.trim(), saved: true };
+  return { email: email.trim(), saved: true, id: instanceId };
 }
 
 /** Set a source's sync cadence — this is "set up an automated import". `off`,
@@ -566,7 +588,7 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
     automation ||
     Boolean(bundle && bundleSourceIds.length) ||
     id === "github" ||
-    id === "whoop" ||
+    isWhoopInstance(id) || // "whoop" and extra accounts "whoop-2", …
     Boolean(pluginInstanceById(id)) || // includes "<plugin>-<n>" extra accounts
     Boolean(fileImporterById(id)) ||
     recordBacked;
@@ -599,10 +621,10 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
   if (id === "github") {
     delete cfg.githubToken;
     delete cfg.githubSyncedAt;
-  } else if (id === "whoop") {
-    delete cfg.whoopCreds;
+  } else if (isWhoopInstance(id)) {
+    clearWhoopCreds(cfg, id);
     try {
-      fs.rmSync(whoopHrDir(rDir), { recursive: true, force: true }); // per-minute HR files
+      fs.rmSync(whoopHrDir(rDir, id), { recursive: true, force: true }); // per-minute HR files
     } catch {
       /* non-fatal */
     }
@@ -727,38 +749,41 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     };
   }
 
-  if (opts.id === "whoop") {
+  if (isWhoopInstance(opts.id)) {
+    const instanceId = opts.id;
     let fetchImpl: FetchLike | undefined;
-    let creds: WhoopCreds | undefined = cfg?.whoopCreds;
+    let creds: WhoopCreds | undefined = whoopCredsFor(cfg, instanceId);
     if (opts.fixture) {
       const data = JSON.parse(fs.readFileSync(opts.fixture, "utf8"));
       fetchImpl = whoopFixtureFetch(data);
       if (!creds?.email) creds = { email: "fixture@whoop", password: "x" };
     }
-    if (!fetchImpl && !(creds?.email && (creds.password || creds.refreshToken))) {
+    if (!fetchImpl && !whoopHasCredential(creds)) {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
-    progress("pulling WHOOP days + per-minute heart rate", 15);
+    const name = whoopInstanceName(instanceId);
+    progress(`pulling ${name} days + per-minute heart rate`, 15);
     const s = await importWhoop({
       creds: creds!,
       from: win.from,
       to: win.to,
       recordDir: rDir,
+      instanceId,
       fetchImpl,
       hrDays: opts.hrDays && opts.hrDays > 0 ? opts.hrDays : undefined,
     });
     progress("merging into the record", 75);
     applySavedMerges(rDir);
-    progress("rebuilding the cache", 88);
-    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    progress("updating the cache", 88);
+    const dailyRows = landSyncInCache(rDir, { sources: [instanceId] });
     const c2 = readConfig();
     if (c2) {
-      c2.whoopCreds = s.creds;
-      c2.sourceSyncedAt = { ...(c2.sourceSyncedAt ?? {}), whoop: now };
+      setWhoopCreds(c2, instanceId, s.creds);
+      c2.sourceSyncedAt = { ...(c2.sourceSyncedAt ?? {}), [instanceId]: now };
       writeConfig(c2);
     }
     return {
-      id: "whoop", name: "WHOOP (per-minute, unofficial)", from: win.from, to: win.to,
+      id: instanceId, name, from: win.from, to: win.to,
       days: s.daysWithData, metrics: s.metrics, cells: s.cells, dailyRows, syncedAt: now,
     };
   }

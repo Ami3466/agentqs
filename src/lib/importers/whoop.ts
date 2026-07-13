@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { mergeDailyCsv } from "../record";
+import type { AppConfig } from "../config";
 import { num, type DailyTable, type FetchLike } from "./plugin";
 
 /**
@@ -50,6 +51,45 @@ export interface WhoopCreds {
   accessToken?: string;
   userId?: number;
   tokenExpiresAt?: string; // ISO
+}
+
+/** The base WHOOP account keeps id "whoop"; extras are "whoop-2", "whoop-3", …
+ *  each with their own login, daily file and per-minute stream. */
+export const WHOOP_BASE_ID = "whoop";
+export function isWhoopInstance(id: string): boolean {
+  return id === WHOOP_BASE_ID || /^whoop-\d+$/.test(id);
+}
+
+/** Read the stored login for a WHOOP account. The base lives in `whoopCreds`
+ *  (back-compat); extras live under `whoopCredsByInstance[id]`. */
+export function whoopCredsFor(cfg: AppConfig | null, instanceId: string = WHOOP_BASE_ID): WhoopCreds | undefined {
+  if (!cfg) return undefined;
+  if (instanceId === WHOOP_BASE_ID) return cfg.whoopCreds ?? cfg.whoopCredsByInstance?.[WHOOP_BASE_ID];
+  return cfg.whoopCredsByInstance?.[instanceId];
+}
+
+/** Persist the login for a WHOOP account, in the slot that matches its id. */
+export function setWhoopCreds(cfg: AppConfig, instanceId: string, creds: WhoopCreds): void {
+  if (instanceId === WHOOP_BASE_ID) {
+    cfg.whoopCreds = creds;
+    return;
+  }
+  cfg.whoopCredsByInstance = { ...(cfg.whoopCredsByInstance ?? {}), [instanceId]: creds };
+}
+
+/** Forget a WHOOP account's login (disconnect / remove). */
+export function clearWhoopCreds(cfg: AppConfig, instanceId: string): void {
+  if (instanceId === WHOOP_BASE_ID) {
+    delete cfg.whoopCreds;
+    if (cfg.whoopCredsByInstance) delete cfg.whoopCredsByInstance[WHOOP_BASE_ID];
+    return;
+  }
+  if (cfg.whoopCredsByInstance) delete cfg.whoopCredsByInstance[instanceId];
+}
+
+/** True when the stored login can (re)authenticate — email + password or a token. */
+export function whoopHasCredential(creds: WhoopCreds | undefined): boolean {
+  return Boolean(creds?.email && (creds.password || creds.refreshToken));
 }
 
 /** A live, usable auth session (what fetch calls need). */
@@ -419,14 +459,15 @@ function buildDailyTable(
   return { header: DAILY_HEADER, rows };
 }
 
-/** Directory the per-minute heart-rate files live in (inside the git record). */
-export function whoopHrDir(recordDir: string): string {
-  return path.join(recordDir, "whoop", "hr");
+/** Directory the per-minute heart-rate files live in (inside the git record).
+ *  One dir per account: record/whoop/hr for the base, record/whoop-2/hr, … */
+export function whoopHrDir(recordDir: string, instanceId: string = WHOOP_BASE_ID): string {
+  return path.join(recordDir, instanceId, "hr");
 }
 
 /** Write one per-minute CSV per day; overwrite (idempotent). Returns minute count. */
-function writeHeartRateFiles(recordDir: string, files: Map<string, string[][]>): number {
-  const dir = whoopHrDir(recordDir);
+function writeHeartRateFiles(recordDir: string, files: Map<string, string[][]>, instanceId: string): number {
+  const dir = whoopHrDir(recordDir, instanceId);
   if (files.size === 0) return 0;
   fs.mkdirSync(dir, { recursive: true });
   let minutes = 0;
@@ -465,19 +506,22 @@ function hrWindow(from: string, to: string, days: number): { hrFrom: string; hrT
 }
 
 /**
- * Full unofficial pull: auth → cycles + per-minute HR → merge daily/whoop.csv +
- * write record/whoop/hr/<date>.csv. Rebuilding the SQLite cache is the caller's
- * job (route / CLI), exactly like the other importers.
+ * Full unofficial pull: auth → cycles + per-minute HR → merge daily/<id>.csv +
+ * write record/<id>/hr/<date>.csv. `instanceId` (default "whoop") is the account —
+ * a second athlete syncs as "whoop-2" into its own files. Rebuilding the SQLite
+ * cache is the caller's job (route / CLI), exactly like the other importers.
  */
 export async function importWhoop(opts: {
   creds: WhoopCreds;
   from: string;
   to: string;
   recordDir: string;
+  instanceId?: string;
   hrDays?: number;
   fetchImpl?: FetchLike;
 }): Promise<ImportWhoopSummary> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const instanceId = opts.instanceId ?? WHOOP_BASE_ID;
   const { session, creds } = await ensureSession(opts.creds, fetchImpl);
 
   const cycles = await fetchCycles(session.userId, session.accessToken, opts.from, opts.to, fetchImpl);
@@ -486,10 +530,10 @@ export async function importWhoop(opts: {
   const { hrFrom, hrTo } = hrWindow(opts.from, opts.to, opts.hrDays ?? DEFAULT_HR_DAYS);
   const samples = await fetchHeartRate(session.userId, session.accessToken, hrFrom, hrTo, fetchImpl);
   const { files, daily: dailyHr } = bucketHeartRate(samples);
-  const minutes = writeHeartRateFiles(opts.recordDir, files);
+  const minutes = writeHeartRateFiles(opts.recordDir, files, instanceId);
 
   const table = buildDailyTable(dailyCycles, dailyHr);
-  const merge = mergeDailyCsv(opts.recordDir, "whoop", table);
+  const merge = mergeDailyCsv(opts.recordDir, instanceId, table);
 
   return {
     creds,

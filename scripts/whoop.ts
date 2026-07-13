@@ -144,6 +144,22 @@ async function main() {
   const r = rebuild({ recordDir, dbPath: dbFile });
   check("record rebuilds with WHOOP rows", r.daily > 0, `${r.daily} daily rows`);
 
+  // 5. TWO accounts — a second athlete ("whoop-2") lands in its OWN daily file and
+  //    per-minute dir, never overwriting the base account's data.
+  await importWhoop({
+    creds: { email: "athlete2@example.com", password: "secret2" },
+    from: "2026-06-01",
+    to: "2026-06-02",
+    recordDir,
+    instanceId: "whoop-2",
+    fetchImpl: whoopFixtureFetch({ userId: 99, cycles: CYCLES, heartRate: HR }),
+  });
+  check("2nd account writes daily/whoop-2.csv", fs.existsSync(path.join(recordDir, "daily", "whoop-2.csv")));
+  check("2nd account's per-minute dir is separate", fs.existsSync(whoopHrDir(recordDir, "whoop-2")));
+  check("base account's daily file is untouched", fs.readFileSync(path.join(recordDir, "daily", "whoop.csv")).equals(after));
+  check("the two HR dirs are distinct", whoopHrDir(recordDir, "whoop") !== whoopHrDir(recordDir, "whoop-2"),
+    `${whoopHrDir(recordDir, "whoop")} vs ${whoopHrDir(recordDir, "whoop-2")}`);
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log(`\n${failures ? `✗ ${failures} check(s) failed` : "✓ all WHOOP checks passed"}\n`);
   process.exit(failures ? 1 : 0);

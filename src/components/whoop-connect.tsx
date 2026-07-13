@@ -39,6 +39,7 @@ interface Status {
 }
 
 export function WhoopConnect({
+  id = "whoop",
   version = 0,
   interval = "off",
   savingInterval = false,
@@ -48,6 +49,8 @@ export function WhoopConnect({
   onRemove,
   onSyncStarted,
 }: {
+  /** The WHOOP account this row drives: base "whoop" or an extra "whoop-2". */
+  id?: string;
   version?: number;
   interval?: Interval;
   due?: boolean;
@@ -68,15 +71,20 @@ export function WhoopConnect({
   const [busy, setBusy] = useState(false); // the POST round-trip (login test)
   const [error, setError] = useState("");
   const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
+  // Every call carries ?instance so a second athlete's row hits its own account.
+  const endpoint = id === "whoop" ? "/api/import/whoop" : `/api/import/whoop?instance=${id}`;
+  const m = id.match(/^whoop-(\d+)$/);
+  const title = m ? `WHOOP · account ${m[1]} (per-minute, unofficial)` : "WHOOP (per-minute, unofficial)";
 
   async function loadStatus() {
-    const res = await fetch("/api/import/whoop");
+    const res = await fetch(endpoint);
     if (res.ok) setStatus((await res.json()) as Status);
   }
 
   useEffect(() => {
     void loadStatus();
-  }, [version]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, id]);
 
   const liveJob = job ?? status?.job ?? null;
   const syncing = jobActive(liveJob);
@@ -87,7 +95,7 @@ export function WhoopConnect({
     setError("");
     let res: Response;
     try {
-      res = await fetch("/api/import/whoop", {
+      res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(withCreds ? { email, password } : {}),
@@ -126,7 +134,7 @@ export function WhoopConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <SourceTitle id="whoop" name="WHOOP (per-minute, unofficial)" hasData={Boolean(status?.hasData)} title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row" />
+            <SourceTitle id="whoop" name={title} hasData={Boolean(status?.hasData)} title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row" />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
           </div>
         </div>

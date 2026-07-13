@@ -34,7 +34,8 @@
     "**/*.tsx",
     ".next*/types/**/*.ts",
     "tmp/*/types/**/*.ts",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    ".next-whoop2/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
