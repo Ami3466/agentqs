@@ -25,7 +25,6 @@ import {
   whoopFixtureFetch,
   whoopHrDir,
   whoopLogin,
-  whoopRefresh,
   type WhoopCreds,
 } from "../src/lib/importers/whoop";
 import { parseCsv, rebuild } from "../src/lib/record";
@@ -36,9 +35,11 @@ function check(label: string, cond: boolean, extra = "") {
   if (!cond) failures++;
 }
 
+// The cycles-details BFF shape: recovery/HRV(ms)/resting-HR at the record level,
+// strain on `cycle`, `days` a stringified range, sleep under `sleeps`.
 const CYCLES = [
-  { days: ["2026-06-01"], recovery: { score: 68, heartRateVariabilityRmssd: 0.055, restingHeartRate: 52 }, strain: { score: 12.4 }, sleep: { score: 88, qualityDuration: 27_000_000 } },
-  { days: ["2026-06-02"], recovery: { score: 41, heartRateVariabilityRmssd: 0.033, restingHeartRate: 60 }, strain: { score: 7.9 }, sleep: { score: 63, qualityDuration: 19_800_000 } },
+  { score: 68, hrv_rmssd_milli: 55, resting_heart_rate: 52, cycle: { days: "['2026-06-01T00:00:00.000Z','2026-06-02T00:00:00.000Z')", scaled_strain: 12.4 }, sleeps: [{ score: 88, quality_duration: 27_000_000 }] },
+  { score: 41, hrv_rmssd_milli: 33, resting_heart_rate: 60, cycle: { days: "['2026-06-02T00:00:00.000Z','2026-06-03T00:00:00.000Z')", scaled_strain: 7.9 }, sleeps: [{ score: 63, quality_duration: 19_800_000 }] },
 ];
 
 // A per-minute window on 2026-06-02: three good beats + one gap (0 → dropped).
@@ -56,12 +57,11 @@ async function main() {
 
   console.log("\nWHOOP unofficial app login — auth, per-minute pull, merge.\n");
 
-  // 1. Auth grants return a usable session.
+  // 1. Sign-in (username + password) returns a usable session at the live host.
   const login = await whoopLogin("athlete@example.com", "secret", whoopFixtureFetch({ userId: 42 }));
-  check("whoopLogin → bearer session", Boolean(login.accessToken && login.refreshToken), `userId ${login.userId}`);
+  check("whoopLogin → bearer session", Boolean(login.accessToken), `userId ${login.userId}`);
+  check("login resolves the user id", login.userId === 42, `userId ${login.userId}`);
   check("login sets a future token expiry", new Date(login.expiresAt).getTime() > Date.now());
-  const refreshed = await whoopRefresh("refresh-abc", whoopFixtureFetch({ userId: 42 }));
-  check("whoopRefresh → fresh session", Boolean(refreshed.accessToken), refreshed.userId === 42 ? "userId 42" : "bad userId");
 
   // 2. ensureSession re-uses a valid cached token with NO network call.
   let calls = 0;
@@ -103,7 +103,9 @@ async function main() {
   }
   const day2 = rows.find((r) => r[0] === "2026-06-02")!;
   const cell = (col: string) => day2[header.indexOf(col)];
-  check("HRV converted seconds→ms", cell("hrv") === "33", `hrv=${cell("hrv")}`); // 0.033 → 33
+  check("recovery from record.score", cell("recovery") === "41", `recovery=${cell("recovery")}`);
+  check("HRV in ms (hrv_rmssd_milli)", cell("hrv") === "33", `hrv=${cell("hrv")}`);
+  check("strain from cycle.scaled_strain", cell("strain") === "7.9", `strain=${cell("strain")}`);
   check("sleep duration ms→hours", cell("sleep_hours") === "5.5", `sleep_hours=${cell("sleep_hours")}`); // 19_800_000ms
   check("hr_avg from per-minute stream", cell("hr_avg") === "86.67", `hr_avg=${cell("hr_avg")}`); // (58+62+140)/3
   check("hr_max from per-minute stream", cell("hr_max") === "140", `hr_max=${cell("hr_max")}`);
