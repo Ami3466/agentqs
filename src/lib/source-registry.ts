@@ -15,6 +15,7 @@ import type { AppConfig } from "./config";
 import { recordDir } from "./paths";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { whoopCredsFor } from "./importers/whoop";
+import { googlePluginOn } from "./google";
 import { PLUGINS, SOURCE_PLUGINS } from "./importers/registry";
 import { connectionState } from "./importers/plugin";
 import { readSyncRuns } from "./sync-runs";
@@ -23,7 +24,8 @@ import { FILE_IMPORTERS } from "./importers/files/registry";
 import { listAutomations } from "./automation";
 import type { AutomationRecipe } from "./automation-types";
 import { GOOGLE_PRESET_DAILY_SOURCES } from "./google-web-scraper";
-import { shouldSkipDailyCsvRead } from "./record";
+import { readInboxFromRecord, shouldSkipDailyCsvRead } from "./record";
+import { CHANNELS, channelEnv } from "./channels/registry";
 import { SOURCE_BUNDLES, type SourceBundle } from "./source-bundles";
 import {
   isDue,
@@ -227,6 +229,48 @@ function whoopRow(cfg: AppConfig | null, dir: string, instanceId: string = "whoo
   };
 }
 
+/** Live-capture channel rows (Slack, Telegram). A channel is PUSHED to our
+ *  webhook: connected by a bot token, never scheduled, never synced, never due.
+ *  Its "data" is the memos you sent the bot (inbox items tagged with its id), so
+ *  the row says how many it has captured — and NEVER reads like a puller that
+ *  could fetch your platform history (it cannot). */
+function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
+  const env = channelEnv();
+  let inbox: ReturnType<typeof readInboxFromRecord> = [];
+  try {
+    inbox = readInboxFromRecord(dir);
+  } catch {
+    /* no record yet */
+  }
+  return CHANNELS.map((adapter) => {
+    const connected = adapter.configured(env);
+    const captures = inbox.filter((i) => i.source === adapter.id);
+    const n = captures.length;
+    const last = n ? captures.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
+    const tail = "messages you send the bot land in your inbox";
+    const detail = n
+      ? `${n} message${n === 1 ? "" : "s"} captured · ${tail}`
+      : `${connected ? "nothing captured yet" : "not connected"} · ${tail}`;
+    return {
+      id: adapter.id,
+      name: adapter.label,
+      kind: "api",
+      channel: true,
+      detail,
+      connected,
+      hasData: n > 0,
+      interval: "off",
+      lastSync: last?.ts ?? null,
+      stale: false,
+      due: false, // pushed, never polled
+      syncEndpoint: null, // nothing to sync
+      live: false,
+      credentialOrigin: connected ? "env" : null,
+      ...lastRunFields(adapter.id),
+    };
+  });
+}
+
 /** Extra WHOOP accounts already set up ("whoop-2", …) — anything holding a login,
  *  a schedule, a sync stamp, or a daily file. Mirrors pluginInstanceIds. */
 function whoopInstanceIds(cfg: AppConfig | null, dir: string): string[] {
@@ -274,10 +318,17 @@ function pluginRow(
     interval,
     lastSync,
     stale: false,
-    due: plugin.live && state.connected && isDue(lastSync, interval),
+    // A Google plugin shares one key with its siblings, so "connected" can't gate
+    // its schedule — an UNTICKED Gmail still holds the key. googlePluginOn is the
+    // checkbox: unticked → never due, even with a saved cadence. Non-Google plugins
+    // are never gated (googlePluginOn returns true for them).
+    due: plugin.live && state.connected && googlePluginOn(cfg, plugin.id) && isDue(lastSync, interval),
     syncEndpoint: plugin.live ? `/api/import/${instanceId}` : null,
     live: plugin.live,
     plugin: true,
+    // Plugins that share one OAuth key (Google: Calendar + Gmail) carry the
+    // provider tag so the Pipeline folds them into a single card.
+    provider: plugin.oauth?.providerKey,
     credentialOrigin: state.credentialOrigin === "explicit" ? "saved" : state.credentialOrigin,
     hasData: state.hasData,
     detectedApp: state.detectedApp,
@@ -474,6 +525,14 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   for (const recipe of listAutomations(cfg)) {
     owned.add(recipe.id);
     out.push(automationRow(cfg, dir, recipe));
+  }
+
+  // Live-capture channels (Slack, Telegram): PUSHED to our webhook, not polled —
+  // connected by a bot token, filled by memos you send the bot. They belong on the
+  // tab that shows data coming in, but never as a broken puller.
+  for (const row of channelRows(cfg, dir)) {
+    owned.add(row.id);
+    out.push(row);
   }
 
   // Chrome-extension Google scrapes are owned by the Pipeline tab's Google card

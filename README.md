@@ -69,15 +69,17 @@ Text or voice, from the app, CLI or a channel. They land in your inbox - structu
 
 ### Channels
 
-Slack and Telegram: log memos and ask your record questions from where you already are.
+Slack and Telegram: log memos and ask your record questions from where you already are. They are capture channels, not scrapers - what you send the bot lands in your inbox, and your Slack history is never read. The Pipeline lists them under **Capture channels**, so a bot you haven't linked yet never looks like a broken data source.
 
 ## Integrations / data pipelines
 
-**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*
+**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google (Calendar, Gmail) · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*
 
-OAuth sources (Spotify, Google Calendar, Fitbit, Strava, Whoop, Withings, Trakt) connect with Authorize - register the redirect URI the form shows, paste client id + secret, approve. Every sync mints a fresh token from there on. Syncing lands only the rows it fetched: an import never re-reads your whole record, so a hosted instance stays responsive no matter how big the record gets.
+**Google is one connection.** One account, one key, and you tick what it imports - Calendar, and Gmail down to Inbox and Sent separately. The scope Google is asked for is only what you ticked, so if you never want Gmail you are never asked for your mail; tick it later and it re-authorizes the *same* key. Gmail counts, it never reads: message IDs only, landing `emails_received` and `emails_sent` per day. The products Google gives no API for - Search, Maps, YouTube, Gemini - come in through the Chrome extension under Automated imports instead. (Google Drive backup is not a source: backups send data out, and never appear in the pipeline.)
 
-\* Granola has no API key - the credential is the desktop app's refresh token (`workos_tokens.refresh_token` in its `supabase.json`). Running agentqs on the same machine? It finds the login itself. Whoop's old unofficial email + password login was retired by Whoop; the official Whoop row (Authorize) is the connect that works.
+OAuth sources (Google, Spotify, Fitbit, Strava, Whoop, Withings, Trakt) connect with Authorize - register the redirect URI the form shows, paste client id + secret, approve. Every sync mints a fresh token from there on. Syncing lands only the rows it fetched: an import never re-reads your whole record, so a hosted instance stays responsive no matter how big the record gets.
+
+\* Granola has no API key - the credential is the desktop app's refresh token (`workos_tokens.refresh_token` in its `supabase.json`). Running agentqs on the same machine? It finds the login itself. Whoop connects two ways, and both ship: the official API (Authorize) for daily summaries, and the unofficial app login (email + password) - the only source of **per-minute heart rate**.
 
 **Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.
 

@@ -1,3 +1,4 @@
+import { googleScopes, SCOPE_CALENDAR } from "../google";
 import {
   getJson,
   num,
@@ -72,7 +73,12 @@ export const gcalPlugin: ImporterPlugin = {
   oauth: {
     authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
-    scope: "https://www.googleapis.com/auth/calendar.readonly",
+    scope: SCOPE_CALENDAR,
+    // ONE Google connection: Calendar and Gmail share this grant, and the scope we
+    // ask for is the union over the products actually ticked on the Google card —
+    // so a user who never wanted Gmail is never asked for their mail. See google.ts.
+    providerKey: "google",
+    scopeFor: googleScopes,
     tokenAuth: "body",
     // offline + consent → Google actually returns a refresh token, every time.
     extraAuthParams: { access_type: "offline", prompt: "consent" },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
 import {
@@ -273,6 +273,33 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [tgToken, setTgToken] = useState("");
   const [slackToken, setSlackToken] = useState("");
   const [slackSecret, setSlackSecret] = useState("");
+  /**
+   * The LIVE state of each bot, from its own capability probe — the truth the
+   * webhook itself runs on. The server-rendered config only knows what's in
+   * config.json, so a bot credentialed by env var (SLACK_BOT_TOKEN on a hosted
+   * instance) worked perfectly while this page called it "Not linked". Probe wins;
+   * config is the fallback until it answers.
+   */
+  const [channelLive, setChannelLive] = useState<Record<string, { enabled: boolean; verified: boolean }>>({});
+  const loadChannels = useCallback(async () => {
+    const probes = await Promise.all(
+      ["slack", "telegram"].map(async (id) => {
+        try {
+          const res = await fetch(`/api/channels/${id}`, { cache: "no-store" });
+          if (!res.ok) return null;
+          const s = (await res.json()) as { enabled?: boolean; verified?: boolean };
+          return [id, { enabled: Boolean(s.enabled), verified: Boolean(s.verified) }] as const;
+        } catch {
+          return null; // a failed probe must never downgrade a working bot to "Not linked"
+        }
+      }),
+    );
+    const live = probes.filter((p): p is NonNullable<typeof p> => p !== null);
+    if (live.length) setChannelLive((prev) => ({ ...prev, ...Object.fromEntries(live) }));
+  }, []);
+  useEffect(() => {
+    void loadChannels();
+  }, [loadChannels]);
   // Per-channel reply behaviour: AI replies vs log-only, persona, model override.
   const [replies, setReplies] = useState<Record<string, ChannelReplyPrefs>>({
     telegram: { ai: true, ...config.channels.replies.telegram },
@@ -722,6 +749,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     setSlackToken("");
     setSlackSecret("");
     setTimeout(() => setSaved(false), 2000);
+    // Re-probe the bots: a token saved just now must flip the badge to Linked
+    // here and then, not on the user's next full page load.
+    void loadChannels();
     router.refresh();
   }
 
@@ -1090,7 +1120,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         name="Telegram"
         icon={Telegram}
         desc="DM your bot to chat with your record — “// a note” logs a memo with zero tokens."
-        linked={config.channels.telegram}
+        linked={channelLive.telegram?.enabled ?? config.channels.telegram}
         token={tgToken}
         onToken={setTgToken}
         tokenPlaceholder="123456:ABC…"
@@ -1110,14 +1140,14 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         name="Slack"
         icon={Slack}
         desc="DM or @mention the bot to chat with your record — “// a note” logs a memo with zero tokens."
-        linked={config.channels.slack}
+        linked={channelLive.slack?.enabled ?? config.channels.slack}
         token={slackToken}
         onToken={setSlackToken}
         tokenPlaceholder="xoxb-…"
         webhook={slackWebhook}
         secret={slackSecret}
         onSecret={setSlackSecret}
-        secretSet={config.channels.slackVerified}
+        secretSet={channelLive.slack?.verified ?? config.channels.slackVerified}
         manifest={slackManifest}
         steps={[
           "api.slack.com/apps → Create New App → From a manifest → pick your workspace → paste the manifest below. It sets the scopes, the events and this webhook URL in one go.",
@@ -1441,6 +1471,7 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "GET", path: "/api/log", desc: "Captured log items; POST /api/log/reject {\"id\":\"…\"} undoes an import." },
   { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; DELETE disconnects." },
   { method: "GET", path: "/api/pipeline", desc: "Pipeline truth table: per-source origin, credential provenance, schedule, last run outcome, coverage." },
+  { method: "GET", path: "/api/google", desc: "Google as ONE connection with a product tree (Calendar, Gmail → Inbox/Sent). POST {\"enable\":[\"gmail.sent\"]} ticks a product; {\"products\":[…]} replaces the set. Ticking is not connecting: a product whose scope the stored key lacks answers needsAuthorize — re-authorize widens the SAME key." },
   { method: "GET", path: "/api/doctor", desc: "Store health: sync-engine exposure (iCloud/Dropbox/OneDrive), evicted files, conflict twins, split stores." },
   { method: "GET", path: "/api/audit", desc: "Index audit: deterministic evidence for an AI review — impossible dates, one-day sources, coverage holes, stale sources, outlier values." },
   { method: "POST", path: "/api/store/migrate", body: `{"dryRun":true}`, desc: "Move the store to the sync-safe app-data dir (hash-verified; restart after). Omit dryRun to migrate." },

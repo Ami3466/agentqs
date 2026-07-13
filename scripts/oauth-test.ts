@@ -184,7 +184,10 @@ async function main() {
   fs.writeFileSync(path.join(dataDir, "record", "daily", "spotify.csv"), "date,tracks\n2026-07-01,3\n");
   disconnectSource("spotify");
   check("grant gone after disconnect", !readConfig()?.sourceOAuth?.spotify);
-  check("gcal grant untouched", Boolean(readConfig()?.sourceOAuth?.gcal));
+  // Google's grant is SHARED by Calendar and Gmail, so it lives under the provider
+  // key `google`, not `gcal` (see google.ts). Disconnecting an unrelated source
+  // must not touch it. Removing a Google product itself is covered by google:test.
+  check("Google's grant untouched", Boolean(readConfig()?.sourceOAuth?.google));
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed.");
   process.exit(failures ? 1 : 0);

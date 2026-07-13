@@ -77,6 +77,10 @@ export interface OAuthGrant {
   accessToken?: string;
   refreshToken?: string;
   expiresAt?: string; // ISO — syncs refresh before use once past
+  /** Space-separated scopes the grant actually HOLDS (what Google returned, not
+   *  what we asked for). Lets the Google card tell "Gmail is ticked but the key
+   *  never got the mail scope" from "Gmail is connected". */
+  scopes?: string;
 }
 
 /** Off-site backups (`agentqs backup`, src/lib/backup.ts). GitHub gets a
@@ -164,6 +168,10 @@ export interface AppConfig {
   autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)
   columnMerges?: ColumnMergeRule[]; // accepted duplicate-column merges, re-applied on every import (column scanner)
   backup?: BackupConfig; // off-site backups: GitHub snapshot branch + encrypted Drive archive
+  /** Which Google products are switched on ("calendar", "gmail.inbox", …). One
+   *  Google key, a tree of products the user ticks; absent → calendar only (what
+   *  "Google" meant before the tree existed). See src/lib/google.ts. */
+  googleProducts?: string[];
 }
 
 /** Are semantic embeddings on at all? Default true — the Settings checkbox flips it off. */

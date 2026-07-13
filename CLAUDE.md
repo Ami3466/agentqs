@@ -137,6 +137,22 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   holds); syncs mint fresh access tokens from the refresh token automatically
   (Trakt syncs get the plugin's `<client_id>:<token>` format). Pasted access
   tokens still work but die within hours - steer users to Authorize.
+- GOOGLE IS ONE CONNECTION, not three. Calendar + Gmail share ONE OAuth key
+  (both plugins carry `oauth.providerKey: "google"`, so the grant lives at
+  `sourceOAuth.google` and the Pipeline folds them into a single card via the
+  row's `provider` tag). The user TICKS products (a tree: Google -> Gmail ->
+  Inbox/Sent, `src/lib/google.ts`); the scope asked for is the UNION over what's
+  ticked, so ticking Gmail RE-AUTHORIZES the same key (never a second
+  credential) and the card shows `needsAuthorize` until it does. Ticking is NOT
+  connecting (connection rule holds); an UNTICKED product still holds the key but
+  is never due and refuses to sync ("nothing checked"). Unticking never deletes
+  the credential or past rows. Removing one product (`disconnect gcal`) unticks
+  it and keeps the shared key while a sibling rides it; removing the LAST forgets
+  the key. Faces: web card (GET/POST `/api/google`), `agentqs google
+  status|enable|disable <products>`, MCP `google_products {products|enable|
+  disable}`, core `google()`. Gmail COUNTS, never reads (message IDs only ->
+  `emails_received`/`emails_sent`). `gdrive_backup` speaks Google OAuth too but
+  is a BACKUP TARGET, deliberately NOT in this tree.
 - WHOOP unofficial (email + password, per-minute HR) is SHIPPED AND SUPPORTED -
   it is the only source of per-minute heart rate. The login lives at
   `api.prod.whoop.com/auth-service/v2/whoop/sign-in` (the deleted api-7 host is

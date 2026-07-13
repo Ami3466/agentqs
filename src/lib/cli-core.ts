@@ -30,6 +30,8 @@ import {
   type SyncCacheChange,
 } from "./record";
 import { readJournal } from "./journal";
+import { GOOGLE_PRODUCTS, googleEnabled, googleProductById } from "./google";
+import { googleState, setGoogleProducts, toggleGoogleProducts, type GoogleState } from "./google-connect";
 import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken, resolveLogin } from "./importers/github";
@@ -510,6 +512,22 @@ export async function whoopConnect(
   return { email: email.trim(), saved: true, id: instanceId };
 }
 
+/** The Google card as one brain: read state, or tick/untick products (Google →
+ *  Gmail → Sent) behind the one shared OAuth key. No args → just the current state.
+ *  `{products}` replaces the whole ticked set (the checkboxes); `{enable,disable}`
+ *  nudges a few (the CLI flags). Ticking is NOT connecting — a product the stored
+ *  grant lacks the scope for comes back as `needsAuthorize`, re-authorize widens
+ *  the same key. MCP tool `google_products`; API GET/POST `/api/google`. */
+export function google(
+  opts: { products?: string[]; enable?: string[]; disable?: string[] } = {},
+): GoogleState {
+  if (opts.products) return setGoogleProducts(opts.products);
+  if (opts.enable?.length || opts.disable?.length) {
+    return toggleGoogleProducts(opts.enable ?? [], opts.disable ?? []);
+  }
+  return googleState();
+}
+
 /** Set a source's sync cadence — this is "set up an automated import". `off`,
  *  `hourly`, `daily`, `weekly`. API sources auto-sync when due; manual sources
  *  badge stale when overdue. A backup target isn't a source: its cadence lives
@@ -628,6 +646,14 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
     } catch {
       /* non-fatal */
     }
+  } else if (GOOGLE_PRODUCTS.some((p) => p.plugin === id)) {
+    // A Google-tree plugin (gcal, gmail) rides ONE shared key. Untick the products
+    // it owns; drop the shared grant only when nothing else rides it — removing
+    // Calendar must not take Gmail's key, but the last product leaving forgets it
+    // (a dangling credential is a lie about connectedness). forgetSourceConfig
+    // below clears this plugin's own slots; the shared grant is handled here.
+    cfg.googleProducts = googleEnabled(cfg).filter((pid) => googleProductById(pid)?.plugin !== id);
+    if (cfg.googleProducts.length === 0 && cfg.sourceOAuth) delete cfg.sourceOAuth.google;
   }
   forgetSourceConfig(cfg, id);
   writeConfig(cfg);
