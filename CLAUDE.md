@@ -49,6 +49,12 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
 
 ### Everything else (already key-free)
 
+- `agentqs onboarding` - START HERE on a fresh or unfamiliar instance: the live
+  setup checklist (account -> API key -> first capture -> sources -> schedules
+  -> GitHub backup -> Drive backup -> channels -> migrate existing data), each
+  step with its exact CLI command, MCP tool and API call plus a `done` flag
+  derived from real state and `nextStep` = the first thing missing. MCP tool:
+  `onboarding`; API: GET `/api/onboarding`.
 - `agentqs import <path>` - land any file (clean CSV structures instantly) or a
   WHOLE FOLDER: every file ends in exactly one bucket (structured / inbox /
   routed-to-importer / ignored / residue), the accounting is persisted as an
@@ -81,7 +87,10 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   instance: connect gdrive_backup + set the same passphrase there, then
   `backup restore --latest --into-store` (API: `{"target":"restore",
   "confirm":"replace-record"}`). `backup status` = "when did my data last
-  leave this machine?". MCP: `backup_run`, `backup_status`, `backup_restore`;
+  leave this machine?". The Settings -> Data switches map 1:1 to the CLI:
+  GitHub on/off = `backup github --schedule daily|off`, Drive on/off =
+  `source interval gdrive_backup daily|off`, Drive connect = `source authorize
+  gdrive_backup ...`. MCP: `backup_run`, `backup_status`, `backup_restore`;
   API: GET/POST `/api/backup`.
 - `agentqs audit` - index audit: DETERMINISTIC evidence for an AI review pass -
   impossible dates, single-day sources, coverage holes, gone-quiet sources,
@@ -107,11 +116,14 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form
   shows the same guide (it lives once, on the plugin's `credentialHelp`).
-- OAuth sources (spotify, gcal, fitbit, strava, whoop-api, withings, trakt -
-  expiring/rotating tokens): connect via the authorize dance in the web app -
-  the form shows the redirect URI to register, takes the user's app client id
-  + secret (POST `/api/oauth/<id>` -> authorize URL -> GET `/api/oauth/callback`
-  stores the grant). The grant IS the stored credential (connection rule
+- OAuth sources (spotify, gcal, fitbit, strava, whoop-api, withings, trakt,
+  gdrive_backup - expiring/rotating tokens): connect via the authorize dance -
+  in the web app the form shows the redirect URI to register and takes the
+  user's app client id + secret (POST `/api/oauth/<id>` -> authorize URL ->
+  GET `/api/oauth/callback` stores the grant), or start it from the CLI/MCP:
+  `agentqs source authorize <id> --client-id <cid> --client-secret <cs>
+  [--origin <app-url>]` (MCP: `source_authorize`) prints the URL to approve -
+  the RUNNING app at origin still receives the callback. The grant IS the stored credential (connection rule
   holds); syncs mint fresh access tokens from the refresh token automatically
   (Trakt syncs get the plugin's `<client_id>:<token>` format). Pasted access
   tokens still work but die within hours - steer users to Authorize.

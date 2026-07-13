@@ -245,6 +245,40 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "onboarding",
+    {
+      title: "Onboarding checklist (start here on a fresh instance)",
+      description:
+        "THE setup structure, derived from live state — call this FIRST when setting up or auditing an instance. " +
+        "Returns every step in order (account, API key, first capture, connect sources, schedules, GitHub backup, " +
+        "Drive backup, live channels, migrate-existing-data) with a `done` flag and the EXACT CLI command, MCP tool " +
+        "and API call that performs it, plus `nextStep` = the first thing still missing. Read-only.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.onboardingGuide()),
+  );
+
+  server.registerTool(
+    "source_authorize",
+    {
+      title: "Start the OAuth dance for a source",
+      description:
+        "For expiring-token sources (spotify, gcal, gdrive_backup, …): saves the provider app's client id + secret, " +
+        "stashes the state nonce, and returns the authorize URL for the user to open. The RUNNING app at `origin` " +
+        "receives the callback and stores the grant — the provider app must have `redirectUri` (returned) registered. " +
+        "This is the CLI/MCP twin of the web connect form; pasted access tokens die within hours, grants refresh forever.",
+      inputSchema: {
+        source: z.string(),
+        clientId: z.string(),
+        clientSecret: z.string(),
+        origin: z.string().optional(),
+      },
+    },
+    async ({ source, clientId, clientSecret, origin }) =>
+      guard(() => core.sourceAuthorize(source, clientId, clientSecret, origin)),
+  );
+
+  server.registerTool(
     "backup_status",
     {
       title: "Off-site backup status",
