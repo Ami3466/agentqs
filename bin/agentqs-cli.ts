@@ -270,9 +270,10 @@ program
   .option("--source <id>", "source id (alternative to the positional arg)")
   .option("-c, --credential <c>", "API key / token for this run")
   .option("-d, --days <n>", "trailing window", (v) => parseInt(v, 10))
+  .option("--all-time", "WHOOP: pull the account's ENTIRE history (a first import does this anyway)")
   .option("--fixture <file>", "offline: JSON body to feed the importer")
   .option("--due", "only sources whose schedule says so — the crontab mode (API sources + browser automations)")
-  .action(async (positional: string | undefined, opts: { source?: string; credential?: string; days?: number; fixture?: string; due?: boolean }) => {
+  .action(async (positional: string | undefined, opts: { source?: string; credential?: string; days?: number; allTime?: boolean; fixture?: string; due?: boolean }) => {
     const source = positional ?? opts.source;
     try {
       if (opts.due) {
@@ -289,11 +290,17 @@ program
         return;
       }
       const r = source
-        ? await core.syncSource({ id: source, credential: opts.credential, days: opts.days, fixture: opts.fixture })
+        ? await core.syncSource({
+            id: source,
+            credential: opts.credential,
+            days: opts.days,
+            allTime: opts.allTime,
+            fixture: opts.fixture,
+          })
         : await core.syncAll(opts.days);
       out(r, (d) =>
         source
-          ? `Synced ${d.name}: ${d.days} days, ${d.cells} cells → ${d.dailyRows} daily rows.`
+          ? `Synced ${d.name}: ${d.days} days (${d.from} → ${d.to}), ${d.cells} cells → ${d.dailyRows} daily rows.`
           : `Synced ${d.synced.length}, skipped ${d.skipped.length}.`,
       );
     } catch (e) {

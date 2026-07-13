@@ -168,16 +168,28 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   Both shapes parse. When a column goes quiet, suspect the payload, and make the
   FIXTURE mirror the live response (`scripts/whoop.ts`) - a fixture frozen on the
   old shape keeps the test green while production lands nothing.
-  DORMANT ACCOUNTS: the sync window is anchored to TODAY (`windowDays(90)`), so an
-  account whose strap stopped recording months ago matched nothing, landed nothing
-  and still reported "ok · 0 days" - which reads as "WHOOP gives no data" when the
-  account in fact holds years of it. WHOOP answers an empty window with its NEWEST
-  cycles anyway (dated in the past), so `importWhoop` uses them: zero in-range days
-  + a `latestCycle` older than `from` -> re-anchor the same span to end on that day
-  and pull again (`reanchored`/`latestCycle` on the summary). A daily-worn account
-  never takes this path. And a sync that lands ZERO days now THROWS, naming the
-  account's newest cycle and the `--days` needed to reach it - landing nothing is
-  never success. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
+  THE WINDOW IS NOT "LAST 90 DAYS". A trailing window is wrong twice over: it
+  imports a sliver of a lifetime, and on an account whose strap stopped recording
+  months ago it matches NOTHING - which used to land zero days and still report
+  "ok", reading as "WHOOP gives no data" while the account held years of it. So:
+    - FIRST import (the daily file holds nothing) -> ALL TIME. `fetchAllCycles`
+      discovers the account's start by walking back in 180-day windows until 2 in a
+      row are empty (WHOOP exposes no "created at"). The walk STARTS at the
+      account's newest cycle, not at today - a dormant account would otherwise burn
+      the empty-window budget before reaching any data. Judge emptiness on IN-RANGE
+      cycles only: WHOOP answers a window it has nothing for with its newest cycles
+      anyway, so counting the raw response walks back to 2015 every time.
+    - afterwards -> resume from the last recorded day (minus a week of overlap),
+      never from today minus 90.
+    - `--days N` / `{days}` -> exactly that window, honoured as asked.
+    - `--all-time` / `{allTime:true}` (CLI, MCP `sync`, POST /api/import/whoop)
+      forces a full backfill on a record that was seeded with only a recent slice.
+  Per-minute HR stays capped at `hrDays` (14) - years of it is gigabytes - but it
+  hangs off the LAST DAY THAT HAS DATA, not off today, or a dormant account pulls an
+  empty minute stream while its cycles land fine. Belt and braces: a non-all-time
+  window that normalizes to zero days re-anchors onto `latestCycle`
+  (`reanchored` on the summary), and a sync that lands ZERO days THROWS, naming the
+  account's newest cycle - landing nothing is never success. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
   each its own login (`config.whoopCredsByInstance`), daily file, per-minute dir
   (`record/<id>/hr`) and schedule - CLI `whoop connect <email> <pass> --account
   whoop-2`, MCP `whoop_connect {account}`, web "Add another account", API POST
