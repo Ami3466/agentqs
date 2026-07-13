@@ -122,6 +122,13 @@ export const rescuetimePlugin: ImporterPlugin = {
   name: "RescueTime",
   detail: "focus — productivity pulse & hours",
   live: true,
+  // RescueTime's API serves a ROLLING ~2-week window and ignores restrict_begin
+  // entirely: asked for January 2025 it answers with rows dated a fortnight ago
+  // (verified live). No window we send reaches further back, so a backfill cannot
+  // help — what it CAN do is keep every day it hands us before that day ages out,
+  // which is why the record ends up holding more history than the API will serve.
+  historyNote:
+    "RescueTime's API only exposes about the last two weeks (a free plan keeps no more), and it ignores any earlier date you ask for. agentqs keeps each day it sees, so your record grows past that window over time — but nothing can backfill the days before you connected.",
   requiresCredential: true,
   credentialLabel: "RescueTime API key",
   credentialPlaceholder: "your RescueTime API key",

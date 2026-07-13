@@ -301,4 +301,10 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
 - `npm run rebuild:verify` must stay green (byte-identical rebuilds).
 - Tests: `npm run files:test`, `npm run scan:test`, `npm run extension:test`,
   `npm run paths:test`, `npm run store:test`.
-- Typecheck with `npx tsc --noEmit`; build with `npm run build`.
+- Typecheck with `npx tsc --noEmit`; build with `npm run build`. ⚠ `npm run build`
+  writes `.next` - the SAME dir a running `next dev` serves from - so building
+  while the user's dev server is up replaces its chunks with production output and
+  every `/_next/static/...` 404s: the page loads but never hydrates, so the client
+  panels (the whole Pipeline list) silently render nothing. It looks exactly like
+  "you broke the UI". Pass `NEXT_DIST_DIR=.next-verify` (or `.next-e2e`, what
+  `log:test` uses) for any build or verify server you spin up while dev is running.
