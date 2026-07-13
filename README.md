@@ -1,4 +1,6 @@
-<img src="public/logo.svg" alt="agentqs" width="160" />**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
+<img src="public/logo.svg" alt="agentqs" width="160" />
+
+**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
