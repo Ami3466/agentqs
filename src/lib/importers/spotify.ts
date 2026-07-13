@@ -52,6 +52,13 @@ export const spotifyPlugin: ImporterPlugin = {
   name: "Spotify",
   detail: "tracks & minutes listened",
   live: true,
+  // Spotify serves the last 50 plays and takes NO date range — the window is a
+  // client-side filter over whatever comes back, so it must stay WIDE (the default).
+  // Narrowing it to "the last few days" would DISCARD those plays whenever you had
+  // not listened recently, turning a quiet fortnight into zero rows. The handful of
+  // days a sync covers is Spotify's 50-item ceiling, not a broken importer.
+  historyNote:
+    "Spotify's API only returns your last 50 plays and accepts no date range, so a sync covers a few days at most — that is Spotify's limit, not a failed import. For your whole listening history, request the account export (Spotify → Privacy → Extended streaming history) and drop the JSON into Data.",
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "BQ… (OAuth access token)",

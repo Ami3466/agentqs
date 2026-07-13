@@ -13,6 +13,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { buildSources } from "../src/lib/source-registry";
+import { syncWindow } from "../src/lib/cli-core";
 import { isDue, isStale } from "../src/lib/sources";
 import type { AppConfig } from "../src/lib/config";
 
@@ -114,6 +115,38 @@ check("isStale(never, daily) === false (not connected, not stale)", isStale(null
 check("isStale(2d ago, off) === false", isStale(daysAgoISO(2), "off") === false);
 
 fs.rmSync(root, { recursive: true, force: true });
+
+// --- WHICH WINDOW a sync asks for. Every source used to send a flat trailing
+// "last 90 days": it lands a sliver of a lifetime, and since every LATER sync
+// re-asks for that same window, the years before it are never fetched even once —
+// the source is capped at whatever its first 90 days held, forever.
+console.log("\nScenario 5 — the window comes from the record, never from a constant");
+const today = new Date("2026-07-13T00:00:00Z");
+const wRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-window-"));
+fs.mkdirSync(path.join(wRoot, "daily"), { recursive: true });
+
+// A source with NOTHING in the record: the FIRST import takes the history (5y back),
+// not the 90-day sliver every source used to ask for.
+const first = syncWindow(wRoot, "gcal", { today });
+check(`first import reaches back years, not 90 days (${first.from} → ${first.to})`,
+  first.from === "2021-07-15" && first.to === "2026-07-13" && first.firstImport);
+
+// A plugin bounded by its OWN API (Gmail counts one day at a time, max 400 per run)
+// asks for exactly what one run can carry, not five years it would silently trim.
+const spot = syncWindow(wRoot, "gmail", { backfillDays: 400, today });
+check(`an API-capped source asks only for what it can serve (${spot.from})`, spot.from === "2025-06-09");
+
+// Once the record holds data, a sync RESUMES from it (with a week of overlap) — it
+// must never slide back to a trailing window and re-fetch the same 90 days forever.
+fs.writeFileSync(path.join(wRoot, "daily", "gcal.csv"), "date,meetings\n2026-07-01,3\n2026-07-10,5\n");
+const resume = syncWindow(wRoot, "gcal", { today });
+check(`a later sync resumes from the last recorded day (${resume.from}, last=2026-07-10 −7d overlap)`,
+  resume.from === "2026-07-03" && !resume.firstImport);
+
+// --days is still honoured exactly as asked.
+const explicit = syncWindow(wRoot, "gcal", { days: 30, today });
+check(`--days N is honoured verbatim (${explicit.from})`, explicit.from === "2026-06-14");
+fs.rmSync(wRoot, { recursive: true, force: true });
 
 if (failures) {
   console.log(`\n✗ ${failures} check(s) failed.\n`);

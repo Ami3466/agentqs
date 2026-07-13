@@ -169,9 +169,30 @@ export interface ImporterPlugin {
    *  side effect (a `backupTarget` uploads an archive) MUST set one, so a test
    *  never runs that side effect. Returns the human detail line. */
   probe?(ctx: ImporterContext): Promise<string>;
+  /**
+   * How far back a FIRST import reaches, in days. A trailing "last 90 days" is not
+   * an import — it lands a sliver of a lifetime and never goes back for the rest,
+   * because every later sync asks for the same 90 days again. So the first sync of
+   * an empty source pulls `backfillDays` (default DEFAULT_BACKFILL_DAYS ≈ 5 years)
+   * and later syncs resume from the last day already recorded.
+   *
+   * Lower it only where the API itself refuses to go back (asking for more is just
+   * wasted calls), and say why in `historyNote`.
+   */
+  backfillDays?: number;
+  /**
+   * Why this source cannot hand over its full history — shown instead of letting a
+   * hard API ceiling read as a broken importer. Spotify's recently-played endpoint
+   * returns the last 50 plays and takes no date range at all: no window we send can
+   * widen it, and the fix is their account export, not our importer.
+   */
+  historyNote?: string;
   /** Fetch a window and normalize it into the wide daily table. */
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }
+
+/** A first import reaches ~5 years back unless the plugin says the API won't. */
+export const DEFAULT_BACKFILL_DAYS = 1825;
 
 /** Credential precedence: explicit arg → env var → saved config (sourceCreds[key])
  *  → the source's own desktop app, if it exposes one (`discoverCredential`).
