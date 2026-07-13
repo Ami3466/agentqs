@@ -284,6 +284,46 @@ export function Checkbox({
   );
 }
 
+/** On/off switch — for a destination or capability the user turns on, where a
+ *  checkbox would read as a form field. Label/status live in the row, not here. */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  title,
+  "aria-label": ariaLabel,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  title?: string;
+  "aria-label"?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      title={title}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+        checked ? "border-accent bg-accent" : "border-border bg-muted",
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+      )}
+    >
+      <span
+        className={cn(
+          "h-3.5 w-3.5 rounded-full bg-bg shadow-sm ring-1 ring-border transition-transform",
+          checked ? "translate-x-[18px]" : "translate-x-[3px]",
+        )}
+      />
+    </button>
+  );
+}
+
 /** Determinate progress bar for background work (sync jobs): thin track,
  *  accent fill, one-line label. Derived from server state so it survives
  *  reloads — never drive it from one-shot component state. */

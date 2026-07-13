@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { backupGithub, backupRestore, backupStatus, setBackupPassphrase, syncSource } from "@/lib/cli-core";
+import {
+  backupGithub,
+  backupRestore,
+  backupStatus,
+  setBackupPassphrase,
+  setGithubBackupInterval,
+  syncSource,
+} from "@/lib/cli-core";
+import { isValidInterval } from "@/lib/sources";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +36,7 @@ export async function POST(req: Request) {
     file?: string;
     value?: string;
     generate?: boolean;
+    schedule?: string;
   } = {};
   try {
     body = await req.json();
@@ -36,6 +45,11 @@ export async function POST(req: Request) {
   }
   try {
     if (body.target === "github") {
+      // schedule alone flips the switch (off pauses, daily resumes) — no push.
+      if (body.schedule !== undefined) {
+        if (!isValidInterval(body.schedule)) return NextResponse.json({ error: "Invalid schedule." }, { status: 400 });
+        return NextResponse.json(setGithubBackupInterval(body.schedule));
+      }
       return NextResponse.json(await backupGithub({ remote: body.remote, branch: body.branch, token: body.token }));
     }
     if (body.target === "drive") {

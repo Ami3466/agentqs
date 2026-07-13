@@ -964,7 +964,7 @@ export { auditIndex } from "./audit";
 
 /** GitHub snapshot branch + encrypted Drive archive + restore. The Drive RUN
  *  is `syncSource({id:"gdrive_backup"})` — the plugin's sync IS the backup. */
-export { backupGithub, backupStatus, setBackupPassphrase } from "./backup";
+export { backupGithub, backupStatus, setBackupPassphrase, setGithubBackupInterval } from "./backup";
 
 /** Decrypt + unpack an archive — into a FRESH directory (`out`), or with
  *  `intoStore` straight into the LIVE store (record replaced + retired beside

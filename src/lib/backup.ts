@@ -7,7 +7,7 @@ import { pipeline } from "stream/promises";
 import { readConfig, writeConfig } from "./config";
 import { dataDir, recordDir } from "./paths";
 import { rebuild } from "./record";
-import { isDue, type Interval } from "./sources";
+import { isDue, isValidInterval, type Interval } from "./sources";
 import type { FetchLike } from "./importers/plugin";
 
 /**
@@ -142,6 +142,17 @@ export function setBackupPassphrase(opts: { value?: string; generate?: boolean }
   cfg.backup = { ...(cfg.backup ?? {}), passphrase: value };
   writeConfig(cfg);
   return { set: true, generated };
+}
+
+/** The GitHub switch: on = ride `sync --due` daily, off = paused. Remote and
+ *  token stay saved either way, so flipping back on is instant. */
+export function setGithubBackupInterval(interval: string): { interval: Interval } {
+  if (!isValidInterval(interval)) throw new Error("Schedule must be off | hourly | daily | weekly.");
+  const cfg = readConfig();
+  if (!cfg) throw new Error("agentqs isn't set up yet — run the app once (or POST /api/setup) first.");
+  cfg.backup = { ...(cfg.backup ?? {}), github: { remote: "", ...(cfg.backup?.github ?? {}), interval } };
+  writeConfig(cfg);
+  return { interval };
 }
 
 function requirePassphrase(): string {
