@@ -966,24 +966,34 @@ export { auditIndex } from "./audit";
  *  is `syncSource({id:"gdrive_backup"})` — the plugin's sync IS the backup. */
 export { backupGithub, backupStatus, setBackupPassphrase } from "./backup";
 
-/** Decrypt + unpack an archive into a FRESH directory — local file or the
- *  newest one in Drive (`latest`, needs the connected gdrive_backup grant). */
+/** Decrypt + unpack an archive — into a FRESH directory (`out`), or with
+ *  `intoStore` straight into the LIVE store (record replaced + retired beside
+ *  it, instance config kept, cache rebuilt — the migration path onto a fresh
+ *  instance). Local file or the newest one in Drive (`latest`, needs the
+ *  connected gdrive_backup grant). */
 export async function backupRestore(opts: {
   file?: string;
   latest?: boolean;
-  out: string;
+  out?: string;
   passphrase?: string;
+  intoStore?: boolean;
 }) {
-  const { restoreArchive } = await import("./backup");
-  if (!opts.latest) return restoreArchive(opts);
-  const inst = pluginInstanceById("gdrive_backup");
-  const cred = inst
-    ? await resolveSyncCredentialFresh(inst.plugin, undefined, readConfig(), inst.instanceId)
-    : undefined;
-  if (!cred) {
-    throw new Error("Google Drive backup isn't connected — authorize gdrive_backup in Pipeline → Connect first.");
+  const { restoreArchive, restoreIntoStore } = await import("./backup");
+  let credential: string | undefined;
+  if (opts.latest) {
+    const inst = pluginInstanceById("gdrive_backup");
+    credential = inst
+      ? await resolveSyncCredentialFresh(inst.plugin, undefined, readConfig(), inst.instanceId)
+      : undefined;
+    if (!credential) {
+      throw new Error("Google Drive backup isn't connected — authorize gdrive_backup in Pipeline → Connect first.");
+    }
   }
-  return restoreArchive({ ...opts, credential: cred });
+  if (opts.intoStore) {
+    return restoreIntoStore({ file: opts.file, latest: opts.latest, credential, passphrase: opts.passphrase });
+  }
+  if (!opts.out) throw new Error("Pass --out <dir> — restores land in a fresh directory (or use --into-store).");
+  return restoreArchive({ file: opts.file, latest: opts.latest, credential, out: opts.out, passphrase: opts.passphrase });
 }
 
 // ---- data-quality scanner -----------------------------------------------------

@@ -26,7 +26,14 @@ import path from "path";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-backup-"));
 process.env.AGENTQS_DATA_DIR = root;
 
-import { backupGithub, backupStatus, restoreArchive, runDriveBackup, setBackupPassphrase } from "../src/lib/backup";
+import {
+  backupGithub,
+  backupStatus,
+  restoreArchive,
+  restoreIntoStore,
+  runDriveBackup,
+  setBackupPassphrase,
+} from "../src/lib/backup";
 import { gdriveBackupPlugin } from "../src/lib/importers/gdrive-backup";
 import { writeConfig, readConfig, type AppConfig } from "../src/lib/config";
 import type { FetchLike } from "../src/lib/importers/plugin";
@@ -53,9 +60,15 @@ async function main() {
   fs.mkdirSync(path.join(record, "daily"), { recursive: true });
   fs.writeFileSync(path.join(record, "daily", "steps.csv"), "date,steps\n2026-01-01,10\n");
   fs.writeFileSync(path.join(record, "inbox.jsonl"), `{"id":"a","text":"hi"}\n`);
-  const big = Buffer.alloc(300_000);
-  for (let i = 0; i < big.length; i += 4) big.writeUInt32LE((i * 2654435761) >>> 0, i);
-  fs.writeFileSync(path.join(record, "events.jsonl"), big); // "oversized" under the test limit
+  // "Oversized" under the test limit, but VALID JSONL — an into-store restore
+  // rebuilds the cache from it, so the seed must parse like a real record.
+  const eventLines: string[] = [];
+  for (let i = 0; i < 1500; i++) {
+    eventLines.push(
+      JSON.stringify({ id: `seed-${i}`, ts: "2026-01-01T08:00:00Z", source: "seed", title: `event ${i}`, text: `padding ${"x".repeat(160)}` }),
+    );
+  }
+  fs.writeFileSync(path.join(record, "events.jsonl"), `${eventLines.join("\n")}\n`);
   fs.writeFileSync(path.join(record, "old.bak-repair"), "transient repair copy");
   writeConfig({
     username: "t",
@@ -197,6 +210,27 @@ async function main() {
   const out4 = path.join(root, "restore-latest");
   const rl = await restoreArchive({ latest: true, credential: "tok", fetchImpl: fakeDrive, out: out4, passphrase: "test-pass-123" });
   check("--latest restores the newest archive from Drive", rl.archive === d3.file && rl.members.includes("record"));
+
+  console.log("\nrestore into live store (the fresh-instance migration path):");
+  const store2 = path.join(root, "store2");
+  fs.mkdirSync(path.join(store2, "record", "daily"), { recursive: true });
+  fs.writeFileSync(path.join(store2, "record", "daily", "other.csv"), "date,x\n2026-02-02,1\n");
+  fs.writeFileSync(path.join(store2, "config.json"), `{"username":"prod-instance"}`);
+  const ri = await restoreIntoStore({ file: encFile, dir: store2, passphrase: "test-pass-123" });
+  check(
+    "archive record replaced the live record",
+    fs.readFileSync(path.join(store2, "record", "daily", "steps.csv"), "utf8").includes("2026-01-01"),
+  );
+  check(
+    "previous record RETIRED beside the store, never deleted",
+    Boolean(ri.retired) && fs.existsSync(path.join(ri.retired!, "daily", "other.csv")),
+    ri.retired ?? "",
+  );
+  check(
+    "instance's own config kept (data moved, not identity)",
+    fs.readFileSync(path.join(store2, "config.json"), "utf8") === `{"username":"prod-instance"}`,
+  );
+  check("cache rebuilt from the restored record", ri.dailyRows > 0 && fs.existsSync(path.join(store2, "agentqs.db")), `${ri.dailyRows} daily rows`);
 
   console.log("\nplugin contract:");
   const detail = await gdriveBackupPlugin.probe!({ credential: "tok", from: "2026-01-01", to: "2026-01-03", fetchImpl: fakeDrive });

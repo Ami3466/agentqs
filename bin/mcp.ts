@@ -273,6 +273,25 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "backup_restore",
+    {
+      title: "Restore a backup archive into the live store",
+      description:
+        "The migration path onto a fresh instance: downloads the newest encrypted Drive archive (or takes a local file), " +
+        "decrypts it, REPLACES the live record with the archive's (the previous record is retired beside the store, never " +
+        "deleted), keeps this instance's own config (auth/keys/grants), and rebuilds the cache. Needs the connected " +
+        "gdrive_backup grant (for latest) and the archive passphrase. confirm must be the literal \"replace-record\".",
+      inputSchema: {
+        confirm: z.literal("replace-record"),
+        latest: z.boolean().optional(),
+        file: z.string().optional(),
+      },
+    },
+    async ({ latest, file }) =>
+      guard(() => core.backupRestore({ latest: latest !== false && !file, file, intoStore: true })),
+  );
+
+  server.registerTool(
     "recall",
     {
       title: "Semantic recall (local, no key)",

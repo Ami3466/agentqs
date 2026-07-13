@@ -709,15 +709,18 @@ backup
   });
 backup
   .command("restore [file]")
-  .description("decrypt + unpack an archive into a FRESH directory (never over the live store)")
+  .description("decrypt + unpack an archive into a fresh --out dir, or --into-store to bring the data into THIS store")
   .option("--latest", "download the newest archive from Drive instead of a local file")
   .option("--out <dir>", "destination directory (must be new or empty)")
+  .option("--into-store", "replace the live store's record with the archive's (previous record retired beside it; this instance's config is kept)")
   .option("--passphrase <p>", "override the configured passphrase")
-  .action(async (file: string | undefined, opts: { latest?: boolean; out?: string; passphrase?: string }) => {
+  .action(async (file: string | undefined, opts: { latest?: boolean; out?: string; intoStore?: boolean; passphrase?: string }) => {
     try {
-      if (!opts.out) throw new Error("Pass --out <dir> — restores always land in a fresh directory.");
-      out(await core.backupRestore({ file, latest: opts.latest, out: opts.out, passphrase: opts.passphrase }), (d) =>
-        `Restored ${d.archive || "archive"} → ${d.out} (${d.members.join(", ")}). Point AGENTQS_DATA_DIR there to use it.`,
+      const r = await core.backupRestore({ file, latest: opts.latest, out: opts.out, intoStore: opts.intoStore, passphrase: opts.passphrase });
+      out(r, (d: Record<string, unknown>) =>
+        "members" in d
+          ? `Restored ${d.archive || "archive"} → ${d.out} (${(d.members as string[]).join(", ")}). Point AGENTQS_DATA_DIR there to use it.`
+          : `Restored ${d.archive} into the live store — ${d.dailyRows} daily rows rebuilt${d.retired ? `; previous record retired at ${d.retired}` : ""}.`,
       );
     } catch (e) {
       die(e);
