@@ -14,6 +14,7 @@ import path from "path";
 import type { AppConfig } from "./config";
 import { recordDir } from "./paths";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
+import { whoopCredsFor } from "./importers/whoop";
 import { PLUGINS, SOURCE_PLUGINS } from "./importers/registry";
 import { connectionState } from "./importers/plugin";
 import { readSyncRuns } from "./sync-runs";
@@ -193,19 +194,21 @@ function githubRow(cfg: AppConfig | null, dir: string): SourceView {
 }
 
 /** WHOOP connects via the unofficial app login (email + password → token), so it
- *  has its own bespoke row + route like GitHub. Connected once its record file has
- *  rows; has a credential when the stored email + (password or refresh token) can
- *  re-auth; DUE (server-side auto-sync) only then. */
-function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
-  const file = path.join(dir, "daily", "whoop.csv");
+ *  has its own bespoke row + route like GitHub. `plugin: true` on the base row lets
+ *  the panel link a SECOND athlete's account ("whoop-2") — its own login, daily
+ *  file and schedule. Connected once its stored login can re-auth; DUE (server-side
+ *  auto-sync) only then. */
+function whoopRow(cfg: AppConfig | null, dir: string, instanceId: string = "whoop"): SourceView {
+  const file = path.join(dir, "daily", `${instanceId}.csv`);
   const hasData = hasRows(file);
-  const lastSync = cfg?.sourceSyncedAt?.whoop ?? fileMtimeISO(file);
-  const interval = intervalFor(cfg, "whoop");
-  const wc = cfg?.whoopCreds;
+  const lastSync = cfg?.sourceSyncedAt?.[instanceId] ?? fileMtimeISO(file);
+  const interval = intervalFor(cfg, instanceId);
+  const wc = whoopCredsFor(cfg, instanceId);
   const hasCred = Boolean(wc?.email && (wc?.password || wc?.refreshToken));
+  const m = instanceId.match(/^whoop-(\d+)$/);
   return {
-    id: "whoop",
-    name: "WHOOP (per-minute, unofficial)",
+    id: instanceId,
+    name: m ? `WHOOP · account ${m[1]} (per-minute, unofficial)` : "WHOOP (per-minute, unofficial)",
     kind: "api",
     detail: "per-minute HR, HRV, recovery, sleep, strain",
     connected: hasCred,
@@ -214,11 +217,34 @@ function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
     lastSync,
     stale: false,
     due: hasCred && isDue(lastSync, interval),
-    syncEndpoint: "/api/import/whoop",
+    // The base route reads ?instance to know which account it's syncing; the base
+    // stays the plain path so nothing else has to change.
+    syncEndpoint: instanceId === "whoop" ? "/api/import/whoop" : `/api/import/whoop?instance=${instanceId}`,
     live: true,
+    plugin: instanceId === "whoop", // only the base offers "add another account"
     credentialOrigin: hasCred ? "saved" : null,
-    ...lastRunFields("whoop"),
+    ...lastRunFields(instanceId),
   };
+}
+
+/** Extra WHOOP accounts already set up ("whoop-2", …) — anything holding a login,
+ *  a schedule, a sync stamp, or a daily file. Mirrors pluginInstanceIds. */
+function whoopInstanceIds(cfg: AppConfig | null, dir: string): string[] {
+  const re = /^whoop-\d+$/;
+  const ids = new Set<string>();
+  for (const key of Object.keys(cfg?.whoopCredsByInstance ?? {})) if (re.test(key)) ids.add(key);
+  for (const map of [cfg?.sourceIntervals, cfg?.sourceSyncedAt]) {
+    for (const key of Object.keys(map ?? {})) if (re.test(key)) ids.add(key);
+  }
+  try {
+    for (const f of fs.readdirSync(path.join(dir, "daily"))) {
+      const stem = f.endsWith(".csv") ? f.slice(0, -4) : "";
+      if (stem && re.test(stem)) ids.add(stem);
+    }
+  } catch {
+    /* no daily dir yet */
+  }
+  return [...ids].sort();
 }
 
 /** Generic row for a Tier-1 plugin source (or one extra ACCOUNT of it — an
@@ -421,11 +447,14 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   runsSnapshot = readSyncRuns(); // one ledger read per pass, not per row
   jobsSnapshot = readSyncJobs();
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
+  // Extra WHOOP athletes ("whoop-2", …) — each its own login, file and schedule.
+  const whoopExtras = whoopInstanceIds(cfg, dir);
+  for (const instanceId of whoopExtras) out.push(whoopRow(cfg, dir, instanceId));
   // Every plugin id is CLAIMED (so no stray record CSV resurfaces as an unknown
   // import), but only the SOURCES get a row: a backup target (Google Drive)
   // borrows the plugin contract for its OAuth machinery and brings no data in.
   // The pipeline is data coming IN; backups live in Settings → Data.
-  const owned = new Set<string>(["github", "whoop", ...PLUGINS.map((p) => p.id)]);
+  const owned = new Set<string>(["github", "whoop", ...whoopExtras, ...PLUGINS.map((p) => p.id)]);
   for (const plugin of SOURCE_PLUGINS) {
     out.push(pluginRow(cfg, dir, plugin));
     for (const instanceId of pluginInstanceIds(cfg, dir, plugin)) {

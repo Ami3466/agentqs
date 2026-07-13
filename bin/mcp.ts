@@ -365,10 +365,11 @@ export async function startMcpServer(): Promise<void> {
     {
       title: "Connect WHOOP (unofficial app login)",
       description:
-        "Prove the WHOOP login, then store email + password to pull per-minute HR + HRV + recovery + sleep + strain. Then `sync whoop`.",
-      inputSchema: { email: z.string(), password: z.string() },
+        "Prove the WHOOP login, then store email + password to pull per-minute HR + HRV + recovery + sleep + strain. " +
+        "Pass `account` (e.g. \"whoop-2\") to connect a SECOND athlete under its own id/file/schedule; omit for the base account. Then `sync <id>`.",
+      inputSchema: { email: z.string(), password: z.string(), account: z.string().optional() },
     },
-    async ({ email, password }) => guard(() => core.whoopConnect(email, password)),
+    async ({ email, password, account }) => guard(() => core.whoopConnect(email, password, account)),
   );
 
   server.registerTool(

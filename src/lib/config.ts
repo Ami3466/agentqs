@@ -154,7 +154,11 @@ export interface AppConfig {
   hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
-  whoopCreds?: WhoopCreds; // WHOOP unofficial app login: email + password + cached/rotated tokens
+  whoopCreds?: WhoopCreds; // WHOOP unofficial app login (base account): email + password + cached/rotated tokens
+  /** Extra WHOOP accounts ("whoop-2", …). The base account stays in `whoopCreds`
+   *  for back-compat; a second athlete's login lands here, keyed by instance id,
+   *  exactly like a plugin's second account under sourceCreds. */
+  whoopCredsByInstance?: Record<string, WhoopCreds>;
   apiKey?: string; // bearer token for the HTTP API over the wire (generated in Connect)
   demoSeeded?: boolean; // generic demo data is loaded; auto-wiped on the first real import
   autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)

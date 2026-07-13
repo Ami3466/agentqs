@@ -319,10 +319,11 @@ export function SourcesPanel({
         />
       );
     }
-    if (s.id === "whoop") {
+    if (s.id === "whoop" || /^whoop-\d+$/.test(s.id)) {
       return (
         <WhoopConnect
           key={s.id}
+          id={s.id}
           version={version}
           interval={s.interval}
           due={s.due}
@@ -439,11 +440,20 @@ export function SourcesPanel({
                       <X width={14} height={14} />
                     </button>
                   </div>
-                  <SourceConnect
-                    id={id}
-                    version={version}
-                    onIntervalChange={(i) => void changeInterval(id, i)}
-                  />
+                  {/^whoop-\d+$/.test(id) ? (
+                    <WhoopConnect
+                      id={id}
+                      version={version}
+                      onIntervalChange={(i) => void changeInterval(id, i)}
+                      onSyncStarted={() => void load()}
+                    />
+                  ) : (
+                    <SourceConnect
+                      id={id}
+                      version={version}
+                      onIntervalChange={(i) => void changeInterval(id, i)}
+                    />
+                  )}
                 </div>
               ))}
             </div>

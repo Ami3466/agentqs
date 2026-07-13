@@ -306,10 +306,14 @@ const whoop = program.command("whoop").description("WHOOP via the unofficial app
 
 whoop
   .command("connect <email> <password>")
-  .description("prove the WHOOP login, then store it (then: agentqs sync whoop)")
-  .action(async (email: string, password: string) => {
+  .description("prove a WHOOP login, then store it (then: agentqs sync <id>)")
+  .option("--account <id>", "connect a SECOND athlete under its own id, e.g. whoop-2", "whoop")
+  .action(async (email: string, password: string, opts: { account: string }) => {
     try {
-      out(await core.whoopConnect(email, password), (d) => `Connected WHOOP as ${d.email}. Run: agentqs sync whoop`);
+      out(
+        await core.whoopConnect(email, password, opts.account),
+        (d) => `Connected ${d.id} as ${d.email}. Run: agentqs sync ${d.id}`,
+      );
     } catch (e) {
       die(e);
     }

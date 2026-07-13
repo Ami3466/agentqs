@@ -138,11 +138,17 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   (Trakt syncs get the plugin's `<client_id>:<token>` format). Pasted access
   tokens still work but die within hours - steer users to Authorize.
 - WHOOP unofficial (email + password, per-minute HR) is SHIPPED AND SUPPORTED -
-  it is the only source of per-minute heart rate. As of 2026-07 api-7.whoop.com
-  does not resolve from every network, and a failure there is a NETWORK/DNS
-  failure, never "wrong password" - the error says exactly that. If it stops
-  working, FIX it (api.prod.whoop.com resolves and is the likely replacement
-  host); do NOT disable, hide or remove the row.
+  it is the only source of per-minute heart rate. The login lives at
+  `api.prod.whoop.com/auth-service/v2/whoop/sign-in` (the deleted api-7 host is
+  gone); a failure there is a NETWORK/DNS failure, never "wrong password" - the
+  error says exactly that. If it stops working, FIX it; do NOT disable, hide or
+  remove the row. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
+  each its own login (`config.whoopCredsByInstance`), daily file, per-minute dir
+  (`record/<id>/hr`) and schedule - CLI `whoop connect <email> <pass> --account
+  whoop-2`, MCP `whoop_connect {account}`, web "Add another account", API POST
+  `/api/import/whoop?instance=whoop-2`. The base account keeps id "whoop". Do not
+  confuse with `whoop-api` (the OFFICIAL OAuth plugin) - `/^whoop-\d+$/` is the
+  unofficial-instance test, so `whoop-api` is never treated as one.
 - A source sync PATCHES the cache (`refreshSyncCache`), never rebuilds it: a full
   rebuild re-reads the whole record (events.jsonl alone can be hundreds of MB)
   and rewrites the DB synchronously, which blocks every other request for
