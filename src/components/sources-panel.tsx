@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Inbox, Plus, RefreshCw, sourceIcon, Spinner, Trash, X } from "@/components/icons";
+import { Check, ChevronDown, Inbox, Plus, RefreshCw, Spinner, Trash, X } from "@/components/icons";
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
-import { SourceTitle } from "@/components/source-title";
+import { SourceHeader, SourceTitle } from "@/components/source-title";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
@@ -313,6 +313,7 @@ export function SourcesPanel({
           savingInterval={saving}
           removing={removing}
           job={s.job ?? null}
+          coverage={s.coverage}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
           onSyncStarted={() => void load()}
@@ -330,6 +331,7 @@ export function SourcesPanel({
           savingInterval={saving}
           removing={removing}
           job={s.job ?? null}
+          coverage={s.coverage}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
           onSyncStarted={() => void load()}
@@ -347,6 +349,9 @@ export function SourcesPanel({
           savingInterval={saving}
           removing={removing}
           job={s.job ?? null}
+          coverage={s.coverage}
+          account={s.account}
+          provenance={s.provenance}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
           onSyncStarted={() => void load()}
@@ -765,25 +770,26 @@ function SourceRow({
   onConnect?: () => void;
 }) {
   const { id, name, connected, stale, interval } = source;
-  const Icon = sourceIcon(id);
+  // These rows are IMPORTED data, never connections (that is now the truth in the
+  // registry, not just the label). So the manage controls hang off "is there
+  // anything here to manage?" — keying them off `connected`, as they used to,
+  // would have silently stripped Remove from every imported source.
+  const manageable = connected || Boolean(source.hasData);
   return (
     <div className="flex items-center gap-3 p-4">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
-        <Icon width={18} height={18} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          {/* Bundles aggregate several daily sources — no single Journal filter. */}
-          <SourceTitle id={id} name={name} hasData={(source.hasData ?? connected) && !source.bundle} />
-          {stale ? (
-            <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-fg">
-              stale
-            </span>
-          ) : null}
-        </div>
-      </div>
+      {/* Bundles aggregate several daily sources — no single Journal filter. */}
+      <SourceHeader
+        id={id}
+        name={name}
+        connected={connected}
+        hasData={(source.hasData ?? connected) && !source.bundle}
+        provenance={source.provenance}
+        coverage={source.coverage}
+        lastSync={source.lastSync}
+        badge={stale ? <Badge title="No fresh data has arrived within this source's interval.">stale</Badge> : null}
+      />
       <div className="flex shrink-0 items-center gap-1.5">
-        {connected ? (
+        {manageable ? (
           <>
             {saving ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}
             <IntervalSelect value={interval} onChange={onIntervalChange} disabled={saving} />

@@ -78,14 +78,22 @@ check("RescueTime interval persisted as daily", rt1.interval === "daily");
 check("RescueTime is DUE → auto-syncs on open", rt1.due === true);
 check("RescueTime exposes its sync endpoint", rt1.syncEndpoint === "/api/import/rescuetime");
 
-console.log("\nScenario 2 — a real manual importer badges stale; a dropped CSV is not a source");
-check("Chrome is a manual source, connected", chrome1.kind === "manual" && chrome1.connected);
+console.log("\nScenario 2 — a manual importer badges stale; NEITHER it nor a dropped CSV is 'connected'");
+// THE rule: connected ⇔ a stored credential. Reading Chrome's history file off this
+// machine involves no key and no account, so it is a LOCAL FILE, not a connection —
+// this check used to assert `chrome1.connected`, which is precisely the bug it was
+// meant to guard against (every local import wearing an integration's badge).
+check("Chrome is a manual source with data", chrome1.kind === "manual" && chrome1.hasData === true);
+check("Chrome is NOT connected (no credential behind a local file)", chrome1.connected === false);
+check("Chrome reports provenance 'local-file'", chrome1.provenance === "local-file");
 check("Chrome is STALE (no data within its daily interval)", chrome1.stale === true);
 check("a manual source is never 'due' (can't auto-sync)", chrome1.due === false);
-check(
-  "a one-off dropped 'mood' CSV is NOT surfaced as a source",
-  s1.every((s) => s.id !== "mood"),
-);
+// A dropped CSV IS surfaced — the user must be able to see, filter and remove their
+// own data. What it must never do is claim to be a connection.
+const mood1 = s1.find((s) => s.id === "mood");
+check("a one-off dropped 'mood' CSV IS surfaced (removable, filterable)", Boolean(mood1));
+check("…but is NEVER connected", mood1?.connected === false);
+check("…and reports provenance 'imported'", mood1?.provenance === "imported");
 
 console.log("\nScenario 3 — freshly synced GitHub is not due; interval off clears due");
 const cfg3a: AppConfig = { ...cfg1, githubSyncedAt: new Date().toISOString() };

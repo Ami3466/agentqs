@@ -80,13 +80,43 @@ export function ago(iso: string | null): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** What this source actually landed in the record — the answer to "did it sync?".
+ *  Counted from the cache (daily + events), so it is derived, never claimed. */
+export interface SourceCoverage {
+  events: number;
+  days: number;
+  from: string | null;
+  to: string | null;
+}
+
+/**
+ * HOW this row came to hold data. `connected` alone cannot say it: a dropped CSV
+ * and an authorized API account are wildly different things, and rendering both as
+ * "Connected" is a lie the user pays for ("it says connected — connected to WHAT?").
+ *
+ *   credential  — a stored key/grant. THE only thing that counts as connected:
+ *                 it has an account, it can sync, it is due on a schedule.
+ *   local-file  — a file importer that re-reads a file on THIS machine (Chrome
+ *                 history, Apple Health). No account, no key; the web server can't
+ *                 reach your disk, so it re-runs from the CLI/MCP/daemon.
+ *   imported    — rows landed from a drop, an archive or an agent. Nothing syncs
+ *                 it; it is history sitting in the record, not a live connection.
+ *   automation  — a recorded browser recipe that replays on a schedule.
+ */
+export type SourceProvenance = "credential" | "local-file" | "imported" | "automation";
+
 /** One row in the Pipeline-tab sources list. */
 export interface SourceView {
   id: string;
   name: string;
   kind: SourceKind;
   detail: string;
+  /** ⇔ a stored credential. Data in the record NEVER flips this — see `provenance`
+   *  for how a row that is NOT connected still came to hold data. */
   connected: boolean;
+  /** How the data got here. Drives the row's badge, so "Connected" can only ever
+   *  mean "a key is stored and this thing can sync". */
+  provenance?: SourceProvenance;
   interval: Interval;
   lastSync: string | null;
   stale: boolean; // manual + connected + overdue
@@ -115,6 +145,12 @@ export interface SourceView {
   /** Rows exist in the record. Orthogonal to `connected`: imported data must
    *  never present a source as connected, and a connected source may be empty. */
   hasData?: boolean;
+  /** Days/events landed + the date range they span. Drives the row's "what
+   *  synced" line, so a connected-but-empty source cannot look like a healthy one. */
+  coverage?: SourceCoverage;
+  /** WHICH account this credential belongs to (the WHOOP login's email, a
+   *  handle) — two accounts of the same service are otherwise indistinguishable. */
+  account?: string | null;
   /** A local desktop app's token is detectable but the user has NOT opted in —
    *  the UI offers "Use detected app" instead of silently syncing with it. */
   detectedApp?: boolean;

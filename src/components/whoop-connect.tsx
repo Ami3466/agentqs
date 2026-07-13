@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
+import { Eye, EyeOff, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
-import { SourceTitle } from "@/components/source-title";
+import { SourceHeader } from "@/components/source-title";
 import { SyncStatus } from "@/components/sync-status";
 import { Button, Input } from "@/components/ui";
-import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
+import { jobActive, type Interval, type SourceCoverage, type SourceJobView } from "@/lib/sources";
 
 /**
  * WHOOP connect/sync row — the differentiator, wired to the UNOFFICIAL app login.
@@ -45,6 +45,7 @@ export function WhoopConnect({
   savingInterval = false,
   removing = false,
   job = null,
+  coverage,
   onIntervalChange,
   onRemove,
   onSyncStarted,
@@ -58,6 +59,8 @@ export function WhoopConnect({
   removing?: boolean;
   /** Live/last background job — the panel polls /api/sources and threads it here. */
   job?: SourceJobView | null;
+  /** What this account landed (from /api/sources), per instance. */
+  coverage?: SourceCoverage;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
   /** A sync job was just enqueued — the panel starts polling. */
@@ -121,24 +124,29 @@ export function WhoopConnect({
     onSyncStarted?.();
   }
 
-  const Icon = sourceIcon("whoop");
   const connected = status?.connected;
   const canSyncNow = Boolean(status?.hasCredential);
   const working = busy || syncing;
+  const cov: SourceCoverage | undefined =
+    coverage ?? (status ? { events: 0, days: status.days, from: null, to: null } : undefined);
 
   return (
     <div className="p-4">
       <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
-          <Icon width={18} height={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <SourceTitle id="whoop" name={title} hasData={Boolean(status?.hasData)} title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row" />
-            {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+        {/* id={id}, never a hardcoded "whoop": a second athlete's row must link to
+            ITS OWN data (/journal?source=whoop-2), not the base account's. */}
+        <SourceHeader
+          id={id}
+          name={title}
+          iconId="whoop"
+          connected={Boolean(connected)}
+          hasData={Boolean(status?.hasData)}
+          account={status?.email || null}
+          coverage={cov}
+          lastSync={status?.syncedAt ?? null}
+          title="Per-minute heart rate via the unofficial app login — the official API connect is the plain WHOOP row"
+        />
+        <div className="flex shrink-0 items-center gap-2">
           {connected && onIntervalChange ? (
             <div className="flex items-center gap-1.5">
               {savingInterval ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}

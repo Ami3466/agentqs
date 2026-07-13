@@ -79,6 +79,10 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 OAuth sources (Google, Spotify, Fitbit, Strava, Whoop, Withings, Trakt) connect with Authorize - register the redirect URI the form shows, paste client id + secret, approve. Every sync mints a fresh token from there on. Syncing lands only the rows it fetched: an import never re-reads your whole record, so a hosted instance stays responsive no matter how big the record gets.
 
+**Every connection shows its receipts, and clicking one opens its data.** A connected row carries a Connected badge, *which* account it is authorized as (so two Whoop athletes are never twins), what actually landed (days, events, date range) and when it last synced - all counted from the record, so a connected-but-empty source reads "no data yet" instead of passing for a healthy one. Click the row and the Journal opens filtered to that source alone: "what did this give me?" is one click, never a guess.
+
+**"Connected" means a key is stored - nothing else.** A CSV you dropped, a Takeout archive you unpacked, a history file read off your disk: those are **Imported** and **Local file**, and they say so. They are still yours to filter and remove - they just have no account behind them and nothing syncs them. Only a row with a real credential gets the Connected badge, so the list answers "what is actually live?" at a glance instead of showing you thirty green lights for files you dragged in once.
+
 \* Granola has no API key - the credential is the desktop app's refresh token (`workos_tokens.refresh_token` in its `supabase.json`). Running agentqs on the same machine? It finds the login itself. Whoop connects two ways, and both ship: the official API (Authorize) for daily summaries, and the unofficial app login (email + password) - the only source of **per-minute heart rate**.
 
 **Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.

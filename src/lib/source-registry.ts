@@ -13,6 +13,7 @@ import fs from "fs";
 import path from "path";
 import type { AppConfig } from "./config";
 import { recordDir } from "./paths";
+import { coverageBySource } from "./daily";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
 import { whoopCredsFor } from "./importers/whoop";
 import { googlePluginOn } from "./google";
@@ -32,6 +33,7 @@ import {
   isStale,
   isValidInterval,
   type Interval,
+  type SourceCoverage,
   type SourceView,
 } from "./sources";
 
@@ -225,6 +227,8 @@ function whoopRow(cfg: AppConfig | null, dir: string, instanceId: string = "whoo
     live: true,
     plugin: instanceId === "whoop", // only the base offers "add another account"
     credentialOrigin: hasCred ? "saved" : null,
+    // WHICH athlete this row is — two WHOOP accounts are otherwise identical rows.
+    account: hasCred ? (wc?.email ?? null) : null,
     ...lastRunFields(instanceId),
   };
 }
@@ -363,7 +367,7 @@ function pluginInstanceIds(cfg: AppConfig | null, dir: string, plugin: (typeof P
  *  gets the rows via git). Connected once the record file has rows; overdue → stale. */
 function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FILE_IMPORTERS)[number]): SourceView {
   const file = path.join(dir, "daily", `${importer.id}.csv`);
-  const connected = hasRows(file);
+  const hasData = hasRows(file);
   const lastSync = cfg?.sourceSyncedAt?.[importer.id] ?? fileMtimeISO(file);
   const interval = intervalFor(cfg, importer.id);
   return {
@@ -371,10 +375,16 @@ function fileSourceRow(cfg: AppConfig | null, dir: string, importer: (typeof FIL
     name: importer.name,
     kind: "manual",
     detail: importer.detail,
-    connected,
+    // Reading a file off YOUR disk is not a connection: no key, no account, and
+    // the web server can't reach it (it re-runs from the CLI/MCP/daemon). It used
+    // to report connected the moment rows existed — a local import wearing an
+    // integration's badge.
+    connected: false,
+    provenance: "local-file",
+    hasData,
     interval,
     lastSync,
-    stale: connected ? isStale(lastSync, interval) : false,
+    stale: hasData ? isStale(lastSync, interval) : false,
     due: false, // local file — the server can't reach the user's disk
     syncEndpoint: null,
     live: importer.live,
@@ -405,7 +415,12 @@ function recordSourceRows(cfg: AppConfig | null, dir: string, owned: Set<string>
       name: displayName(id),
       kind: "manual",
       detail: "record import",
-      connected: true,
+      // A dropped CSV is IMPORTED, never connected: there is no credential, no
+      // account and nothing to sync. This row used to hardcode connected: true —
+      // the record's own files then read back as live integrations, which is the
+      // exact lie the connection rule exists to prevent.
+      connected: false,
+      provenance: "imported",
       // A header-only CSV (an import that landed zero rows) must not present
       // as data — the Pipeline row's Journal link keys off this.
       hasData: hasRows(file),
@@ -440,7 +455,10 @@ function bundleRow(cfg: AppConfig | null, dir: string, bundle: SourceBundle): So
     name: bundle.name,
     kind: "manual",
     detail: `${bundle.detail} · ${sourceIds.length} files · ${c.metrics} metrics · ${span}`,
-    connected: true,
+    // An archive you unpacked (a Takeout bundle) is imported history, not a
+    // connection — there is no key behind it and nothing will ever sync it.
+    connected: false,
+    provenance: "imported",
     interval,
     lastSync,
     stale: isStale(lastSync, interval),
@@ -493,8 +511,16 @@ function automationRow(cfg: AppConfig | null, dir: string, recipe: AutomationRec
 /** Compose the sources list from registered integrations plus real record-backed
  *  imports already present in record/daily. A source is connected only when the
  *  record has rows for it; unknown CSVs are surfaced as removable record imports,
- *  not as fake automations. */
-export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): SourceView[] {
+ *  not as fake automations.
+ *
+ *  Every row carries its `coverage` (what actually landed) so the UI can show
+ *  "what synced and what didn't" without a second round-trip. Callers that already
+ *  hold the map (the pipeline report) pass it in rather than re-querying. */
+export function buildSources(
+  cfg: AppConfig | null,
+  dir: string = recordDir(),
+  coverage: Map<string, SourceCoverage> = coverageBySource(),
+): SourceView[] {
   runsSnapshot = readSyncRuns(); // one ledger read per pass, not per row
   jobsSnapshot = readSyncJobs();
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
@@ -519,7 +545,7 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   for (const importer of FILE_IMPORTERS) {
     const row = fileSourceRow(cfg, dir, importer);
     owned.add(importer.id);
-    if (row.connected) out.push(row);
+    if (row.hasData) out.push(row); // surfaces once it holds rows (it is never "connected")
   }
 
   for (const recipe of listAutomations(cfg)) {
@@ -548,5 +574,17 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   }
 
   out.push(...recordSourceRows(cfg, dir, owned));
+  // Coverage + provenance last, in one place: every row answers "what landed?" and
+  // "how did it get here?" the same way, whoever built it. A row with no coverage
+  // entry landed nothing (it stays zeroed). Provenance is only DERIVED for rows
+  // that didn't declare one — an imported CSV / local file says so itself, and a
+  // row is "credential" only when a key is actually stored, so nothing can quietly
+  // wear the Connected badge on the strength of having data.
+  for (const row of out) {
+    row.coverage = coverage.get(row.id) ?? { events: 0, days: 0, from: null, to: null };
+    if (!row.provenance) {
+      row.provenance = row.automation ? "automation" : row.connected ? "credential" : undefined;
+    }
+  }
   return out;
 }

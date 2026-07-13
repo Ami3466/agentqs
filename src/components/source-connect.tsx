@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useCopy } from "@/components/connect-api";
-import { Check, Copy, Eye, EyeOff, sourceIcon, Spinner, Trash } from "@/components/icons";
+import { Check, Copy, Eye, EyeOff, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
-import { SourceTitle } from "@/components/source-title";
+import { SourceHeader } from "@/components/source-title";
 import { SyncStatus } from "@/components/sync-status";
-import { Badge, Button, Input } from "@/components/ui";
-import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
+import { Button, Input } from "@/components/ui";
+import { jobActive, type Interval, type SourceCoverage, type SourceJobView, type SourceProvenance } from "@/lib/sources";
 
 /**
  * Generic connect/sync row for a single-credential Tier-1 plugin source
@@ -85,6 +85,9 @@ export function SourceConnect({
   job = null,
   nameOverride,
   iconId,
+  coverage,
+  account,
+  provenance,
   onIntervalChange,
   onRemove,
   onSyncStarted,
@@ -97,6 +100,13 @@ export function SourceConnect({
   removing?: boolean;
   /** Live/last background job — the panel polls /api/sources and threads it here. */
   job?: SourceJobView | null;
+  /** What this source landed (from /api/sources). Falls back to the row's own
+   *  status GET, so a row never claims "no data yet" while holding data. */
+  coverage?: SourceCoverage;
+  /** The account the stored credential belongs to, when the source knows it. */
+  account?: string | null;
+  /** How this row got its data (from /api/sources) — decides Connected vs Imported. */
+  provenance?: SourceProvenance;
   /** Shown instead of the plugin's own name. A source nested inside a provider card
    *  is a PRODUCT of it, not a service of its own: inside the Google card, `gcal` is
    *  "Calendar", not "Google Calendar" — the card already said Google. */
@@ -215,8 +225,11 @@ export function SourceConnect({
     onSyncStarted?.();
   }
 
-  const Icon = sourceIcon(iconId ?? id);
   const displayName = nameOverride ?? status?.name ?? id;
+  // The panel's coverage is richer (events + date range). Without it — a product
+  // nested in a provider card — fall back to the row's own day count.
+  const cov: SourceCoverage | undefined =
+    coverage ?? (status ? { events: 0, days: status.days, from: null, to: null } : undefined);
   // Guarded for SSR — only read once the panel is open (post-hydration anyway).
   const redirectUri = typeof window === "undefined" ? "" : `${window.location.origin}/api/oauth/callback`;
   const connected = status?.connected;
@@ -229,21 +242,20 @@ export function SourceConnect({
   return (
     <div className="p-4">
       <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
-          <Icon width={18} height={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <SourceTitle id={id} name={displayName} hasData={Boolean(status?.hasData)} />
-            {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
-            {!connected && status?.hasData ? (
-              <Badge title="Rows from this source exist in your record (imported), but the app holds no authorization to sync more. Connect to keep it updated.">
-                imported data — not connected
-              </Badge>
-            ) : null}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+        {/* An API source holding data with NO stored key is "Imported", not
+            connected — the badge says so on its own now. */}
+        <SourceHeader
+          id={id}
+          name={displayName}
+          iconId={iconId}
+          connected={Boolean(connected)}
+          hasData={Boolean(status?.hasData)}
+          provenance={provenance ?? (connected ? "credential" : status?.hasData ? "imported" : undefined)}
+          account={account}
+          coverage={cov}
+          lastSync={status?.syncedAt ?? null}
+        />
+        <div className="flex shrink-0 items-center gap-2">
           {live && connected && onIntervalChange ? (
             <div className="flex items-center gap-1.5">
               {savingInterval ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}

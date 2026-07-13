@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Eye, EyeOff, GitHub, Spinner, Trash } from "@/components/icons";
+import { Check, Eye, EyeOff, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
 import { Sparkline } from "@/components/sparkline";
-import { SourceTitle } from "@/components/source-title";
+import { SourceHeader } from "@/components/source-title";
 import { SyncStatus } from "@/components/sync-status";
 import { Button, Input } from "@/components/ui";
-import { jobActive, type Interval, type SourceJobView } from "@/lib/sources";
+import { jobActive, type Interval, type SourceCoverage, type SourceJobView } from "@/lib/sources";
 
 interface Day {
   date: string;
@@ -43,6 +43,7 @@ export function GithubConnect({
   savingInterval = false,
   removing = false,
   job = null,
+  coverage,
   onIntervalChange,
   onRemove,
   onSyncStarted,
@@ -54,6 +55,8 @@ export function GithubConnect({
   removing?: boolean;
   /** Live/last background job — the panel polls /api/sources and threads it here. */
   job?: SourceJobView | null;
+  /** What GitHub landed (from /api/sources) — the row's "did it sync?" line. */
+  coverage?: SourceCoverage;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
   /** A sync job was just enqueued — the panel starts polling. */
@@ -122,16 +125,15 @@ export function GithubConnect({
   return (
     <div className="p-4">
       <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-muted text-fg">
-          <GitHub width={18} height={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <SourceTitle id="github" name="GitHub" hasData={Boolean(status?.hasData)} />
-            {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+        <SourceHeader
+          id="github"
+          name="GitHub"
+          connected={Boolean(connected)}
+          hasData={Boolean(status?.hasData)}
+          coverage={coverage}
+          lastSync={status?.syncedAt ?? null}
+        />
+        <div className="flex shrink-0 items-center gap-2">
           {connected && onIntervalChange ? (
             <div className="flex items-center gap-1.5">
               {savingInterval ? <Spinner width={13} height={13} className="text-muted-fg" /> : null}

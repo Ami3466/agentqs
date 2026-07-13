@@ -23,6 +23,7 @@ import {
   ensureSession,
   fetchHeartRate,
   importWhoop,
+  normalizeCycles,
   whoopFixtureFetch,
   whoopHrDir,
   whoopLogin,
@@ -36,11 +37,21 @@ function check(label: string, cond: boolean, extra = "") {
   if (!cond) failures++;
 }
 
-// The cycles-details BFF shape: recovery/HRV(ms)/resting-HR at the record level,
+// The LIVE cycles-details BFF shape (verified against api.prod.whoop.com, 2026-07):
+// recovery/HRV/resting-HR on a nested `recovery` object with HRV in SECONDS,
 // strain on `cycle`, `days` a stringified range, sleep under `sleeps`.
+// This fixture used to carry the pre-2026 flat shape (`score`/`hrv_rmssd_milli` at
+// the record root). It kept the test green while production landed EMPTY recovery,
+// HRV and resting-HR cells for months — the fixture must mirror the real payload.
 const CYCLES = [
-  { score: 68, hrv_rmssd_milli: 55, resting_heart_rate: 52, cycle: { days: "['2026-06-01T00:00:00.000Z','2026-06-02T00:00:00.000Z')", scaled_strain: 12.4 }, sleeps: [{ score: 88, quality_duration: 27_000_000 }] },
-  { score: 41, hrv_rmssd_milli: 33, resting_heart_rate: 60, cycle: { days: "['2026-06-02T00:00:00.000Z','2026-06-03T00:00:00.000Z')", scaled_strain: 7.9 }, sleeps: [{ score: 63, quality_duration: 19_800_000 }] },
+  { recovery: { recovery_score: 68, hrv_rmssd: 0.055, resting_heart_rate: 52 }, cycle: { days: "['2026-06-01T00:00:00.000Z','2026-06-02T00:00:00.000Z')", scaled_strain: 12.4 }, sleeps: [{ score: 88, quality_duration: 27_000_000 }] },
+  { recovery: { recovery_score: 41, hrv_rmssd: 0.033, resting_heart_rate: 60 }, cycle: { days: "['2026-06-02T00:00:00.000Z','2026-06-03T00:00:00.000Z')", scaled_strain: 7.9 }, sleeps: [{ score: 63, quality_duration: 19_800_000 }] },
+];
+
+// The pre-2026 flat payload, still parsed so a fixture/replay recorded against the
+// old shape keeps working.
+const LEGACY_CYCLE = [
+  { score: 55, hrv_rmssd_milli: 44, resting_heart_rate: 58, cycle: { days: "['2026-06-01T00:00:00.000Z','2026-06-02T00:00:00.000Z')", scaled_strain: 9.1 }, sleeps: [{ score: 70, quality_duration: 21_600_000 }] },
 ];
 
 // A per-minute window on 2026-06-02: three good beats + one gap (0 → dropped).
@@ -104,12 +115,21 @@ async function main() {
   }
   const day2 = rows.find((r) => r[0] === "2026-06-02")!;
   const cell = (col: string) => day2[header.indexOf(col)];
-  check("recovery from record.score", cell("recovery") === "41", `recovery=${cell("recovery")}`);
-  check("HRV in ms (hrv_rmssd_milli)", cell("hrv") === "33", `hrv=${cell("hrv")}`);
+  check("recovery from recovery.recovery_score", cell("recovery") === "41", `recovery=${cell("recovery")}`);
+  check("HRV seconds→ms (recovery.hrv_rmssd)", cell("hrv") === "33", `hrv=${cell("hrv")}`); // 0.033s
+  check("resting HR from recovery.resting_heart_rate", cell("resting_hr") === "60", `resting_hr=${cell("resting_hr")}`);
   check("strain from cycle.scaled_strain", cell("strain") === "7.9", `strain=${cell("strain")}`);
   check("sleep duration ms→hours", cell("sleep_hours") === "5.5", `sleep_hours=${cell("sleep_hours")}`); // 19_800_000ms
   check("hr_avg from per-minute stream", cell("hr_avg") === "86.67", `hr_avg=${cell("hr_avg")}`); // (58+62+140)/3
   check("hr_max from per-minute stream", cell("hr_max") === "140", `hr_max=${cell("hr_max")}`);
+
+  // The pre-2026 flat payload still parses (same columns, HRV already in ms).
+  const legacy = normalizeCycles(LEGACY_CYCLE, "2026-06-01", "2026-06-01").get("2026-06-01")!;
+  check(
+    "legacy flat payload still parses",
+    legacy.recovery === "55" && legacy.hrv === "44" && legacy.resting_hr === "58",
+    `recovery=${legacy.recovery} hrv=${legacy.hrv} resting_hr=${legacy.resting_hr}`,
+  );
 
   // Per-minute file exists with time,bpm header and one row per good sample.
   const hrFile = path.join(whoopHrDir(recordDir), "2026-06-02.csv");
