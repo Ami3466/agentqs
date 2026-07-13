@@ -158,7 +158,16 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   `api.prod.whoop.com/auth-service/v2/whoop/sign-in` (the deleted api-7 host is
   gone); a failure there is a NETWORK/DNS failure, never "wrong password" - the
   error says exactly that. If it stops working, FIX it; do NOT disable, hide or
-  remove the row. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
+  remove the row. PAYLOAD SHAPE: on `cycles/details`, recovery/HRV/resting-HR sit
+  on a nested `recovery` object (`recovery_score`, `hrv_rmssd` in SECONDS ->
+  x1000 for the ms column, `resting_heart_rate`); strain is `cycle.scaled_strain`,
+  sleep is the longest event under `sleeps`. WHOOP moved these off the record root
+  (the old flat `score`/`hrv_rmssd_milli`), and reading the stale fields yielded
+  EMPTY cells - recovery, HRV and resting HR silently vanished from the daily table
+  for months while strain and sleep kept landing, so the row looked like "no data".
+  Both shapes parse. When a column goes quiet, suspect the payload, and make the
+  FIXTURE mirror the live response (`scripts/whoop.ts`) - a fixture frozen on the
+  old shape keeps the test green while production lands nothing. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
   each its own login (`config.whoopCredsByInstance`), daily file, per-minute dir
   (`record/<id>/hr`) and schedule - CLI `whoop connect <email> <pass> --account
   whoop-2`, MCP `whoop_connect {account}`, web "Add another account", API POST
@@ -196,6 +205,20 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   detected app)" imports it as a saved credential. There is NO keyless connect
   on any surface (CLI/MCP/API); never mark or treat a source as connected
   without a stored key.
+  Every row therefore carries `provenance` (`src/lib/sources.ts`) — the honest
+  answer to "connected to WHAT?": `credential` (a key is stored: it has an
+  account, it syncs, it is due — the ONLY thing badged "Connected"), `local-file`
+  (Chrome/Safari/Health: re-reads a file on THIS machine, no key, no account),
+  `imported` (a dropped CSV, an unpacked archive, an extension scrape, an agent
+  import — history in the record that nothing syncs), `automation` (a recorded
+  recipe). `buildSources` derives it centrally, so a new row cannot forget it.
+  This rule was violated in the CORE, not just the UI: `recordSourceRows` and
+  `bundleRow` hardcoded `connected: true` and `fileSourceRow` set it from
+  `hasRows()`, so every CSV the user ever dropped read back as a live, authorized
+  integration — 31 fake "connections" against 3 real ones on the author's own
+  record. If you add a row, gate its manage controls on `hasData`, never on
+  `connected`: imported data is removable and filterable, it is just not a
+  connection.
 - `agentqs sync --due` - the crontab mode: runs every source whose interval
   (`agentqs source interval <id> hourly|daily|weekly`, or set in Pipeline) says it's
   due - API sources AND browser automations. One crontab line = auto scraping.
@@ -205,6 +228,14 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   (launchd/crontab), last run outcome (failures included, from the sync-run
   ledger) and landed coverage. Answer "is X actually connected/working?" from
   here, never from row presence. MCP tool: `pipeline`; API: GET `/api/pipeline`.
+  The Pipeline TAB shows the same facts per row and is the user's way in: every
+  row carries a Connected badge, its `account` (which login it is authorized as -
+  two WHOOP athletes are otherwise twins), its `coverage` (days/events/range,
+  counted from the cache by `coverageBySource` in `src/lib/daily.ts` - the ONE
+  query both the tab and this report read) and its last sync. A row with data IS
+  the link to that data: clicking it opens `/journal?source=<id>` filtered to that
+  source. So `coverage`/`account` ride `SourceView` from `buildSources` - anything
+  adding a row supplies them, or the row silently claims "no data yet".
 - `agentqs rebuild` - rebuild the SQLite cache from the record (deterministic).
 - `agentqs journal | sources | automation | photos | skill | config` - see `--help`.
 

@@ -1,6 +1,7 @@
 import fs from "fs";
 import { openReadonly, type DB } from "./db";
 import { dbPath } from "./paths";
+import type { SourceCoverage } from "./sources";
 
 /**
  * Read-side view of the `daily` table — the rebuilt cache that Structure and the
@@ -32,6 +33,41 @@ export interface DailySummary {
 }
 
 const EMPTY: DailySummary = { totalRows: 0, sources: [], recent: [] };
+
+/**
+ * What every source actually landed — date range + counts, both layers (daily
+ * rollups and events) in one pass. THE answer to "what synced and what didn't":
+ * the Pipeline tab hangs each row's coverage line off this, and `pipeline`
+ * reports it. A source missing from the map landed nothing.
+ */
+export function coverageBySource(file: string = dbPath()): Map<string, SourceCoverage> {
+  const out = new Map<string, SourceCoverage>();
+  if (!fs.existsSync(file)) return out;
+  try {
+    const db = openReadonly(file);
+    try {
+      const daily = db
+        .prepare("SELECT source, COUNT(DISTINCT date) AS days, MIN(date) AS f, MAX(date) AS t FROM daily GROUP BY source")
+        .all() as Array<{ source: string; days: number; f: string; t: string }>;
+      for (const r of daily) out.set(r.source, { events: 0, days: r.days, from: r.f, to: r.t });
+      const events = db
+        .prepare("SELECT source, COUNT(*) AS n, MIN(date) AS f, MAX(date) AS t FROM events GROUP BY source")
+        .all() as Array<{ source: string; n: number; f: string; t: string }>;
+      for (const r of events) {
+        const cur = out.get(r.source) ?? { events: 0, days: 0, from: null, to: null };
+        cur.events = r.n;
+        cur.from = cur.from && cur.from < r.f ? cur.from : r.f;
+        cur.to = cur.to && cur.to > r.t ? cur.to : r.t;
+        out.set(r.source, cur);
+      }
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* stale/older cache — coverage shows as empty rather than failing the caller */
+  }
+  return out;
+}
 
 /** Summary of the daily cache: total rows, per-source stats, newest cells.
  * Returns an empty summary when the cache doesn't exist yet or can't be read. */

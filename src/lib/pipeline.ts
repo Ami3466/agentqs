@@ -3,12 +3,12 @@ import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
 import { readConfig } from "./config";
-import { dbPath, recordDir } from "./paths";
-import { openReadonly } from "./db";
+import { recordDir } from "./paths";
+import { coverageBySource } from "./daily";
 import { buildSources } from "./source-registry";
 import { GOOGLE_PRESETS } from "./google-web-scraper";
 import { readSyncRuns } from "./sync-runs";
-import type { SourceView } from "./sources";
+import type { SourceCoverage, SourceProvenance, SourceView } from "./sources";
 
 /**
  * The data-pipeline truth table: for every source, where its data comes from,
@@ -22,12 +22,9 @@ import type { SourceView } from "./sources";
  * one-shot agent import indistinguishable from a connection the user made.
  */
 
-export interface PipelineCoverage {
-  events: number;
-  days: number;
-  from: string | null;
-  to: string | null;
-}
+/** Coverage is the same fact the Pipeline tab shows per row — one shape, one query
+ *  (daily.ts), so the CLI truth table and the UI can never disagree. */
+export type PipelineCoverage = SourceCoverage;
 
 export interface PipelineRow {
   id: string;
@@ -37,6 +34,9 @@ export interface PipelineRow {
   connected: boolean;
   /** Why it counts as connected — never implicit. */
   connectedBecause: "credential" | "data-only" | null;
+  /** How the data got here when it is NOT a connection (imported CSV, local file,
+   *  extension scrape). The honest answer to "connected to what, exactly?". */
+  provenance: SourceProvenance | null;
   credentialOrigin: "env" | "saved" | "discovered" | null;
   /** Rows exist in the record — orthogonal to connected (imports never connect). */
   hasData: boolean;
@@ -67,36 +67,6 @@ export interface PipelineReport {
   scheduler: SchedulerStatus;
 }
 
-/** date-range + counts per source from the cache, both layers at once. */
-function coverageBySource(file: string = dbPath()): Map<string, PipelineCoverage> {
-  const out = new Map<string, PipelineCoverage>();
-  if (!fs.existsSync(file)) return out;
-  try {
-    const db = openReadonly(file);
-    try {
-      const daily = db
-        .prepare("SELECT source, COUNT(DISTINCT date) AS days, MIN(date) AS f, MAX(date) AS t FROM daily GROUP BY source")
-        .all() as Array<{ source: string; days: number; f: string; t: string }>;
-      for (const r of daily) out.set(r.source, { events: 0, days: r.days, from: r.f, to: r.t });
-      const events = db
-        .prepare("SELECT source, COUNT(*) AS n, MIN(date) AS f, MAX(date) AS t FROM events GROUP BY source")
-        .all() as Array<{ source: string; n: number; f: string; t: string }>;
-      for (const r of events) {
-        const cur = out.get(r.source) ?? { events: 0, days: 0, from: null, to: null };
-        cur.events = r.n;
-        cur.from = cur.from && cur.from < r.f ? cur.from : r.f;
-        cur.to = cur.to && cur.to > r.t ? cur.to : r.t;
-        out.set(r.source, cur);
-      }
-    } finally {
-      db.close();
-    }
-  } catch {
-    /* stale/older cache — coverage shows as empty rather than failing the report */
-  }
-  return out;
-}
-
 export function detectScheduler(home: string = os.homedir()): Omit<SchedulerStatus, "lastDueRunAt"> {
   const launchd = fs.existsSync(path.join(home, "Library", "LaunchAgents", "com.agentqs.autosync.plist"));
   let crontab = false;
@@ -112,8 +82,9 @@ function rowFromSource(s: SourceView, coverage: Map<string, PipelineCoverage>): 
   const data = coverage.get(s.id) ?? { events: 0, days: 0, from: null, to: null };
   const runs = readSyncRuns().runs;
   const run = runs[s.id];
-  // connected ⇔ stored credential; record-backed rows (imports) count as
-  // "data-only" presence, never as an authorized connection.
+  // connected ⇔ stored credential. A record-backed row (a dropped CSV, a local
+  // file, an unpacked archive) is NOT connected — it carries `provenance` instead,
+  // so "connected" can never be answered by "well, there is data".
   const connectedBecause = !s.connected ? null : s.credentialOrigin ? ("credential" as const) : ("data-only" as const);
   return {
     id: s.id,
@@ -121,6 +92,7 @@ function rowFromSource(s: SourceView, coverage: Map<string, PipelineCoverage>): 
     origin: s.automation ? "automation" : s.kind === "api" ? "api" : "record",
     connected: s.connected,
     connectedBecause,
+    provenance: s.provenance ?? null,
     credentialOrigin: s.credentialOrigin ?? null,
     hasData: s.hasData ?? (data.events > 0 || data.days > 0),
     detectedApp: s.detectedApp ?? false,
@@ -147,8 +119,12 @@ function extensionRows(coverage: Map<string, PipelineCoverage>): PipelineRow[] {
       id: p.id,
       name: `Google · ${p.label}`,
       origin: "extension" as const,
-      connected: has,
-      connectedBecause: has ? ("data-only" as const) : null,
+      // Scraped through the extension = imported, not connected. There is no key
+      // here; the browser did the work. Reporting these as connected made a
+      // one-off scrape indistinguishable from an authorized, syncing account.
+      connected: false,
+      connectedBecause: null,
+      provenance: has ? ("imported" as const) : null,
       credentialOrigin: null,
       hasData: has,
       detectedApp: false,
@@ -164,7 +140,7 @@ function extensionRows(coverage: Map<string, PipelineCoverage>): PipelineRow[] {
 
 export function pipelineReport(dir: string = recordDir()): PipelineReport {
   const coverage = coverageBySource();
-  const sources = buildSources(readConfig(), dir).map((s) => rowFromSource(s, coverage));
+  const sources = buildSources(readConfig(), dir, coverage).map((s) => rowFromSource(s, coverage));
   const seen = new Set(sources.map((s) => s.id));
   for (const row of extensionRows(coverage)) if (!seen.has(row.id)) sources.push(row);
   return {

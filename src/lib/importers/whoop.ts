@@ -237,13 +237,27 @@ function dayBounds(from: string, to: string): { start: string; end: string } {
 }
 
 /**
- * One record from the cycles-details BFF feed. Recovery/HRV/resting-HR sit at the
- * record level; strain + day HR + kilojoules are on the nested `cycle`; sleep is
- * per event under `sleeps`. `cycle.days` is a stringified range —
+ * One record from the cycles-details BFF feed. Recovery/HRV/resting-HR sit on a
+ * nested `recovery` object; strain + day HR + kilojoules are on the nested
+ * `cycle`; sleep is per event under `sleeps`. `cycle.days` is a stringified range —
  * "['2026-06-01T…','2026-06-02T…')" — whose first element is the cycle's date.
+ *
+ * WHOOP moved recovery off the record root (it used to be a flat `score` /
+ * `hrv_rmssd_milli` / `resting_heart_rate`) and now reports HRV in SECONDS
+ * (`hrv_rmssd: 0.0646` = 64.6 ms). Reading the old flat fields silently yielded
+ * empty cells, so recovery/HRV/resting HR vanished from the daily table while
+ * strain and sleep — read from the nested objects — kept landing. Both shapes are
+ * accepted so a fixture recorded against either payload still parses.
  */
 export interface WhoopCycle {
-  score?: number; // recovery score 0–100
+  /** Current shape: recovery lives here. */
+  recovery?: {
+    recovery_score?: number; // 0–100
+    hrv_rmssd?: number; // SECONDS (×1000 → ms)
+    resting_heart_rate?: number;
+  };
+  /** Legacy flat shape (pre-2026 payloads). */
+  score?: number;
   hrv_rmssd_milli?: number; // HRV, already in milliseconds
   resting_heart_rate?: number;
   cycle?: {
@@ -369,8 +383,9 @@ interface DailyCycle {
 }
 
 /** Bucket cycle records into one summary per calendar day. Field names follow the
- *  cycles-details BFF payload: recovery/HRV/resting-HR at the record level, strain
- *  on `cycle`, sleep under `sleeps` (the longest event is the night's sleep). */
+ *  cycles-details BFF payload: recovery/HRV/resting-HR on the nested `recovery`
+ *  object (flat root fields are the legacy fallback), strain on `cycle`, sleep
+ *  under `sleeps` (the longest event is the night's sleep). */
 export function normalizeCycles(cycles: WhoopCycle[], from: string, to: string): Map<string, DailyCycle> {
   const byDay = new Map<string, DailyCycle>();
   for (const c of cycles) {
@@ -381,10 +396,16 @@ export function normalizeCycles(cycles: WhoopCycle[], from: string, to: string):
     const sleep = (c.sleeps ?? [])
       .slice()
       .sort((a, b) => (b.quality_duration ?? 0) - (a.quality_duration ?? 0))[0] ?? {};
+    const rec = c.recovery ?? {};
+    // HRV arrives in seconds on the nested object and in ms on the legacy root —
+    // the daily column is milliseconds either way.
+    const hrvMs = rec.hrv_rmssd != null ? rec.hrv_rmssd * 1000 : c.hrv_rmssd_milli;
+    const recoveryScore = rec.recovery_score ?? c.score;
+    const restingHr = rec.resting_heart_rate ?? c.resting_heart_rate;
     byDay.set(day, {
-      recovery: c.score != null ? num(c.score) : "",
-      hrv: c.hrv_rmssd_milli != null ? num(c.hrv_rmssd_milli) : "", // already ms
-      resting_hr: c.resting_heart_rate != null ? num(c.resting_heart_rate) : "",
+      recovery: recoveryScore != null ? num(recoveryScore) : "",
+      hrv: hrvMs != null ? num(hrvMs) : "",
+      resting_hr: restingHr != null ? num(restingHr) : "",
       strain: cyc.scaled_strain != null ? num(cyc.scaled_strain) : "",
       sleep_hours: sleep.quality_duration != null ? num(sleep.quality_duration / 3_600_000) : "",
       sleep_perf: sleep.score != null ? num(sleep.score) : "",
