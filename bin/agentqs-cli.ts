@@ -658,8 +658,13 @@ backup
   .option("--remote <url>", "PRIVATE GitHub repo URL (saved for future runs)")
   .option("--branch <name>", "remote branch (default main)")
   .option("--token <pat>", "GitHub PAT for https pushes (saved; falls back to githubToken / ambient git auth)")
-  .action(async (opts: { remote?: string; branch?: string; token?: string }) => {
+  .option("--schedule <interval>", "just set the cadence (off|hourly|daily|weekly) without pushing")
+  .action(async (opts: { remote?: string; branch?: string; token?: string; schedule?: string }) => {
     try {
+      if (opts.schedule !== undefined) {
+        out(core.setGithubBackupInterval(opts.schedule), (d) => `GitHub backup schedule: ${d.interval}.`);
+        return;
+      }
       out(await core.backupGithub(opts), (d) => d.message);
     } catch (e) {
       die(e);
