@@ -21,6 +21,7 @@ import os from "os";
 import path from "path";
 import {
   ensureSession,
+  fetchHeartRate,
   importWhoop,
   whoopFixtureFetch,
   whoopHrDir,
@@ -114,6 +115,18 @@ async function main() {
   const hrFile = path.join(whoopHrDir(recordDir), "2026-06-02.csv");
   const hrLines = fs.readFileSync(hrFile, "utf8").trim().split("\n");
   check("record/whoop/hr/2026-06-02.csv per-minute stream", hrLines[0] === "time,bpm" && hrLines.length === 4);
+
+  // 3b. The HR endpoint rejects any window over 192h (8 days) with a 400. A wide
+  //     backfill must chunk into ≤7-day calls, never send one 14-day request.
+  let hrCalls = 0;
+  const wideFetch = whoopFixtureFetch({
+    userId: 42,
+    heartRate: HR,
+    onCall: (u) => { if (u.includes("/metrics-service/")) hrCalls++; },
+  });
+  const wide = await fetchHeartRate(42, "tok", "2026-06-01", "2026-06-20", wideFetch);
+  check("HR pull chunks a 20-day window (≤7-day calls, no 400)", hrCalls >= 3, `${hrCalls} HR calls`);
+  check("chunked HR still returns samples", wide.length > 0, `${wide.length} samples`);
 
   // 4. Idempotent — a second identical pull yields a byte-identical daily file.
   const before = fs.readFileSync(path.join(recordDir, "daily", "whoop.csv"));
