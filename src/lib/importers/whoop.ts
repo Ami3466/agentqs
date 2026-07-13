@@ -64,15 +64,13 @@ interface TokenResponse {
 
 // ---- auth (the unofficial app login) --------------------------------------
 
-/** WHOOP retired the unofficial app-login door (July 2026): api-7.whoop.com was
- *  deleted from DNS, the api.prod.whoop.com replacement answers "api-server path
- *  is disabled", and their Auth0 login sits behind a Cloudflare browser
- *  challenge. A network/404 failure here is THAT, not the user's password —
- *  say so, and point at the connect that works. */
 /** When the login host can't be reached, say THAT — never "wrong password". The
  *  distinction matters: a 401 is your credentials, an unreachable host is not,
- *  and the two must never be reported as the same thing. */
-const RETIRED_HINT =
+ *  and the two must never be reported as the same thing. api-7.whoop.com does not
+ *  resolve from every network (as of 2026-07); api.prod.whoop.com does answer and
+ *  is the likely replacement host — worth wiring up, never a reason to remove
+ *  this source (it is the only per-minute HR there is). */
+const UNREACHABLE_HINT =
   "could not reach api-7.whoop.com (the host does not resolve from this machine) — this is a network/DNS failure, NOT your password. " +
   "If it resolves for you elsewhere, the login itself is unchanged; the official WHOOP API row (OAuth) is the other way in.";
 
@@ -86,7 +84,7 @@ async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): P
     });
   } catch {
     // DNS/connection failure on a deleted host — the endpoint is gone, not flaky.
-    throw new Error(`WHOOP login → ${RETIRED_HINT}`);
+    throw new Error(`WHOOP login → ${UNREACHABLE_HINT}`);
   }
   if (!res.ok) {
     let detail = "";
@@ -95,7 +93,7 @@ async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): P
     } catch {
       /* ignore */
     }
-    if (res.status === 404) throw new Error(`WHOOP login → ${RETIRED_HINT}`);
+    if (res.status === 404) throw new Error(`WHOOP login → ${UNREACHABLE_HINT}`);
     const hint =
       res.status === 401 || res.status === 403 ? " (wrong email or password?)" : "";
     throw new Error(`WHOOP login → ${res.status}${hint}${detail ? ` — ${detail}` : ""}`);
