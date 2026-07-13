@@ -34,6 +34,7 @@ import {
 import { CRON_CMD, CliRow, CopyRow, KeyRow, PH, SYNC_CMD, fixPromptSnip, mcpSnip, skillSnip } from "@/components/connect-api";
 import { Badge, Button, Card, Checkbox, Field, Input, Select, cn } from "@/components/ui";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
+import { ago } from "@/lib/sources";
 import { SKILLS, type Skill } from "@/lib/skills";
 import type { ChannelReplyPrefs, PublicConfig } from "@/lib/config";
 
@@ -52,6 +53,26 @@ interface WhisperModelRow {
   size: string;
   hint: string;
   installed: boolean;
+}
+
+/** GET /api/backup — the off-site backup panel's whole state. */
+interface BackupView {
+  github: {
+    configured: boolean;
+    remote?: string;
+    branch?: string;
+    interval: string;
+    lastAt: string | null;
+    lastError?: string;
+  };
+  drive: {
+    connected: boolean;
+    passphraseSet: boolean;
+    interval: string;
+    lastAt: string | null;
+    lastFile?: string;
+    lastError?: string;
+  };
 }
 
 interface WhisperStatus {
@@ -220,6 +241,12 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [recordPrivateConfirmed, setRecordPrivateConfirmed] = useState(config.recordInAppRepo);
   const [migrating, setMigrating] = useState(false);
   const [migrateMsg, setMigrateMsg] = useState("");
+  // Off-site backups (Data tab) — state lives on GET /api/backup, refetched quietly.
+  const [backup, setBackup] = useState<BackupView | null>(null);
+  const [backupMsg, setBackupMsg] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [ghRemote, setGhRemote] = useState("");
+  const [ghToken, setGhToken] = useState("");
   const [voiceProvider, setVoiceProvider] = useState(config.voice.provider);
   const [voiceKey, setVoiceKey] = useState("");
   const [voiceProviderId, setVoiceProviderId] = useState(config.voice.providerId);
@@ -243,6 +270,59 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   useEffect(() => {
     if (typeof window !== "undefined") setOrigin(window.location.origin);
   }, []);
+
+  const loadBackup = () =>
+    fetch("/api/backup")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: BackupView | null) => {
+        if (!d) return;
+        setBackup(d);
+        setGhRemote((v) => v || d.github.remote || "");
+      })
+      .catch(() => {});
+  useEffect(() => {
+    void loadBackup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** GitHub backup runs synchronously (a push is fast); Drive rides the
+   *  background-job sync route so a multi-minute upload survives reloads. */
+  async function runBackup(target: "github" | "drive" | "passphrase") {
+    setBackupBusy(true);
+    setBackupMsg("");
+    try {
+      if (target === "drive") {
+        const res = await fetch("/api/import/gdrive_backup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        const r = await res.json();
+        setBackupMsg(res.ok ? "Backup started — progress shows on the Pipeline tab." : r.error || "Backup failed.");
+      } else {
+        const body =
+          target === "github"
+            ? { target, remote: ghRemote.trim() || undefined, token: ghToken.trim() || undefined }
+            : { target, generate: true };
+        const res = await fetch("/api/backup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const r = await res.json();
+        if (!res.ok) setBackupMsg(r.error || "Backup failed.");
+        else if (target === "passphrase") {
+          setBackupMsg(`Passphrase: ${r.generated} — copy it somewhere safe NOW; it is never shown again.`);
+        } else setBackupMsg(r.message || "Pushed.");
+        if (target === "github") setGhToken("");
+      }
+      await loadBackup();
+    } catch {
+      setBackupMsg("Backup failed — try the CLI: agentqs backup status");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
 
   function patchReplies(channel: string, up: Partial<ChannelReplyPrefs>) {
     setReplies((r) => ({ ...r, [channel]: { ...r[channel], ...up } }));
@@ -955,10 +1035,10 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
           ) : null}
         </div>
         {migrateMsg ? <p className="mt-2 text-xs text-muted-fg">{migrateMsg}</p> : null}
-        <div className="mt-4 border-t border-border pt-4">
-          {config.recordInAppRepoApplicable || recordInAppRepo ? (
-            /* Also shown when tracking is ON but the store moved away — the
-               checkbox is the only disable control and must stay reachable. */
+        {config.recordInAppRepoApplicable || recordInAppRepo ? (
+          /* Also shown when tracking is ON but the store moved away — the
+             checkbox is the only disable control and must stay reachable. */
+          <div className="mt-4 border-t border-border pt-4">
             <Checkbox
               label="Allow this repo to track data/record"
               hint="Only enable this if this GitHub repository is private. When off, /data stays ignored and accidental pushes will not include your record."
@@ -976,14 +1056,115 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                 setRecordPrivateConfirmed(ok);
               }}
             />
-          ) : (
-            <Field label="Back up the record to GitHub" hint="The record is its own git repo — push it to a PRIVATE repo, or skip this and it stays local.">
-              <CliRow
-                code={`cd '${config.recordDir}' && git remote add origin <your-private-repo> && git push -u origin main`}
-                title="The record folder is already a git repository with local history."
-              />
-            </Field>
-          )}
+          </div>
+        ) : null}
+        <div className="mt-4 border-t border-border pt-4">
+          <Field
+            label="Off-site backups"
+            hint="GitHub gets a snapshot of the plain-text record (files past its size limit are excluded and named); Google Drive gets the whole store as one encrypted archive."
+          >
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Badge tone={backup?.github.configured ? (backup.github.lastError ? "warning" : "accent") : "neutral"}>
+                  GitHub
+                </Badge>
+                <span
+                  className="min-w-0 flex-1 truncate text-xs text-muted-fg"
+                  title={backup?.github.lastError || backup?.github.remote || ""}
+                >
+                  {backup?.github.configured
+                    ? backup.github.lastError
+                      ? `${backup.github.remote} — LAST ERROR: ${backup.github.lastError}`
+                      : `${backup.github.remote} · pushed ${ago(backup.github.lastAt)} · ${backup.github.interval}`
+                    : "Not configured — paste a PRIVATE repo URL"}
+                </span>
+                {backup?.github.configured ? (
+                  <Button
+                    variant="ghost"
+                    className="shrink-0"
+                    disabled={backupBusy}
+                    title="Snapshot the record and push it to the backup repo now (also runs daily with sync --due)."
+                    onClick={() => void runBackup("github")}
+                  >
+                    Back up now
+                  </Button>
+                ) : null}
+              </div>
+              {!backup?.github.configured ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={ghRemote}
+                    onChange={(e) => setGhRemote(e.target.value)}
+                    placeholder="https://github.com/you/record-backup.git (private)"
+                    className="min-w-0 flex-1"
+                  />
+                  <Input
+                    value={ghToken}
+                    onChange={(e) => setGhToken(e.target.value)}
+                    placeholder="PAT (hosted instances)"
+                    title="A GitHub token with repo access — needed where no git credentials exist (a hosted instance). Stored in this instance's config."
+                    className="w-44 shrink-0"
+                  />
+                  <Button
+                    variant="ghost"
+                    className="shrink-0"
+                    disabled={backupBusy || !ghRemote.trim()}
+                    title="Saves the remote and pushes the first snapshot."
+                    onClick={() => void runBackup("github")}
+                  >
+                    Save & push
+                  </Button>
+                </div>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <Badge tone={backup?.drive.connected ? (backup.drive.lastError ? "warning" : "accent") : "neutral"}>
+                  Drive
+                </Badge>
+                <span
+                  className="min-w-0 flex-1 truncate text-xs text-muted-fg"
+                  title={backup?.drive.lastError || backup?.drive.lastFile || ""}
+                >
+                  {backup?.drive.connected
+                    ? backup.drive.lastError
+                      ? `LAST ERROR: ${backup.drive.lastError}`
+                      : `connected · passphrase ${backup.drive.passphraseSet ? "set" : "NOT SET"} · ${
+                          backup.drive.lastFile ? `uploaded ${ago(backup.drive.lastAt)}` : "no archive yet"
+                        } · ${backup.drive.interval}`
+                    : "Not connected"}
+                </span>
+                {!backup?.drive.connected ? (
+                  <a
+                    href="/pipeline"
+                    className="shrink-0 text-xs font-medium text-fg underline underline-offset-2"
+                    title="The OAuth connect form lives on the Pipeline tab — the “Google Drive backup” row."
+                  >
+                    Connect in Pipeline
+                  </a>
+                ) : !backup.drive.passphraseSet ? (
+                  <Button
+                    variant="ghost"
+                    className="shrink-0"
+                    disabled={backupBusy}
+                    title="Generates the archive passphrase and shows it ONCE — archives are unreadable without it."
+                    onClick={() => void runBackup("passphrase")}
+                  >
+                    Generate passphrase
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    className="shrink-0"
+                    disabled={backupBusy}
+                    title="Encrypt the whole store and upload one archive to Drive — runs as a background job."
+                    onClick={() => void runBackup("drive")}
+                  >
+                    Back up now
+                  </Button>
+                )}
+              </div>
+              {backupMsg ? <p className="text-xs text-muted-fg">{backupMsg}</p> : null}
+            </div>
+          </Field>
         </div>
       </Section>
 
