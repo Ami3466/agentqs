@@ -88,10 +88,12 @@ async function main(): Promise<void> {
     {
       api: async (id) => void ran.push({ kind: "api", id }),
       automation: async (id) => void ran.push({ kind: "automation", id }),
+      backup: async () => void ran.push({ kind: "backup", id: "drive" }),
     },
     rDir,
   );
   check("ran exactly the due pair", summary.due === 2 && summary.synced.length === 2);
+  check("no backup ran — Drive isn't connected/scheduled here", !ran.some((r) => r.kind === "backup"));
   check("github went through the api runner", ran.some((r) => r.kind === "api" && r.id === "github"));
   check("the automation went through the headless runner", ran.some((r) => r.kind === "automation" && r.id === "scale_site"));
   check(
@@ -107,11 +109,62 @@ async function main(): Promise<void> {
         throw new Error("upstream 500");
       },
       automation: async () => undefined,
+      backup: async () => undefined,
     },
     rDir,
   );
   check("the failure is reported per-source", summary2.failed.length === 1 && /upstream 500/.test(summary2.failed[0].error ?? ""));
   check("the other due source still ran", summary2.synced.length === 1);
+
+  // ---- 3b. the Drive BACKUP rides the same sweep — as a backup, not a source -
+  // The bug this pins: Drive backup used to be registered as an importer, so it
+  // showed up in the Pipeline as if it were data coming IN, and its cadence sat
+  // in sourceIntervals next to real sources.
+  console.log("\nsyncDue — the Drive backup is swept as a BACKUP, never as a source");
+  const cfgB = JSON.parse(fs.readFileSync(path.join(dataDir, "config.json"), "utf8"));
+  cfgB.sourceOAuth = { gdrive_backup: { clientId: "c", clientSecret: "s", refreshToken: "r" } };
+  cfgB.backup = { passphrase: "p", drive: { interval: "daily", lastAt: hoursAgo(48) } };
+  fs.writeFileSync(path.join(dataDir, "config.json"), JSON.stringify(cfgB));
+
+  const scheduledB = dueSources(rDir);
+  check(
+    "gdrive_backup is NOT a scheduled source (the pipeline is data coming IN)",
+    !scheduledB.some((s) => s.id === "gdrive_backup"),
+    scheduledB.map((s) => s.id).join(","),
+  );
+  const ranB: string[] = [];
+  const summary3 = await syncDue(
+    {
+      api: async (id) => void ranB.push(`api:${id}`),
+      automation: async (id) => void ranB.push(`automation:${id}`),
+      backup: async () => void ranB.push("backup:drive"),
+    },
+    rDir,
+  );
+  check("a due Drive backup runs through the BACKUP runner", ranB.includes("backup:drive"));
+  check(
+    "and is reported as backup_drive, not as a synced source",
+    summary3.synced.some((s) => s.id === "backup_drive"),
+    summary3.synced.map((s) => s.id).join(","),
+  );
+
+  // Paused (schedule off) → the sweep leaves it alone, credentials untouched.
+  const cfgC = JSON.parse(fs.readFileSync(path.join(dataDir, "config.json"), "utf8"));
+  cfgC.backup.drive.interval = "off";
+  fs.writeFileSync(path.join(dataDir, "config.json"), JSON.stringify(cfgC));
+  const ranC: string[] = [];
+  await syncDue(
+    {
+      api: async () => undefined,
+      automation: async () => undefined,
+      backup: async () => void ranC.push("backup:drive"),
+    },
+    rDir,
+  );
+  check("schedule off → no Drive backup runs", !ranC.includes("backup:drive"));
+
+  // Restore the pre-backup config for the CLI section below.
+  fs.writeFileSync(path.join(dataDir, "config.json"), JSON.stringify(cfgB.backup ? { ...cfgB, backup: undefined, sourceOAuth: undefined } : cfgB));
 
   // ---- 4. the real CLI, no network — nothing due → clean exit ---------------
   console.log("\n`agentqs sync --due` — the real CLI (nothing due, no network)");

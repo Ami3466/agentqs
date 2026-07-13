@@ -19,7 +19,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-onboard-"));
 process.env.AGENTQS_DATA_DIR = root;
 
 import { onboardingGuide } from "../src/lib/onboarding";
-import { sourceAuthorize } from "../src/lib/cli-core";
+import { backupStatus, sourceAuthorize } from "../src/lib/cli-core";
 import { readConfig, writeConfig, type AppConfig } from "../src/lib/config";
 
 let failures = 0;
@@ -71,8 +71,34 @@ async function main() {
   writeConfig(c2);
   g = onboardingGuide();
   check("grant + passphrase → drive done; channels done; all set", g.nextStep === null);
-  check("a Drive grant alone never counts as a connected DATA source",
-    g.steps.find((s) => s.id === "connect_sources")?.done === true); // rescuetime is the one that counts
+
+  // A BACKUP credential is not a connected DATA source — in EITHER storage
+  // flavor. Asserting it while rescuetime is also connected proves nothing (the
+  // step is true either way), so strip the store down to the backup credential
+  // alone: connect_sources must go UNDONE.
+  console.log("\na backup credential never counts as a connected data source:");
+  for (const flavor of ["pasted token", "oauth grant"] as const) {
+    const c3 = readConfig()!;
+    c3.sourceCreds = flavor === "pasted token" ? { gdrive_backup: "ya29.pasted" } : {};
+    c3.sourceOAuth = flavor === "oauth grant" ? { gdrive_backup: { clientId: "c", clientSecret: "s", refreshToken: "r" } } : {};
+    writeConfig(c3);
+    g = onboardingGuide();
+    const step = (id: string) => g.steps.find((s) => s.id === id)?.done;
+    check(`Drive (${flavor}) is the ONLY credential → connect_sources UNDONE`, step("connect_sources") === false);
+    check(`…and it still counts as the BACKUP being connected (${flavor})`, step("backup_drive") === true);
+    check(
+      `…agreeing with backupStatus().drive.connected (${flavor})`,
+      backupStatus().drive.connected === true,
+    );
+  }
+  // Put the real source back so the rest of the run sees a normal store.
+  const c4 = readConfig()!;
+  c4.sourceCreds = { rescuetime: "key" };
+  c4.sourceOAuth = { gdrive_backup: { clientId: "c", clientSecret: "s", refreshToken: "r" } };
+  writeConfig(c4);
+  g = onboardingGuide();
+  check("a real source alongside the backup → connect_sources done again",
+    g.steps.find((s) => s.id === "connect_sources")?.done === true);
 
   console.log("\nCLI OAuth authorize face:");
   const auth = sourceAuthorize("gdrive_backup", "cid", "csec", "http://127.0.0.1:3106/");

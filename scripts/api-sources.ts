@@ -9,14 +9,14 @@
  *
  * Covers the sources added in this task (Oura, Fitbit, Strava, Last.fm, Toggl,
  * Todoist, Trakt, Notion) plus the earlier three (RescueTime, Calendar, Spotify),
- * so the whole PLUGINS registry is exercised through the live import path.
+ * so every source in the registry is exercised through the live import path.
  * Deterministic, no network. Run: npm run api:test
  */
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { importPlugin } from "../src/lib/importers/plugin";
-import { PLUGINS } from "../src/lib/importers/registry";
+import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
 import { parseCsv } from "../src/lib/record";
 import { writeConfig, type AppConfig } from "../src/lib/config";
 import { CRED, FIXTURES, fetchForFixture } from "./api-fixtures";
@@ -32,9 +32,7 @@ async function main() {
   const recordDir = path.join(root, "record");
   const from = "2026-06-01";
   const to = "2026-06-30";
-  // Hermetic store: gdrive_backup's sync archives dataDir() itself, so the run
-  // must resolve to THIS temp root (with the passphrase its brain requires),
-  // never the real record.
+  // Hermetic store: every write must resolve to THIS temp root, never the real record.
   process.env.AGENTQS_DATA_DIR = root;
   writeConfig({
     username: "t",
@@ -45,9 +43,9 @@ async function main() {
     backup: { passphrase: "fixture-pass" },
   } as AppConfig);
 
-  console.log(`\nAPI-first — driving ${PLUGINS.length} API plugins through the real import path\n`);
+  console.log(`\nAPI-first — driving ${SOURCE_PLUGINS.length} API sources through the real import path\n`);
 
-  for (const plugin of PLUGINS) {
+  for (const plugin of SOURCE_PLUGINS) {
     const fx = FIXTURES[plugin.id];
     check(`${plugin.name}: has a fixture`, Boolean(fx));
     if (!fx) continue;
@@ -64,15 +62,18 @@ async function main() {
     if (!exists) continue;
 
     const { header, rows } = parseCsv(fs.readFileSync(file, "utf8"));
-    check(`${plugin.name}: header has date + ${plugin.primaryMetric}`,
-      header[0] === "date" && header.includes(plugin.primaryMetric),
+    // Every SOURCE lands a headline metric (only a backup target has none, and
+    // backup targets are not sources — they never reach this loop).
+    const metric = plugin.primaryMetric ?? "";
+    check(`${plugin.name}: header has date + ${metric}`,
+      Boolean(metric) && header[0] === "date" && header.includes(metric),
       header.join(","));
 
-    const mi = header.indexOf(plugin.primaryMetric);
+    const mi = header.indexOf(metric);
     const withMetric = rows.filter((r) => (r[mi] ?? "").trim() !== "" && Number.isFinite(Number(r[mi])));
-    check(`${plugin.name}: ${plugin.primaryMetric} has real numbers`,
+    check(`${plugin.name}: ${metric} has real numbers`,
       summary.rows > 0 && withMetric.length > 0,
-      `${withMetric.length} days, latest ${plugin.primaryMetric}=${withMetric.at(-1)?.[mi]}`);
+      `${withMetric.length} days, latest ${metric}=${withMetric.at(-1)?.[mi]}`);
 
     // The bug that hid "today": the summary feed only carries COMPLETED days, so
     // hours must come from the data API — assert the interval-only day (no pulse
@@ -116,7 +117,7 @@ async function main() {
     console.log(`\n✗ ${failures} check(s) failed.\n`);
     process.exit(1);
   }
-  console.log(`\n✓ API-first: all ${PLUGINS.length} API sources import through their API into the daily record.\n`);
+  console.log(`\n✓ API-first: all ${SOURCE_PLUGINS.length} API sources import through their API into the daily record.\n`);
 }
 
 void main();

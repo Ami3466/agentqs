@@ -39,6 +39,7 @@ import {
   mergeTokens,
   whoopFixtureFetch,
   whoopHrDir,
+  whoopLogin,
   WHOOP_RETIRED,
   type WhoopCreds,
 } from "./importers/whoop";
@@ -52,7 +53,7 @@ import {
 } from "./importers/plugin";
 import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
-import { pluginInstanceById, PLUGINS } from "./importers/registry";
+import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath, wantsFullHistory } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
@@ -289,7 +290,7 @@ export function storeMigrate(opts: { to?: string; dryRun?: boolean } = {}) {
 export function connectSource(id: string, credential: string): { id: string; saved: boolean } {
   const plugin = pluginInstanceById(id)?.plugin;
   if (!plugin && id !== "github") {
-    throw new Error(`Unknown API source "${id}". Try: github, ${PLUGINS.map((p) => p.id).join(", ")}`);
+    throw new Error(`Unknown API source "${id}". Try: github, ${SOURCE_PLUGINS.map((p) => p.id).join(", ")}`);
   }
   // The one rule: connected ⇔ a stored credential. There is NO keyless connect.
   if (!credential || !credential.trim()) throw new Error("Pass a credential to connect.");
@@ -345,7 +346,7 @@ export async function testSourceCredential(id: string, credential?: string): Pro
   }
   const inst = pluginInstanceById(id);
   if (!inst) {
-    throw new Error(`Unknown API source "${id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
+    throw new Error(`Unknown API source "${id}". Try: github, whoop, ${SOURCE_PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const { plugin, instanceId } = inst;
   // Include a DETECTED desktop-app token: testing is read-only, so probing it
@@ -443,7 +444,7 @@ export function sourceGuide(id: string): SourceGuide {
   }
   const inst = pluginInstanceById(id);
   if (!inst) {
-    throw new Error(`Unknown API source "${id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
+    throw new Error(`Unknown API source "${id}". Try: github, whoop, ${SOURCE_PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const { plugin, instanceId } = inst;
   return {
@@ -482,10 +483,17 @@ export async function whoopConnect(_email: string, _password: string): Promise<{
 
 /** Set a source's sync cadence — this is "set up an automated import". `off`,
  *  `hourly`, `daily`, `weekly`. API sources auto-sync when due; manual sources
- *  badge stale when overdue. */
+ *  badge stale when overdue. A backup target isn't a source: its cadence lives
+ *  under `config.backup` and only `setBackupInterval` may set it. */
 export function setInterval(id: string, interval: string): { id: string; interval: Interval } {
   if (!isValidInterval(interval)) {
     throw new Error(`Invalid interval "${interval}". Use: off, hourly, daily, weekly.`);
+  }
+  if (pluginInstanceById(id)?.plugin.backupTarget) {
+    throw new Error(
+      `${id} is a backup target, not a data source — set its cadence with \`agentqs backup drive --schedule ${interval}\` ` +
+        `(API: POST /api/backup {"target":"drive","schedule":"${interval}"}).`,
+    );
   }
   const cfg = requireConfig();
   cfg.sourceIntervals = { ...(cfg.sourceIntervals ?? {}), [id]: interval };
@@ -662,8 +670,17 @@ function landSyncInCache(rDir: string, change: SyncCacheChange): number {
 /** Run one API source now: fetch → merge → rebuild, persisting the sync time.
  *  `fixture` (a JSON file) drives it offline for GitHub-style ships-when tests. */
 export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
-  // Every attempt lands in the run ledger — success and failure — so the
-  // pipeline report and the Pipeline tab can tell a broken sync from a healthy one.
+  // A backup target is not a source: refuse BEFORE the ledgers, so a stray call
+  // can't leave a "failed sync" on something that never syncs.
+  if (pluginInstanceById(opts.id)?.plugin.backupTarget) {
+    throw new Error(
+      `${opts.id} is a backup target, not a data source — run \`agentqs backup drive\` ` +
+        '(API: POST /api/backup {"target":"drive"}).',
+    );
+  }
+  // Every attempt lands in the run ledger AND the job ledger — success and failure —
+  // so the pipeline report and the Pipeline tab can tell a broken sync from a healthy
+  // one, and a later successful scheduler run clears an earlier web failure off the row.
   try {
     const result = await syncSourceInner(opts);
     recordSyncRun(opts.id, true);
@@ -743,7 +760,7 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
 
   const inst = pluginInstanceById(opts.id);
   if (!inst) {
-    throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${PLUGINS.map((p) => p.id).join(", ")}`);
+    throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${SOURCE_PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const { plugin, instanceId } = inst;
   const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
@@ -785,7 +802,7 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
   const synced: SyncResult[] = [];
   const skipped: { id: string; reason: string }[] = [];
   const cfg = readConfig();
-  const candidates = ["github", "whoop", ...PLUGINS.filter((p) => p.live).map((p) => p.id)];
+  const candidates = ["github", "whoop", ...SOURCE_PLUGINS.filter((p) => p.live).map((p) => p.id)];
   // Extra accounts ("spotify-2") carry their own credential — sync them too.
   for (const key of Object.keys(cfg?.sourceCreds ?? {})) {
     const inst = pluginInstanceById(key);
@@ -1010,9 +1027,36 @@ export { onboardingGuide } from "./onboarding";
 
 // ---- off-site backups -----------------------------------------------------------
 
-/** GitHub snapshot branch + encrypted Drive archive + restore. The Drive RUN
- *  is `syncSource({id:"gdrive_backup"})` — the plugin's sync IS the backup. */
-export { backupGithub, backupStatus, setBackupPassphrase, setGithubBackupInterval } from "./backup";
+/** GitHub snapshot branch + encrypted Drive archive + restore. Backups are data
+ *  going OUT: neither target is a source, so neither shows up in the pipeline,
+ *  and both schedule under `config.backup` (`setBackupInterval`). */
+export { backupGithub, backupStatus, setBackupPassphrase, setBackupInterval } from "./backup";
+
+/** A fresh Drive access token from the stored grant — minted per run (the pasted
+ *  one dies within hours). Absent grant = not connected, and no backup runs. */
+async function driveCredential(): Promise<string> {
+  const inst = pluginInstanceById("gdrive_backup");
+  const credential = inst
+    ? await resolveSyncCredentialFresh(inst.plugin, undefined, readConfig(), inst.instanceId)
+    : undefined;
+  if (!credential) {
+    throw new Error(
+      "Google Drive backup isn't connected — Settings → Data → Google Drive, or " +
+        "`agentqs source authorize gdrive_backup --client-id <id> --client-secret <secret>`.",
+    );
+  }
+  return credential;
+}
+
+/** Run the Drive backup NOW: tar + AES-256-GCM the whole store, upload one
+ *  archive, rotate to the newest `keep`. This is a BACKUP, not a sync — it
+ *  reads the record and writes nothing back into it (a receipt row would be
+ *  bookkeeping masquerading as captured data); the outcome lands in
+ *  `config.backup.drive` and reads back from `backupStatus()`. */
+export async function backupDrive(): Promise<import("./backup").DriveBackupResult> {
+  const { runDriveBackup } = await import("./backup");
+  return runDriveBackup({ credential: await driveCredential() });
+}
 
 /** Decrypt + unpack an archive — into a FRESH directory (`out`), or with
  *  `intoStore` straight into the LIVE store (record replaced + retired beside
@@ -1027,16 +1071,7 @@ export async function backupRestore(opts: {
   intoStore?: boolean;
 }) {
   const { restoreArchive, restoreIntoStore } = await import("./backup");
-  let credential: string | undefined;
-  if (opts.latest) {
-    const inst = pluginInstanceById("gdrive_backup");
-    credential = inst
-      ? await resolveSyncCredentialFresh(inst.plugin, undefined, readConfig(), inst.instanceId)
-      : undefined;
-    if (!credential) {
-      throw new Error("Google Drive backup isn't connected — authorize gdrive_backup in Pipeline → Connect first.");
-    }
-  }
+  const credential = opts.latest ? await driveCredential() : undefined;
   if (opts.intoStore) {
     return restoreIntoStore({ file: opts.file, latest: opts.latest, credential, passphrase: opts.passphrase });
   }

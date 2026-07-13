@@ -14,7 +14,7 @@ import path from "path";
 import type { AppConfig } from "./config";
 import { recordDir } from "./paths";
 import { parseGithubCsv, resolveGithubToken } from "./importers/github";
-import { PLUGINS } from "./importers/registry";
+import { PLUGINS, SOURCE_PLUGINS } from "./importers/registry";
 import { connectionState } from "./importers/plugin";
 import { readSyncRuns } from "./sync-runs";
 import { readSyncJobs, type SyncJob } from "./sync-jobs";
@@ -422,10 +422,13 @@ export function buildSources(cfg: AppConfig | null, dir: string = recordDir()): 
   runsSnapshot = readSyncRuns(); // one ledger read per pass, not per row
   jobsSnapshot = readSyncJobs();
   const out: SourceView[] = [githubRow(cfg, dir), whoopRow(cfg, dir)];
-  const owned = new Set<string>(["github", "whoop"]);
-  for (const plugin of PLUGINS) {
+  // Every plugin id is CLAIMED (so no stray record CSV resurfaces as an unknown
+  // import), but only the SOURCES get a row: a backup target (Google Drive)
+  // borrows the plugin contract for its OAuth machinery and brings no data in.
+  // The pipeline is data coming IN; backups live in Settings → Data.
+  const owned = new Set<string>(["github", "whoop", ...PLUGINS.map((p) => p.id)]);
+  for (const plugin of SOURCE_PLUGINS) {
     out.push(pluginRow(cfg, dir, plugin));
-    owned.add(plugin.id);
     for (const instanceId of pluginInstanceIds(cfg, dir, plugin)) {
       out.push(pluginRow(cfg, dir, plugin, instanceId));
       owned.add(instanceId);

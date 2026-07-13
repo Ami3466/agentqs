@@ -562,15 +562,18 @@ export const Granola = (p: P) => (
   </svg>
 );
 
-/** One monochrome brand mark per source id, shared by every Pipeline-tab source row
- *  so the catalog + automated-imports lists read the same (never a letter-box). */
+/** Google Drive's real mark — the three faces of the Drive triangle (the left and
+ *  right diagonal bands and the bottom band), traced from the official logo and
+ *  flattened to one monochrome fill. Backup target, not a source: it lives in
+ *  Settings → Data, never in SOURCE_ICONS. */
 export const GoogleDrive = (p: P) => (
-  <svg {...base} {...p}>
-    <path d="M8.6 3.5h6.8L22 15.2l-3.1 5.3H5.1L2 15.2 8.6 3.5Z" />
-    <path d="M8.6 3.5 12.1 9.7M22 15.2H8.5M5.1 20.5l3.4-5.8" />
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M7.71 3.5 1.15 15l3.42 6 6.57-11.5L7.71 3.5ZM16.29 3.5H9.59l6.56 11.5h6.7L16.29 3.5ZM8.31 16.5l-3.43 6h13.12l3.42-6H8.31Z" />
   </svg>
 );
 
+/** One monochrome brand mark per source id, shared by every Pipeline-tab source row
+ *  so the catalog + automated-imports lists read the same (never a letter-box). */
 export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   github: GitHub,
   rescuetime: RescueTime,
@@ -595,7 +598,6 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   granola: Granola,
   "health-connect": ShieldHeart,
   "apple-weather": Apple,
-  gdrive_backup: GoogleDrive,
   // Tier-2 file importers keep their real marks when they hold data.
   chrome: Chrome,
   iphone: Apple,

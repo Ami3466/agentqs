@@ -4,11 +4,14 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { pipeline } from "stream/promises";
-import { readConfig, writeConfig } from "./config";
+import { readConfig, writeConfig, type AppConfig } from "./config";
 import { dataDir, recordDir } from "./paths";
 import { rebuild } from "./record";
 import { isDue, isValidInterval, type Interval } from "./sources";
 import type { FetchLike } from "./importers/plugin";
+
+/** The two off-site targets. Both are data going OUT — neither is a source. */
+export type BackupTarget = "github" | "drive";
 
 /**
  * Off-site backups — two targets that together cover every byte that matters:
@@ -146,13 +149,36 @@ export function setBackupPassphrase(opts: { value?: string; generate?: boolean }
 
 /** The GitHub switch: on = ride `sync --due` daily, off = paused. Remote and
  *  token stay saved either way, so flipping back on is instant. */
-export function setGithubBackupInterval(interval: string): { interval: Interval } {
+export function setBackupInterval(target: BackupTarget, interval: string): { target: BackupTarget; interval: Interval } {
   if (!isValidInterval(interval)) throw new Error("Schedule must be off | hourly | daily | weekly.");
   const cfg = readConfig();
   if (!cfg) throw new Error("agentqs isn't set up yet — run the app once (or POST /api/setup) first.");
-  cfg.backup = { ...(cfg.backup ?? {}), github: { remote: "", ...(cfg.backup?.github ?? {}), interval } };
+  const backup = cfg.backup ?? {};
+  cfg.backup =
+    target === "github"
+      ? { ...backup, github: { remote: "", ...(backup.github ?? {}), interval } }
+      : { ...backup, drive: { ...(backup.drive ?? {}), interval } };
+  // A legacy store scheduled Drive as if it were a source — drop that key so the
+  // two never disagree about the cadence.
+  if (target === "drive" && cfg.sourceIntervals?.["gdrive_backup"]) delete cfg.sourceIntervals["gdrive_backup"];
   writeConfig(cfg);
-  return { interval };
+  return { target, interval };
+}
+
+/** The Drive cadence, honoring stores written before backups moved out of
+ *  `sourceIntervals` (both targets now schedule under `config.backup`). */
+export function driveBackupInterval(cfg: AppConfig | null = readConfig()): Interval {
+  const own = cfg?.backup?.drive?.interval;
+  if (isValidInterval(own)) return own;
+  const legacy = cfg?.sourceIntervals?.["gdrive_backup"];
+  return isValidInterval(legacy) ? legacy : "off";
+}
+
+/** Is Drive backup authorized? The connection rule, unchanged: a stored
+ *  credential (the OAuth grant IS one) — never landed data, never a schedule. */
+export function driveBackupConnected(cfg: AppConfig | null = readConfig()): boolean {
+  const grant = cfg?.sourceOAuth?.["gdrive_backup"];
+  return Boolean(grant?.refreshToken || grant?.accessToken || cfg?.sourceCreds?.["gdrive_backup"]);
 }
 
 function requirePassphrase(): string {
@@ -349,6 +375,28 @@ interface DriveFile {
   size?: string;
 }
 
+/**
+ * Google answers a failure with a pretty-printed JSON envelope. Pasted raw into
+ * an error, ONE failed upload turns `backup status` into eight lines of braces
+ * with the actual reason buried (and truncated mid-object). Keep what Google
+ * actually said, on ONE line — an error is a sentence the user reads, not a
+ * dump. Exported: the plugin's probe reports the same way.
+ */
+export function driveErrorDetail(body: string): string {
+  const text = body.trim();
+  let detail = "";
+  try {
+    const err = (JSON.parse(text) as { error?: { message?: string } | string }).error;
+    detail = (typeof err === "string" ? err : err?.message) ?? "";
+  } catch {
+    /* not JSON (an HTML error page, an empty body) — fall through to the raw text */
+  }
+  const line = (detail || text).replace(/\s+/g, " ").trim();
+  if (!line) return "no response body";
+  // Cut at a word boundary — a hard slice ends mid-URL, which reads like corruption.
+  return line.length <= 200 ? line : `${line.slice(0, 200).replace(/\s+\S*$/, "")}…`;
+}
+
 async function driveJson(
   fetchImpl: FetchLike,
   token: string,
@@ -359,7 +407,11 @@ async function driveJson(
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
   });
-  if (!res.ok) throw new Error(`Drive ${init?.method ?? "GET"} ${url.split("?")[0]} → HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) {
+    throw new Error(
+      `Drive ${init?.method ?? "GET"} ${url.split("?")[0]} → HTTP ${res.status}: ${driveErrorDetail(await res.text())}`,
+    );
+  }
   const text = await res.text();
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
@@ -448,7 +500,7 @@ export async function runDriveBackup(opts: DriveBackupOpts): Promise<DriveBackup
       body: JSON.stringify({ name, parents: [folderId] }),
     });
     if (!initiate.ok) {
-      throw new Error(`Drive upload initiate → HTTP ${initiate.status}: ${(await initiate.text()).slice(0, 300)}`);
+      throw new Error(`Drive upload initiate → HTTP ${initiate.status}: ${driveErrorDetail(await initiate.text())}`);
     }
     const session = initiate.headers.get("location");
     if (!session) throw new Error("Drive resumable upload returned no session URL.");
@@ -457,7 +509,7 @@ export async function runDriveBackup(opts: DriveBackupOpts): Promise<DriveBackup
       headers: { "Content-Type": "application/octet-stream" },
       body: fs.readFileSync(outFile),
     });
-    if (!put.ok) throw new Error(`Drive upload → HTTP ${put.status}: ${(await put.text()).slice(0, 300)}`);
+    if (!put.ok) throw new Error(`Drive upload → HTTP ${put.status}: ${driveErrorDetail(await put.text())}`);
 
     const keep = readConfig()?.backup?.drive?.keep ?? 8;
     const archives = await listArchives(fetchImpl, opts.credential, folderId);
@@ -632,6 +684,7 @@ export interface BackupStatusView {
     passphraseSet: boolean;
     keep: number;
     interval: Interval;
+    dueNow: boolean;
     lastAt: string | null;
     lastFile?: string;
     lastError?: string;
@@ -642,8 +695,9 @@ export function backupStatus(): BackupStatusView {
   const cfg = readConfig();
   const gh = cfg?.backup?.github;
   const dr = cfg?.backup?.drive;
-  const grant = cfg?.sourceOAuth?.["gdrive_backup"];
   const ghInterval: Interval = gh?.interval ?? "daily";
+  const drInterval = driveBackupInterval(cfg);
+  const drConnected = driveBackupConnected(cfg);
   return {
     github: {
       configured: Boolean(gh?.remote),
@@ -656,10 +710,11 @@ export function backupStatus(): BackupStatusView {
       lastError: gh?.lastError,
     },
     drive: {
-      connected: Boolean(grant?.refreshToken || grant?.accessToken || cfg?.sourceCreds?.["gdrive_backup"]),
+      connected: drConnected,
       passphraseSet: Boolean(cfg?.backup?.passphrase),
       keep: dr?.keep ?? 8,
-      interval: cfg?.sourceIntervals?.["gdrive_backup"] ?? "off",
+      interval: drInterval,
+      dueNow: drConnected && isDue(dr?.lastAt ?? null, drInterval),
       lastAt: dr?.lastAt ?? null,
       lastFile: dr?.lastFile,
       lastError: dr?.lastError,

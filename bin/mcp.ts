@@ -294,16 +294,23 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     "backup_run",
     {
-      title: "Run a backup now",
+      title: "Run a backup now (or set its cadence)",
       description:
         "target \"github\" snapshots the plain-text record and pushes it to the configured private repo (files over GitHub's " +
         "100MB limit are excluded loudly — the Drive archive covers them); target \"drive\" tars the WHOLE store, encrypts it " +
         "(AES-256-GCM with the configured passphrase) and uploads one archive via the gdrive_backup grant, rotating old ones. " +
-        "Both also run on schedule (`sync --due` / the source interval) — this is the run-it-now face.",
-      inputSchema: { target: z.enum(["github", "drive"]) },
+        "Pass `schedule` to only set the cadence `sync --due` sweeps (off|hourly|daily|weekly) without running one now. " +
+        "A backup is data going OUT: neither target is a data source, so neither appears in `pipeline`/`sources`.",
+      inputSchema: {
+        target: z.enum(["github", "drive"]),
+        schedule: z.enum(["off", "hourly", "daily", "weekly"]).optional(),
+      },
     },
-    async ({ target }) =>
-      guard(() => (target === "github" ? core.backupGithub({}) : core.syncSource({ id: "gdrive_backup" }))),
+    async ({ target, schedule }) =>
+      guard(() => {
+        if (schedule !== undefined) return core.setBackupInterval(target, schedule);
+        return target === "github" ? core.backupGithub({}) : core.backupDrive();
+      }),
   );
 
   server.registerTool(

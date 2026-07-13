@@ -1,7 +1,8 @@
+import { backupStatus } from "./backup";
 import { readConfig } from "./config";
 import { recordDir } from "./paths";
 import { buildSources } from "./source-registry";
-import { isDue, type SourceView } from "./sources";
+import { type SourceView } from "./sources";
 import { recordDueRun } from "./sync-runs";
 
 /**
@@ -19,6 +20,8 @@ import { recordDueRun } from "./sync-runs";
 export interface DueRunners {
   api: (id: string) => Promise<unknown>;
   automation: (id: string) => Promise<unknown>;
+  /** The Drive backup — a target, not a source, so it gets its own runner. */
+  backup: () => Promise<unknown>;
 }
 
 export interface DueResult {
@@ -41,6 +44,7 @@ async function defaultRunners(): Promise<DueRunners> {
   return {
     api: (id) => core.syncSource({ id }),
     automation: (id) => core.automationRun({ id }),
+    backup: () => core.backupDrive(),
   };
 }
 
@@ -69,18 +73,32 @@ export async function syncDue(runners?: DueRunners, dir: string = recordDir()): 
       failed.push({ id: s.id, name: s.name, kind, ok: false, error: (e as Error).message });
     }
   }
-  // The GitHub record backup rides the same sweep: not a source (no credential
-  // row, no daily CSV), but due-ness and failure visibility work identically —
-  // a failing push shows up next to a failing sync, never silently. The Drive
-  // backup needs no hook here: gdrive_backup IS a scheduled source above.
-  const gh = readConfig()?.backup?.github;
-  if (gh?.remote && isDue(gh.lastAt ?? null, gh.interval ?? "daily")) {
+  // Both off-site BACKUPS ride the same sweep — neither is a source (no source
+  // row, no daily CSV: they move data OUT, they don't bring any in), but
+  // due-ness and failure visibility work identically, so a failing push or
+  // upload shows up next to a failing sync, never silently.
+  const backup = backupStatus();
+  if (backup.github.dueNow) {
     try {
       const { backupGithub } = await import("./backup");
       await backupGithub();
       synced.push({ id: "backup_github", name: "GitHub backup", kind: "api", ok: true });
     } catch (e) {
       failed.push({ id: "backup_github", name: "GitHub backup", kind: "api", ok: false, error: (e as Error).message });
+    }
+  }
+  if (backup.drive.dueNow) {
+    try {
+      await run.backup();
+      synced.push({ id: "backup_drive", name: "Google Drive backup", kind: "api", ok: true });
+    } catch (e) {
+      failed.push({
+        id: "backup_drive",
+        name: "Google Drive backup",
+        kind: "api",
+        ok: false,
+        error: (e as Error).message,
+      });
     }
   }
   return { due: synced.length + failed.length, synced, failed, skipped };

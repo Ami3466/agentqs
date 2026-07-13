@@ -699,7 +699,7 @@ backup
   .action(async (opts: { remote?: string; branch?: string; token?: string; schedule?: string }) => {
     try {
       if (opts.schedule !== undefined) {
-        out(core.setGithubBackupInterval(opts.schedule), (d) => `GitHub backup schedule: ${d.interval}.`);
+        out(core.setBackupInterval("github", opts.schedule), (d) => `GitHub backup schedule: ${d.interval}.`);
         return;
       }
       out(await core.backupGithub(opts), (d) => d.message);
@@ -709,10 +709,19 @@ backup
   });
 backup
   .command("drive")
-  .description("encrypt the store and upload one archive to Drive now (connect gdrive_backup + set a passphrase first)")
-  .action(async () => {
+  .description("encrypt the whole store and upload one archive to Drive now (authorize gdrive_backup + set a passphrase first)")
+  .option("--schedule <interval>", "just set the cadence (off|hourly|daily|weekly) without uploading")
+  .action(async (opts: { schedule?: string }) => {
     try {
-      out(await core.syncSource({ id: "gdrive_backup" }), (d) => `Archive uploaded — receipt on ${d.to} (${d.cells} cell).`);
+      if (opts.schedule !== undefined) {
+        out(core.setBackupInterval("drive", opts.schedule), (d) => `Drive backup schedule: ${d.interval}.`);
+        return;
+      }
+      out(
+        await core.backupDrive(),
+        (d) =>
+          `Archive uploaded: ${d.file} (${d.mb} MB)${d.rotation.deleted.length ? `; rotated out ${d.rotation.deleted.length}` : ""}.`,
+      );
     } catch (e) {
       die(e);
     }
@@ -742,7 +751,7 @@ backup
         const dr = d.drive;
         return [
           `github  ${gh.configured ? `→ ${gh.remote} (${gh.branch}), ${gh.interval}` : "not configured — `agentqs backup github --remote <url>`"}${gh.lastAt ? `, last ${gh.lastAt}` : ""}${gh.lastError ? `\n        LAST ERROR: ${gh.lastError}` : ""}`,
-          `drive   ${dr.connected ? "connected" : "not connected — authorize gdrive_backup in Pipeline → Connect"}, passphrase ${dr.passphraseSet ? "set" : "NOT SET"}, schedule ${dr.interval}, keep ${dr.keep}${dr.lastAt ? `, last ${dr.lastAt} (${dr.lastFile})` : ""}${dr.lastError ? `\n        LAST ERROR: ${dr.lastError}` : ""}`,
+          `drive   ${dr.connected ? "connected" : "not connected — `agentqs source authorize gdrive_backup --client-id <id> --client-secret <secret>`"}, passphrase ${dr.passphraseSet ? "set" : "NOT SET"}, schedule ${dr.interval}, keep ${dr.keep}${dr.lastAt ? `, last ${dr.lastAt} (${dr.lastFile})` : ""}${dr.lastError ? `\n        LAST ERROR: ${dr.lastError}` : ""}`,
         ].join("\n");
       });
     } catch (e) {
