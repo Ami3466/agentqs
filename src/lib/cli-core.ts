@@ -40,7 +40,6 @@ import {
   whoopFixtureFetch,
   whoopHrDir,
   whoopLogin,
-  WHOOP_RETIRED,
   type WhoopCreds,
 } from "./importers/whoop";
 import {
@@ -433,11 +432,11 @@ export function sourceGuide(id: string): SourceGuide {
   if (id === "whoop") {
     return {
       id, name: "WHOOP (per-minute, unofficial)", credentialLabel: "email + password",
-      url: "https://developer-dashboard.whoop.com",
+      url: "https://app.whoop.com",
       steps: [
-        "RETIRED UPSTREAM: WHOOP deleted the unofficial app-login endpoint (api-7.whoop.com) — email + password can no longer sync.",
-        "Use the official WHOOP API row instead: 'agentqs source guide whoop-api' — recovery, strain & sleep via OAuth.",
-        "Per-minute heart rate has no server-reachable API anymore; a browser automation could bring it back later.",
+        "Your WHOOP app login — the same email + password you use in the WHOOP app. It is stored in config (0600) and minted into rotating tokens on the first sync.",
+        "This is the ONLY source of per-minute heart rate (recovery/strain/sleep also land). The official WHOOP API row (OAuth) has no per-minute stream.",
+        "If the login fails with a network/DNS error, api-7.whoop.com is unreachable FROM THAT MACHINE — that is not your password, and it can differ between your laptop and a hosted instance.",
       ],
       oauth: false, redirectUriHint,
     };
@@ -472,13 +471,21 @@ export function connectDetectedApp(id: string): { id: string; saved: boolean } {
   return connectSource(id, credential);
 }
 
-/** WHOOP's unofficial app login (email + password → per-minute HR) is RETIRED
- *  UPSTREAM: api-7.whoop.com no longer resolves. Connecting it can only ever fail,
- *  and the DNS failure reads to the user as "wrong password" — so no surface takes
- *  a WHOOP password any more. It fails here, in the one brain, for every face.
- *  The official WHOOP API row (`whoop-api`, OAuth) is the connect that works. */
-export async function whoopConnect(_email: string, _password: string): Promise<{ email: string; saved: boolean }> {
-  throw new Error(WHOOP_RETIRED);
+/** Connect WHOOP via the unofficial app login — stores email + password (config
+ *  0600, never committed); tokens are minted + rotated on the first sync. Two
+ *  fields, so it's separate from the single-credential connectSource. */
+export async function whoopConnect(email: string, password: string): Promise<{ email: string; saved: boolean }> {
+  if (!email?.trim() || !password?.trim()) {
+    throw new Error("WHOOP needs both an email and a password.");
+  }
+  // Prove the login BEFORE storing — the connect invariant (only a working
+  // credential is ever saved). Keeping the minted tokens also spares the
+  // first sync a second login.
+  const session = await whoopLogin(email.trim(), password.trim());
+  const cfg = requireConfig();
+  cfg.whoopCreds = mergeTokens({ ...(cfg.whoopCreds ?? {}), email: email.trim(), password: password.trim() }, session);
+  writeConfig(cfg);
+  return { email: email.trim(), saved: true };
 }
 
 /** Set a source's sync cadence — this is "set up an automated import". `off`,
@@ -728,9 +735,7 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
       fetchImpl = whoopFixtureFetch(data);
       if (!creds?.email) creds = { email: "fixture@whoop", password: "x" };
     }
-    // Retired upstream — only the fixture path (tests) still runs the importer.
-    if (!fetchImpl) throw new Error(WHOOP_RETIRED);
-    if (!(creds?.email && (creds.password || creds.refreshToken))) {
+    if (!fetchImpl && !(creds?.email && (creds.password || creds.refreshToken))) {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
     progress("pulling WHOOP days + per-minute heart rate", 15);
