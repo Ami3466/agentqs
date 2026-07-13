@@ -403,6 +403,22 @@ source
   });
 
 source
+  .command("authorize <id>")
+  .description("start the OAuth dance from the CLI: prints the URL to approve; the RUNNING app's callback stores the grant")
+  .requiredOption("--client-id <id>", "the provider app's client id")
+  .requiredOption("--client-secret <secret>", "the provider app's client secret")
+  .option("--origin <url>", "where the app is running (default http://127.0.0.1:3000) — the callback lands there")
+  .action((id: string, opts: { clientId: string; clientSecret: string; origin?: string }) => {
+    try {
+      out(core.sourceAuthorize(id, opts.clientId, opts.clientSecret, opts.origin), (d) =>
+        `Redirect URI the provider app must have registered: ${d.redirectUri}\nOpen to approve:\n  ${d.authorizeUrl}\n${d.note}`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+source
   .command("interval <id> <interval>")
   .description("schedule an automated import: off | hourly | daily | weekly")
   .action((id: string, interval: string) => {
@@ -555,6 +571,27 @@ program
         return;
       }
       out(await core.importRaw({ file: target, name: opts.name }), (d) => d.note);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
+  .command("onboarding")
+  .description("the live setup checklist — every step with its exact CLI / MCP / API call and whether it's done")
+  .action(() => {
+    try {
+      out(core.onboardingGuide(), (d) => {
+        const lines: string[] = [];
+        for (const s of d.steps) {
+          lines.push(`${s.done === null ? "·" : s.done ? "✓" : "○"} ${s.title} — ${s.why}`);
+          if (s.cli) lines.push(`    cli: ${s.cli}`);
+          if (s.mcp) lines.push(`    mcp: ${s.mcp}`);
+          if (s.api) lines.push(`    api: ${s.api}`);
+        }
+        lines.push(d.nextStep ? `\nNext: ${d.nextStep}` : "\nAll set.");
+        return lines.join("\n");
+      });
     } catch (e) {
       die(e);
     }

@@ -12,7 +12,18 @@ export const SYNC_CMD = "agentqs sync --source github";
 // browser automations) — the same dueness the app checks on open.
 export const CRON_CMD = "0 * * * * agentqs sync --due";
 export const skillSnip = (b: string, k: string) =>
-  `---\nname: agentqs\ndescription: Query the agentqs life-record.\n---\nAPI ${b}, header: authorization: Bearer ${k}\n- POST /api/chat {"message":"…"}   - GET /api/journal   - POST /api/inbox {"text":"…"}   - POST /api/scan {}`;
+  [
+    "---",
+    "name: agentqs",
+    "description: Query and manage the agentqs life-record.",
+    "---",
+    `API ${b}, header: authorization: Bearer ${k}`,
+    "Setting up or auditing the instance? GET /api/onboarding FIRST — every step in order with its exact CLI/MCP/API call and a done flag.",
+    '- Ask: POST /api/chat {"message":"…"} · read: GET /api/journal · GET /api/pipeline (is a source REALLY connected?)',
+    '- Capture: POST /api/inbox {"text":"…"} · structure: POST /api/structure {"id","csv"} · quality: POST /api/scan {}',
+    '- Backups: GET /api/backup (status) · POST /api/backup {"target":"github"|"drive"} · migrate here: {"target":"restore","confirm":"replace-record"}',
+    '- Connect a source: POST /api/import/<id> {"credential"} (tested before saved) · OAuth: POST /api/oauth/<id> {"clientId","clientSecret"}',
+  ].join("\n");
 
 /** Ready-to-paste prompt: hands an AI the data-quality endpoints plus the
  *  apply-vs-dismiss criteria, so it can drive the cleanup decisions. The prompt

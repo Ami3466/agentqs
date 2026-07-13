@@ -41,7 +41,7 @@ import {
   type FetchLike,
 } from "./importers/plugin";
 import type { JobProgress } from "./sync-jobs";
-import { freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
+import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath, wantsFullHistory } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
@@ -363,6 +363,31 @@ export async function testSourceCredential(id: string, credential?: string): Pro
     name: plugin.name,
     ok: true,
     detail: `${result.table.rows.length} day(s) reachable in the last 3`,
+  };
+}
+
+/** The OAuth dance, started from the CLI/MCP instead of the web connect form —
+ *  same beginOAuth underneath (app creds + state stored in config). The user
+ *  opens the returned URL; the RUNNING app at `origin` receives the callback
+ *  and stores the grant, so the provider app must have the redirect URI
+ *  registered and the app must be up when the browser bounces back. */
+export function sourceAuthorize(
+  id: string,
+  clientId: string,
+  clientSecret: string,
+  origin = "http://127.0.0.1:3000",
+): { id: string; authorizeUrl: string; redirectUri: string; note: string } {
+  if (!clientId?.trim() || !clientSecret?.trim()) {
+    throw new Error("Pass --client-id and --client-secret (from the provider's developer console).");
+  }
+  const base = origin.trim().replace(/\/$/, "");
+  const r = beginOAuth(id, clientId.trim(), clientSecret.trim(), base);
+  return {
+    id,
+    ...r,
+    note:
+      `Open the URL and approve access; the app running at ${base} completes the connection. ` +
+      `The provider app must have ${r.redirectUri} registered as a redirect URI.`,
   };
 }
 
@@ -959,6 +984,10 @@ export { importTree } from "./import-tree";
 /** The index audit: deterministic evidence (impossible dates, one-day sources,
  *  coverage holes, stale sources, outliers) for an AI review pass. Read-only. */
 export { auditIndex } from "./audit";
+
+/** The live onboarding checklist: every setup step with its exact CLI / MCP /
+ *  API call and a `done` flag derived from real state. Agents start here. */
+export { onboardingGuide } from "./onboarding";
 
 // ---- off-site backups -----------------------------------------------------------
 
