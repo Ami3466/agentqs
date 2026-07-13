@@ -77,9 +77,15 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   branches/history never leave the machine; files past GitHub's 100MB limit
   are excluded LOUDLY and named in the result); `backup drive` uploads the
   whole store (record + config.json) as ONE tar+AES-256-GCM archive to Google
-  Drive, rotated to the newest `keep` (8). Drive connects like any OAuth
-  source (`gdrive_backup`, drive.file scope) and rides the source interval;
-  the GitHub side rides `sync --due` (daily). `backup passphrase --generate`
+  Drive, rotated to the newest `keep` (8). BACKUP IS NOT THE PIPELINE: a
+  backup target moves data OUT, so Google Drive never appears as a source, is
+  never listed by `pipeline`/`sources`, and lands NOTHING in the record -
+  syncing or scheduling it as a source is refused. It only borrows the OAuth
+  dance to hold its credential (`source authorize gdrive_backup`, drive.file
+  scope). Both targets schedule under `config.backup` and ride `sync --due`:
+  `backup github --schedule daily|off`, `backup drive --schedule daily|off`.
+  (A Drive that IMPORTS files would be a separate, ordinary source - pulling
+  data in has nothing to do with backup.) `backup passphrase --generate`
   first - archives are unreadable without it. `backup restore <file>|--latest
   --out <dir>` decrypts into a FRESH dir; `--into-store` instead REPLACES the
   live record with the archive's (previous record retired beside the store,
@@ -89,9 +95,11 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   "confirm":"replace-record"}`). `backup status` = "when did my data last
   leave this machine?". The Settings -> Data switches map 1:1 to the CLI:
   GitHub on/off = `backup github --schedule daily|off`, Drive on/off =
-  `source interval gdrive_backup daily|off`, Drive connect = `source authorize
-  gdrive_backup ...`. MCP: `backup_run`, `backup_status`, `backup_restore`;
-  API: GET/POST `/api/backup`.
+  `backup drive --schedule daily|off`, Drive connect = `source authorize
+  gdrive_backup ...`. MCP: `backup_run` (`{"target","schedule"}`),
+  `backup_status`, `backup_restore`; API: GET/POST `/api/backup` (the Drive
+  run answers 202 + a background job - a multi-minute upload survives a
+  reload; poll GET).
 - `agentqs audit` - index audit: DETERMINISTIC evidence for an AI review pass -
   impossible dates, single-day sources, coverage holes, gone-quiet sources,
   outlier values. YOU judge each finding (real quiet vs dead import, unit bug
@@ -116,8 +124,10 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form
   shows the same guide (it lives once, on the plugin's `credentialHelp`).
-- OAuth sources (spotify, gcal, fitbit, strava, whoop-api, withings, trakt,
-  gdrive_backup - expiring/rotating tokens): connect via the authorize dance -
+- OAuth sources (spotify, gcal, fitbit, strava, whoop-api, withings, trakt -
+  expiring/rotating tokens; plus `gdrive_backup`, which is a BACKUP TARGET, not
+  a source: same dance, but its face is Settings -> Data / `agentqs backup`):
+  connect via the authorize dance -
   in the web app the form shows the redirect URI to register and takes the
   user's app client id + secret (POST `/api/oauth/<id>` -> authorize URL ->
   GET `/api/oauth/callback` stores the grant), or start it from the CLI/MCP:
@@ -128,8 +138,26 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   (Trakt syncs get the plugin's `<client_id>:<token>` format). Pasted access
   tokens still work but die within hours - steer users to Authorize.
 - WHOOP unofficial (email + password, per-minute HR) is RETIRED upstream -
-  api-7.whoop.com no longer exists; the login fails with a message steering to
-  the official whoop-api row. Don't debug the password.
+  api-7.whoop.com no longer exists, so NO face takes a password any more:
+  `whoopConnect` / POST `/api/import/whoop` refuse with the retired message, the
+  row renders as a headstone (kept data + Remove, no form) and the scheduler
+  never runs it. Don't debug the password. Use the official whoop-api row.
+- A source sync PATCHES the cache (`refreshSyncCache`), never rebuilds it: a full
+  rebuild re-reads the whole record (events.jsonl alone can be hundreds of MB)
+  and rewrites the DB synchronously, which blocks every other request for
+  minutes on a real record - a 50-track Spotify pull once took the hosted app
+  down that way. Only `agentqs rebuild` (and the first import, when no cache
+  exists) rebuilds. Anything landing rows in the record must patch the cache the
+  same way.
+- Hosted instances: the app is behind a reverse proxy, so an absolute URL must
+  come from the FORWARDED headers (`requestOrigin`, src/lib/request-origin.ts) -
+  Next's standalone server builds `req.url` from HOSTNAME+PORT, and an OAuth
+  callback that trusts it redirects the user to `https://0.0.0.0:3000`. The
+  Docker image is Debian (glibc), NOT alpine: onnxruntime (local embeddings /
+  `recall`) has no musl build, and `backup github` needs the real `git`.
+- Importer HTTP goes through `netFetch` (plugin.ts): it retries a transient
+  network failure (a cold container's first DNS lookup) and names the real cause
+  instead of undici's bare "fetch failed", which reads like a bad credential.
 - `agentqs source test <id> [credential]` - prove a credential against the real
   API (one probe, nothing saved). `source connect` runs it first, so only a
   WORKING key is ever stored; the web connect + POST `/api/import/<id>` do the

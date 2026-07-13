@@ -6,6 +6,7 @@ import {
   removeEventsBySource,
   type AppendEventInput,
   type DailyMergeResult,
+  type EventItem,
 } from "../record";
 import { recordDir } from "../paths";
 
@@ -237,6 +238,11 @@ export interface PluginImportSummary extends DailyMergeResult {
   daysWithData: number; // distinct dates the incoming window wrote
   eventsAdded: number; // new journal events (0 for a daily-metrics-only source)
   extraSources: string[]; // extra daily files written, e.g. ["granola_texts"]
+  /** Exactly what changed in the record — lets the caller patch the SQLite cache
+   *  for this sync instead of rebuilding it from the whole record (see
+   *  record.refreshSyncCache). */
+  appendedEvents: EventItem[];
+  eventsReplaced?: { source: string; from: string; to: string };
   meta?: Record<string, unknown>;
 }
 
@@ -275,10 +281,15 @@ export async function importPlugin(
   // A mutable-events source (Granola) re-derives its records each sync, so replace
   // its window before appending — otherwise the id dedup would keep the stale copy
   // and a re-summarized meeting would never update on the timeline.
-  if (plugin.mutableEvents) {
+  const eventsReplaced = plugin.mutableEvents
+    ? { source: fileId, from: ctx.from, to: ctx.to }
+    : undefined;
+  if (eventsReplaced) {
     removeEventsBySource(fileId, { recordDir: dir, from: ctx.from, to: ctx.to });
   }
-  const eventsAdded = events.length ? appendEvents(events, { recordDir: dir }).added : 0;
+  const appended = events.length ? appendEvents(events, { recordDir: dir }) : null;
+  const eventsAdded = appended?.added ?? 0;
+  const appendedEvents = appended?.items ?? [];
 
   return {
     ...merge,
@@ -289,6 +300,8 @@ export async function importPlugin(
     daysWithData: merge.dates.length,
     eventsAdded,
     extraSources,
+    appendedEvents,
+    eventsReplaced,
     meta: result.meta,
   };
 }
@@ -311,13 +324,67 @@ export function inWindow(date: string, from: string, to: string): boolean {
   return date >= from && date <= to;
 }
 
+/** undici throws a bare `TypeError: fetch failed` for EVERY transport failure —
+ *  DNS not up yet in a cold container, a dropped socket, a refused connection —
+ *  and hides the real reason in `.cause`. Unwrapped, it reaches the user as
+ *  "Spotify recently-played → fetch failed", which reads like a bad credential
+ *  and isn't one. */
+function networkCause(e: unknown): string | null {
+  const parts: string[] = [];
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur instanceof Error; i++) {
+    const code = (cur as NodeJS.ErrnoException).code;
+    parts.push(code ? `${code} ${cur.message}` : cur.message);
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  const text = parts.join(" ← ");
+  return /fetch failed|network|socket|ECONN|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|UND_ERR|terminated/i.test(text)
+    ? text
+    : null;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** One HTTP call, with the transport handling every importer needs: a network
+ *  failure is RETRIED (the first sync right after an OAuth connect hits a
+ *  container whose DNS may still be warming up — one blip must not fail the
+ *  connect), and if it still fails the thrown message names the host and the
+ *  real cause. Non-network errors (a fixture's "unexpected URL") pass through
+ *  untouched, so tests still fail loudly. */
+export async function netFetch(
+  url: string,
+  init: Parameters<FetchLike>[1],
+  fetchImpl: FetchLike,
+  attempts = 3,
+): Promise<Response> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetchImpl(url, init);
+    } catch (e) {
+      last = e;
+      if (!networkCause(e)) break;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 300 * 2 ** i));
+    }
+  }
+  const cause = networkCause(last);
+  if (cause) throw new Error(`could not reach ${hostOf(url)} (${cause}) — network failure, not a bad credential`);
+  throw last;
+}
+
 /** GET a URL and parse JSON, surfacing a short error body like the GitHub client. */
 export async function getJson(
   url: string,
   headers: Record<string, string>,
   fetchImpl: FetchLike,
 ): Promise<unknown> {
-  const res = await fetchImpl(url, { headers });
+  const res = await netFetch(url, { headers }, fetchImpl);
   if (!res.ok) {
     let body = "";
     try {
@@ -338,11 +405,15 @@ export async function postJson(
   body: unknown,
   fetchImpl: FetchLike,
 ): Promise<unknown> {
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify(body ?? {}),
-  });
+  const res = await netFetch(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body ?? {}),
+    },
+    fetchImpl,
+  );
   if (!res.ok) {
     let text = "";
     try {

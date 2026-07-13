@@ -133,12 +133,18 @@ export const granolaPlugin: ImporterPlugin = {
   // connects with nothing to paste — but a pasted refresh token works everywhere.
   requiresCredential: false,
   credentialLabel: "Granola refresh token",
-  credentialPlaceholder: "auto-detected from the Granola desktop app",
+  credentialPlaceholder: "refresh token from Granola's supabase.json",
+  // Detection only works when agentqs runs on the SAME machine as the desktop app.
+  // A hosted instance can never see that file, so the guide must lead with the
+  // paste path — promising "we detect it" to a server that physically cannot is
+  // how this row read as broken in production.
   credentialHelp: {
     url: "https://granola.ai",
     steps: [
-      "Install the Granola desktop app on this machine and sign in.",
-      "agentqs detects the login — press \"Connect (use detected app)\" to import it as a saved credential.",
+      "Granola issues no API keys — the credential is the desktop app's own refresh token.",
+      "On the machine where Granola is signed in, open ~/Library/Application Support/Granola/supabase.json (Windows: %APPDATA%\\Granola\\supabase.json — Linux: ~/.config/Granola/supabase.json).",
+      "Copy the workos_tokens.refresh_token value out of it and paste it here.",
+      "Running agentqs on that same machine? It finds the login itself — the button then reads \"Connect (use detected app)\" and there is nothing to paste.",
     ],
   },
   envKey: "GRANOLA_REFRESH_TOKEN",
@@ -154,7 +160,8 @@ export const granolaPlugin: ImporterPlugin = {
     const refreshToken = ctx.credential;
     if (!refreshToken) {
       throw new Error(
-        "Granola isn't signed in on this machine — open the desktop app, or paste a refresh token.",
+        "No Granola credential. The desktop app's login is only visible to an agentqs running on the SAME machine — " +
+          "on a hosted instance, paste the refresh token from Granola's supabase.json (workos_tokens.refresh_token).",
       );
     }
 

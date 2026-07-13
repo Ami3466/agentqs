@@ -73,8 +73,11 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 ## Integrations / data pipelines
 
-**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
+**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*
 
+OAuth sources (Spotify, Google Calendar, Fitbit, Strava, Whoop, Withings, Trakt) connect with Authorize - register the redirect URI the form shows, paste client id + secret, approve. Every sync mints a fresh token from there on. Syncing lands only the rows it fetched: an import never re-reads your whole record, so a hosted instance stays responsive no matter how big the record gets.
+
+\* Granola has no API key - the credential is the desktop app's refresh token (`workos_tokens.refresh_token` in its `supabase.json`). Running agentqs on the same machine? It finds the login itself. Whoop's old unofficial email + password login was retired by Whoop; the official Whoop row (Authorize) is the connect that works.
 
 **Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.
 
@@ -156,7 +159,7 @@ Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a s
 ## Good to know
 
 - **Private by default.** Data stays in your data directory. Model calls only get what you ask to send.
-- **Off-site backups built in.** `agentqs backup github --remote <url>` pushes a snapshot of your plain-text record to a private repo (files past GitHub's size limit are excluded and named, never silently dropped), and `agentqs backup drive` uploads the whole store as one AES-256-GCM-encrypted archive to your Google Drive on a schedule - `agentqs backup restore` brings either back.
+- **Off-site backups built in.** `agentqs backup github --remote <url>` pushes a snapshot of your plain-text record to a private repo (files past GitHub's size limit are excluded and named, never silently dropped), and `agentqs backup drive` uploads the whole store as one AES-256-GCM-encrypted archive to your Google Drive on a schedule (`--schedule daily|off`, or the switches in Settings → Data) - `agentqs backup restore` brings either back. Backups are where your data is *kept*, not where it comes from: Google Drive here is a destination, so it never shows up among your data sources.
 - **Token use is explicit.** Capture and search are local. AI runs only when you chat, structure prose, or run a channel - CLI-agent workflows skip it entirely.
 
 ## License
