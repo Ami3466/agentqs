@@ -117,6 +117,12 @@ export const gmailPlugin: ImporterPlugin = {
   name: "Gmail",
   detail: "mail received & sent per day",
   live: true,
+  // Gmail is counted a day at a time (one search per day), so a run is bounded by
+  // MAX_DAYS — asking for five years would just be silently trimmed to the recent
+  // end. A first import therefore takes exactly what one run can carry; the result's
+  // `note` says how to reach further back.
+  backfillDays: MAX_DAYS,
+  historyNote: `Gmail is counted one day at a time, so a single sync covers up to ${MAX_DAYS} days. To reach further back, re-run with --days.`,
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "ya29.… (OAuth access token)",

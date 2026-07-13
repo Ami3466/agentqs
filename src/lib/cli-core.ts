@@ -52,6 +52,7 @@ import {
   type WhoopCreds,
 } from "./importers/whoop";
 import {
+  DEFAULT_BACKFILL_DAYS,
   importPlugin,
   resolveCredential,
   resolveCredentialWithOrigin,
@@ -574,6 +575,37 @@ function shiftIso(date: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * WHICH WINDOW a sync should ask for. The one rule, for every source:
+ *
+ *   --days N        → exactly that, as asked.
+ *   record empty    → the FIRST import takes the history, as far back as this API
+ *                     goes (`backfillDays`).
+ *   record has rows → resume from the last day recorded, minus a week of overlap
+ *                     for data that arrives late.
+ *
+ * A flat trailing "last 90 days" - what every source used to send - is wrong twice
+ * over: it lands a sliver of a lifetime, and because EVERY later sync re-asks for
+ * that same window, the years before it are never fetched even once. A source is
+ * then permanently capped at whatever its first 90 days held.
+ */
+export function syncWindow(
+  rDir: string,
+  id: string,
+  opts: { days?: number; backfillDays?: number; today?: Date } = {},
+): { from: string; to: string; firstImport: boolean } {
+  const now = opts.today ?? new Date();
+  const to = now.toISOString().slice(0, 10);
+  if (opts.days && opts.days > 0) {
+    return { from: windowDays(opts.days, now).from, to, firstImport: false };
+  }
+  const last = lastDailyDate(rDir, id);
+  if (!last) {
+    return { from: windowDays(opts.backfillDays ?? DEFAULT_BACKFILL_DAYS, now).from, to, firstImport: true };
+  }
+  return { from: shiftIso(last, -7), to, firstImport: false };
+}
+
 function hasRecordBackedSource(rDir: string, id: string): boolean {
   try {
     const file = dailySourceFile(rDir, id);
@@ -820,18 +852,18 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     //     that window lands nothing at all.
     //   • record has rows → forward from where it left off (with a week of overlap
     //     so late-arriving cycles are picked up), never from today minus 90.
-    const lastRecorded = lastDailyDate(rDir, instanceId);
-    const explicitDays = Boolean(opts.days && opts.days > 0);
-    const allTime = opts.allTime === true || (!explicitDays && !lastRecorded);
-    const from = explicitDays || !lastRecorded ? win.from : shiftIso(lastRecorded, -7);
+    // WHOOP walks its own history (fetchAllCycles discovers where the account
+    // starts), so a first import asks for all-time rather than a backfill window.
+    const ww = syncWindow(rDir, instanceId, { days: opts.days });
+    const allTime = opts.allTime === true || ww.firstImport;
     progress(
       allTime ? `pulling ${name}: ENTIRE history + per-minute heart rate` : `pulling ${name} days + per-minute heart rate`,
       15,
     );
     const s = await importWhoop({
       creds: creds!,
-      from,
-      to: win.to,
+      from: ww.from,
+      to: ww.to,
       recordDir: rDir,
       instanceId,
       fetchImpl,
@@ -887,8 +919,9 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
         : `${plugin.name} needs a ${plugin.credentialLabel}. Pass --credential or run 'agentqs source connect ${instanceId} <cred>'.`,
     );
   }
-  progress(`fetching your ${plugin.name} data`, 15);
-  const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir, instanceId);
+  const pw = syncWindow(rDir, instanceId, { days: opts.days, backfillDays: plugin.backfillDays });
+  progress(pw.firstImport ? `fetching your ${plugin.name} history` : `fetching your ${plugin.name} data`, 15);
+  const summary = await importPlugin(plugin, { credential, from: pw.from, to: pw.to, fetchImpl }, rDir, instanceId);
   progress("merging into the record", 75);
   applySavedMerges(rDir);
   progress("updating the cache", 88);

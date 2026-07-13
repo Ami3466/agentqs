@@ -150,7 +150,13 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   it and keeps the shared key while a sibling rides it; removing the LAST forgets
   the key. Faces: web card (GET/POST `/api/google`), `agentqs google
   status|enable|disable <products>`, MCP `google_products {products|enable|
-  disable}`, core `google()`. Gmail COUNTS, never reads (message IDs only ->
+  disable}`, core `google()`. The card (`google-card.tsx`) is MOUNTED by
+  `sources-panel.tsx`, which pulls every `provider === "google"` row out of the flat
+  connections list and hands them to it. The card had been written but never
+  rendered, so Calendar and Gmail sat in the list as two strangers with two Connect
+  buttons - a lie about how many Google accounts you have. Whatever filters those
+  rows out MUST render the card, or Google vanishes from the tab entirely.
+  Gmail COUNTS, never reads (message IDs only ->
   `emails_received`/`emails_sent`). `gdrive_backup` speaks Google OAuth too but
   is a BACKUP TARGET, deliberately NOT in this tree.
 - WHOOP unofficial (email + password, per-minute HR) is SHIPPED AND SUPPORTED -
@@ -196,6 +202,20 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   `/api/import/whoop?instance=whoop-2`. The base account keeps id "whoop". Do not
   confuse with `whoop-api` (the OFFICIAL OAuth plugin) - `/^whoop-\d+$/` is the
   unofficial-instance test, so `whoop-api` is never treated as one.
+- THE SYNC WINDOW COMES FROM THE RECORD, never from a constant (`syncWindow` in
+  cli-core - the one rule, every source): `--days N` -> exactly that; record EMPTY
+  -> the first import takes the history (`plugin.backfillDays`, default 5 years);
+  record has rows -> resume from the last recorded day minus a week of overlap.
+  Every source used to send a flat trailing `windowDays(90)`, which is wrong twice
+  over: it lands a sliver of a lifetime, and because every LATER sync re-asks for
+  that same 90 days, the years before it are never fetched even once - a source is
+  capped forever at whatever its first sync happened to catch. Lower `backfillDays`
+  ONLY where the API itself refuses to go further (Gmail counts a day at a time,
+  max 400/run) and say why in `historyNote`. A source whose API ignores dates
+  (Spotify returns your last 50 plays, no date range) must keep a WIDE window: it
+  is a client-side filter, so narrowing it DISCARDS those plays whenever you have
+  not listened recently. `historyNote` is where an API's hard ceiling is explained,
+  so it never reads as a broken importer.
 - A source sync PATCHES the cache (`refreshSyncCache`), never rebuilds it: a full
   rebuild re-reads the whole record (events.jsonl alone can be hundreds of MB)
   and rewrites the DB synchronously, which blocks every other request for

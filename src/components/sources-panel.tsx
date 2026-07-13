@@ -5,6 +5,7 @@ import { Check, ChevronDown, Inbox, Plus, RefreshCw, Spinner, Trash, X } from "@
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
+import { GoogleCard } from "@/components/google-card";
 import { SourceHeader, SourceTitle } from "@/components/source-title";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
@@ -248,7 +249,14 @@ export function SourcesPanel({
   // a lifetime record holds dozens of sources and flat rows would drown the tab.
   const all = sources ?? [];
   const byConnected = (a: SourceView, b: SourceView) => Number(b.connected) - Number(a.connected);
-  const connections = all.filter((s) => s.kind === "api" && !s.automation).sort(byConnected);
+  // GOOGLE IS ONE CONNECTION. Calendar and Gmail carry the same `provider` tag
+  // because they ride ONE OAuth key — listing them as two strangers with two
+  // Connect buttons is a lie about how many accounts you have. They come out of the
+  // flat list and into the provider card, which owns the key and the product ticks.
+  const providerRows = all.filter((s) => s.provider === "google" && !s.automation);
+  const connections = all
+    .filter((s) => s.kind === "api" && !s.automation && s.provider !== "google")
+    .sort(byConnected);
   const automations = all.filter((s) => s.automation).sort(byConnected);
   const importedData = all
     .filter((s) => !s.automation && s.kind !== "api")
@@ -376,7 +384,14 @@ export function SourcesPanel({
       <div className="border-b border-border p-4">
         <TabBar<Tab>
           tabs={[
-            { value: "connections", label: "Connections", count: connections.filter((s) => s.connected).length },
+            {
+              value: "connections",
+              label: "Connections",
+              // Google counts ONCE, however many products ride its key.
+              count:
+                connections.filter((s) => s.connected).length +
+                (providerRows.some((s) => s.connected) ? 1 : 0),
+            },
             { value: "automated", label: "Automated imports", count: automatedCount },
           ]}
           value={tab}
@@ -418,6 +433,24 @@ export function SourcesPanel({
                 error={chromeStatusError}
                 removingId={removingId}
                 onRemove={(id) => void removeSource(id)}
+              />
+            </div>
+          ) : null}
+
+          {tab === "connections" && providerRows.length ? (
+            <div className="border-b border-border">
+              <GoogleCard
+                rows={providerRows}
+                version={version}
+                savingId={savingId}
+                removingId={removingId}
+                onIntervalChange={(id, i) => void changeInterval(id, i)}
+                onRemove={(id) => void removeSource(id)}
+                onChanged={() => {
+                  void load();
+                  onChanged();
+                }}
+                onUseExtension={() => setTab("automated")}
               />
             </div>
           ) : null}
