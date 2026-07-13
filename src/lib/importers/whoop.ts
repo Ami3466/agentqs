@@ -515,6 +515,32 @@ export interface ImportWhoopSummary {
   minutes: number; // per-minute HR samples captured
   hrDays: number; // distinct days with a per-minute file
   file: string;
+  /** The account's newest cycle, when its data ends BEFORE the window that was
+   *  asked for (a strap that stopped recording). The pull re-anchors to it, and
+   *  the caller reports it — a dormant account must never sync "ok" with nothing. */
+  latestCycle?: string;
+  /** True when the requested window held nothing and the pull re-anchored to
+   *  `latestCycle`. */
+  reanchored?: boolean;
+}
+
+/** The newest calendar date present in a cycles response. */
+export function latestCycleDate(cycles: WhoopCycle[]): string | null {
+  const days = cycles.map((c) => cycleDate(c.cycle?.days)).filter((d): d is string => Boolean(d));
+  return days.length ? days.sort().at(-1)! : null;
+}
+
+/** Shift an ISO date by n days (negative = back). */
+function shiftDate(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Whole days spanned by [from..to], inclusive. */
+function spanDays(from: string, to: string): number {
+  const ms = new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime();
+  return Math.max(1, Math.round(ms / 86_400_000) + 1);
 }
 
 /** Trailing window [from..to] narrowed to the last `days` for the heavy HR pull. */
@@ -545,10 +571,31 @@ export async function importWhoop(opts: {
   const instanceId = opts.instanceId ?? WHOOP_BASE_ID;
   const { session, creds } = await ensureSession(opts.creds, fetchImpl);
 
-  const cycles = await fetchCycles(session.userId, session.accessToken, opts.from, opts.to, fetchImpl);
-  const dailyCycles = normalizeCycles(cycles, opts.from, opts.to);
+  let from = opts.from;
+  let to = opts.to;
+  let cycles = await fetchCycles(session.userId, session.accessToken, from, to, fetchImpl);
+  let dailyCycles = normalizeCycles(cycles, from, to);
 
-  const { hrFrom, hrTo } = hrWindow(opts.from, opts.to, opts.hrDays ?? DEFAULT_HR_DAYS);
+  // A window anchored to TODAY finds nothing on an account whose strap stopped
+  // recording months ago — it imported zero days and still reported "ok", which
+  // reads as "WHOOP gives no data". WHOOP hands back its newest cycles even when
+  // the asked-for window is empty, so use them: re-anchor the SAME span to end on
+  // the account's real last day and pull that instead. A daily-worn account never
+  // takes this path (its window has data).
+  const latestCycle = latestCycleDate(cycles) ?? undefined;
+  let reanchored = false;
+  if (dailyCycles.size === 0 && latestCycle && latestCycle < from) {
+    const span = spanDays(from, to);
+    from = shiftDate(latestCycle, -(span - 1));
+    to = latestCycle;
+    cycles = await fetchCycles(session.userId, session.accessToken, from, to, fetchImpl);
+    dailyCycles = normalizeCycles(cycles, from, to);
+    reanchored = true;
+  }
+
+  // HR follows the window that actually holds data (anchoring it to today would
+  // pull an empty minute stream for a dormant account).
+  const { hrFrom, hrTo } = hrWindow(from, to, opts.hrDays ?? DEFAULT_HR_DAYS);
   const samples = await fetchHeartRate(session.userId, session.accessToken, hrFrom, hrTo, fetchImpl);
   const { files, daily: dailyHr } = bucketHeartRate(samples);
   const minutes = writeHeartRateFiles(opts.recordDir, files, instanceId);
@@ -559,8 +606,8 @@ export async function importWhoop(opts: {
   return {
     creds,
     userId: session.userId,
-    from: opts.from,
-    to: opts.to,
+    from,
+    to,
     hrFrom,
     hrTo,
     daysWithData: merge.dates.length,
@@ -569,6 +616,8 @@ export async function importWhoop(opts: {
     minutes,
     hrDays: files.size,
     file: merge.file,
+    latestCycle,
+    reanchored,
   };
 }
 

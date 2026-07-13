@@ -167,7 +167,17 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   for months while strain and sleep kept landing, so the row looked like "no data".
   Both shapes parse. When a column goes quiet, suspect the payload, and make the
   FIXTURE mirror the live response (`scripts/whoop.ts`) - a fixture frozen on the
-  old shape keeps the test green while production lands nothing. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
+  old shape keeps the test green while production lands nothing.
+  DORMANT ACCOUNTS: the sync window is anchored to TODAY (`windowDays(90)`), so an
+  account whose strap stopped recording months ago matched nothing, landed nothing
+  and still reported "ok · 0 days" - which reads as "WHOOP gives no data" when the
+  account in fact holds years of it. WHOOP answers an empty window with its NEWEST
+  cycles anyway (dated in the past), so `importWhoop` uses them: zero in-range days
+  + a `latestCycle` older than `from` -> re-anchor the same span to end on that day
+  and pull again (`reanchored`/`latestCycle` on the summary). A daily-worn account
+  never takes this path. And a sync that lands ZERO days now THROWS, naming the
+  account's newest cycle and the `--days` needed to reach it - landing nothing is
+  never success. MULTI-ACCOUNT: two athletes connect as "whoop" + "whoop-2",
   each its own login (`config.whoopCredsByInstance`), daily file, per-minute dir
   (`record/<id>/hr`) and schedule - CLI `whoop connect <email> <pass> --account
   whoop-2`, MCP `whoop_connect {account}`, web "Add another account", API POST
