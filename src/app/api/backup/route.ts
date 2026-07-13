@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { backupGithub, backupRestore, backupStatus, syncSource } from "@/lib/cli-core";
+import { backupGithub, backupRestore, backupStatus, setBackupPassphrase, syncSource } from "@/lib/cli-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +18,17 @@ export async function GET() {
  *  (record replaced + retired beside the store; this instance's config kept). */
 export async function POST(req: Request) {
   if (!getCurrentUser()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  let body: { target?: string; remote?: string; branch?: string; confirm?: string; latest?: boolean; file?: string } = {};
+  let body: {
+    target?: string;
+    remote?: string;
+    branch?: string;
+    token?: string;
+    confirm?: string;
+    latest?: boolean;
+    file?: string;
+    value?: string;
+    generate?: boolean;
+  } = {};
   try {
     body = await req.json();
   } catch {
@@ -26,10 +36,14 @@ export async function POST(req: Request) {
   }
   try {
     if (body.target === "github") {
-      return NextResponse.json(await backupGithub({ remote: body.remote, branch: body.branch }));
+      return NextResponse.json(await backupGithub({ remote: body.remote, branch: body.branch, token: body.token }));
     }
     if (body.target === "drive") {
       return NextResponse.json(await syncSource({ id: "gdrive_backup" }));
+    }
+    if (body.target === "passphrase") {
+      // Returned ONCE when generated — the UI tells the user to store it off-machine.
+      return NextResponse.json(setBackupPassphrase({ value: body.value, generate: body.generate }));
     }
     if (body.target === "restore") {
       if (body.confirm !== "replace-record") {
@@ -42,7 +56,7 @@ export async function POST(req: Request) {
         await backupRestore({ latest: body.latest !== false && !body.file, file: body.file, intoStore: true }),
       );
     }
-    return NextResponse.json({ error: 'target must be "github", "drive" or "restore"' }, { status: 400 });
+    return NextResponse.json({ error: 'target must be "github", "drive", "restore" or "passphrase"' }, { status: 400 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
