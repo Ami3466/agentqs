@@ -6,6 +6,7 @@ import path from "path";
 import { pipeline } from "stream/promises";
 import { readConfig, writeConfig } from "./config";
 import { dataDir, recordDir } from "./paths";
+import { rebuild } from "./record";
 import { isDue, type Interval } from "./sources";
 import type { FetchLike } from "./importers/plugin";
 
@@ -503,6 +504,30 @@ export interface RestoreOpts {
   passphrase?: string; // defaults to the configured one
 }
 
+/** Resolve the archive to a local file: the given path, or the newest one in
+ *  the Drive backup folder downloaded into `tmp`. */
+async function acquireArchive(
+  opts: { file?: string; latest?: boolean; credential?: string; fetchImpl?: FetchLike },
+  tmp: string,
+): Promise<{ src: string; name: string }> {
+  if (opts.latest) {
+    if (!opts.credential) throw new Error("--latest needs the connected gdrive_backup grant.");
+    const fetchImpl = opts.fetchImpl ?? (fetch as FetchLike);
+    const folderId = await ensureBackupFolder(fetchImpl, opts.credential);
+    const newest = (await listArchives(fetchImpl, opts.credential, folderId))[0];
+    if (!newest) throw new Error("No archives in the Drive backup folder yet.");
+    const res = await fetchImpl(`${DRIVE_API}/files/${newest.id}?alt=media`, {
+      headers: { Authorization: `Bearer ${opts.credential}` },
+    });
+    if (!res.ok) throw new Error(`Drive download → HTTP ${res.status}`);
+    const src = path.join(tmp, newest.name);
+    fs.writeFileSync(src, Buffer.from(await res.arrayBuffer()));
+    return { src, name: newest.name };
+  }
+  if (!opts.file) throw new Error("Pass an archive file or --latest.");
+  return { src: opts.file, name: path.basename(opts.file) };
+}
+
 export async function restoreArchive(opts: RestoreOpts): Promise<RestoreResult> {
   const passphrase = opts.passphrase?.trim() || readConfig()?.backup?.passphrase;
   if (!passphrase) throw new Error("Pass --passphrase (or set one with `agentqs backup passphrase`).");
@@ -514,28 +539,65 @@ export async function restoreArchive(opts: RestoreOpts): Promise<RestoreResult> 
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-restore-"));
   try {
-    let src = opts.file;
-    let archiveName = opts.file ? path.basename(opts.file) : "";
-    if (opts.latest) {
-      if (!opts.credential) throw new Error("--latest needs the connected gdrive_backup grant.");
-      const fetchImpl = opts.fetchImpl ?? (fetch as FetchLike);
-      const folderId = await ensureBackupFolder(fetchImpl, opts.credential);
-      const newest = (await listArchives(fetchImpl, opts.credential, folderId))[0];
-      if (!newest) throw new Error("No archives in the Drive backup folder yet.");
-      const res = await fetchImpl(`${DRIVE_API}/files/${newest.id}?alt=media`, {
-        headers: { Authorization: `Bearer ${opts.credential}` },
-      });
-      if (!res.ok) throw new Error(`Drive download → HTTP ${res.status}`);
-      src = path.join(tmp, newest.name);
-      fs.writeFileSync(src, Buffer.from(await res.arrayBuffer()));
-      archiveName = newest.name;
-    }
-    if (!src) throw new Error("Pass an archive file or --latest.");
-
+    const got = await acquireArchive(opts, tmp);
     const tarball = path.join(tmp, "restore.tar.gz");
-    await decryptFileTo(src, tarball, passphrase);
+    await decryptFileTo(got.src, tarball, passphrase);
     execFileSync("tar", ["-xzf", tarball, "-C", out], { encoding: "utf8" });
-    return { out, archive: archiveName, members: fs.readdirSync(out).sort() };
+    return { out, archive: got.name, members: fs.readdirSync(out).sort() };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+export interface RestoreIntoStoreResult {
+  archive: string;
+  retired: string | null; // where the previous record went — kept, never deleted
+  dailyRows: number;
+}
+
+/**
+ * Bring an archive's RECORD into the LIVE store — the migration path onto a
+ * fresh instance: deploy, connect gdrive_backup + set the same passphrase,
+ * one call, and the whole history is here. Moves DATA, not identity: the
+ * instance's own config.json (auth, keys, grants) stays untouched. The
+ * previous record is RETIRED beside the store (record.retired-<stamp>) so the
+ * replace is revertible by hand, and the cache is rebuilt from the restored
+ * text.
+ */
+export async function restoreIntoStore(opts: {
+  file?: string;
+  latest?: boolean;
+  credential?: string;
+  fetchImpl?: FetchLike;
+  passphrase?: string;
+  dir?: string; // store override (tests)
+}): Promise<RestoreIntoStoreResult> {
+  const dir = opts.dir ?? dataDir();
+  const passphrase = opts.passphrase?.trim() || readConfig()?.backup?.passphrase;
+  if (!passphrase) throw new Error("Pass --passphrase (or set one with `agentqs backup passphrase`).");
+  // Same filesystem as the store → the final renames are atomic.
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = fs.mkdtempSync(path.join(dir, ".restore-"));
+  try {
+    const got = await acquireArchive(opts, tmp);
+    const tarball = path.join(tmp, "restore.tar.gz");
+    await decryptFileTo(got.src, tarball, passphrase);
+    const extract = path.join(tmp, "x");
+    fs.mkdirSync(extract);
+    execFileSync("tar", ["-xzf", tarball, "-C", extract], { encoding: "utf8" });
+    const incoming = path.join(extract, "record");
+    if (!fs.existsSync(incoming)) throw new Error("Archive holds no record/ — not an agentqs store archive.");
+
+    const live = path.join(dir, "record");
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "-");
+    let retired: string | null = null;
+    if (fs.existsSync(live)) {
+      retired = path.join(dir, `record.retired-${stamp}`);
+      fs.renameSync(live, retired);
+    }
+    fs.renameSync(incoming, live);
+    const dailyRows = rebuild({ dataDir: dir }).daily;
+    return { archive: got.name, retired, dailyRows };
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

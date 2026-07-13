@@ -75,9 +75,14 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   source (`gdrive_backup`, drive.file scope) and rides the source interval;
   the GitHub side rides `sync --due` (daily). `backup passphrase --generate`
   first - archives are unreadable without it. `backup restore <file>|--latest
-  --out <dir>` decrypts into a FRESH dir, never over the live store. `backup
-  status` = "when did my data last leave this machine?". MCP: `backup_run`,
-  `backup_status`; API: GET/POST `/api/backup`.
+  --out <dir>` decrypts into a FRESH dir; `--into-store` instead REPLACES the
+  live record with the archive's (previous record retired beside the store,
+  instance config kept, cache rebuilt) - THE migration path onto a fresh
+  instance: connect gdrive_backup + set the same passphrase there, then
+  `backup restore --latest --into-store` (API: `{"target":"restore",
+  "confirm":"replace-record"}`). `backup status` = "when did my data last
+  leave this machine?". MCP: `backup_run`, `backup_status`, `backup_restore`;
+  API: GET/POST `/api/backup`.
 - `agentqs audit` - index audit: DETERMINISTIC evidence for an AI review pass -
   impossible dates, single-day sources, coverage holes, gone-quiet sources,
   outlier values. YOU judge each finding (real quiet vs dead import, unit bug
