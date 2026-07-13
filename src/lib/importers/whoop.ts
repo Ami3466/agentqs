@@ -277,7 +277,12 @@ export interface HrSample {
   bpm: number;
 }
 
-/** Pull the PER-MINUTE heart-rate stream (step=60s) — the differentiator. */
+/**
+ * Pull the PER-MINUTE heart-rate stream (step=60s) — the differentiator. The
+ * metrics endpoint rejects any request spanning more than 192 hours (8 days),
+ * so the window is walked in ≤7-day chunks and concatenated; a 14-day (or larger)
+ * HR backfill simply becomes several calls.
+ */
 export async function fetchHeartRate(
   userId: number,
   token: string,
@@ -286,26 +291,28 @@ export async function fetchHeartRate(
   fetchImpl: FetchLike = fetch,
   stepSeconds: number = HR_STEP_SECONDS,
 ): Promise<HrSample[]> {
-  const { start, end } = dayBounds(from, to);
-  const url = new URL(`${API_BASE}/metrics-service/v1/metrics/user/${userId}`);
-  url.searchParams.set("start", start);
-  url.searchParams.set("end", end);
-  url.searchParams.set("step", String(stepSeconds));
-  url.searchParams.set("name", "heart_rate");
-  url.searchParams.set("apiVersion", API_VERSION);
-  let raw: unknown;
-  try {
-    raw = await getAuthed(url.toString(), token, fetchImpl);
-  } catch (e) {
-    throw new Error(`WHOOP heart rate → ${(e as Error).message}`);
-  }
-  const values = (raw as { values?: { time?: number; data?: number }[] })?.values ?? [];
   const out: HrSample[] = [];
-  for (const v of values) {
-    if (v?.time == null || v?.data == null) continue;
-    const bpm = Number(v.data);
-    if (!Number.isFinite(bpm) || bpm <= 0) continue; // WHOOP marks gaps as 0
-    out.push({ time: Number(v.time), bpm });
+  for (const win of chunkWindow(from, to, 7)) {
+    const { start, end } = dayBounds(win.from, win.to);
+    const url = new URL(`${API_BASE}/metrics-service/v1/metrics/user/${userId}`);
+    url.searchParams.set("start", start);
+    url.searchParams.set("end", end);
+    url.searchParams.set("step", String(stepSeconds));
+    url.searchParams.set("name", "heart_rate");
+    url.searchParams.set("apiVersion", API_VERSION);
+    let raw: unknown;
+    try {
+      raw = await getAuthed(url.toString(), token, fetchImpl);
+    } catch (e) {
+      throw new Error(`WHOOP heart rate → ${(e as Error).message}`);
+    }
+    const values = (raw as { values?: { time?: number; data?: number }[] })?.values ?? [];
+    for (const v of values) {
+      if (v?.time == null || v?.data == null) continue;
+      const bpm = Number(v.data);
+      if (!Number.isFinite(bpm) || bpm <= 0) continue; // WHOOP marks gaps as 0
+      out.push({ time: Number(v.time), bpm });
+    }
   }
   return out;
 }
