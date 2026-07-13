@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { readConfig, writeConfig, type AppConfig, type OAuthGrant } from "./config";
 import { pluginInstanceById, pluginInstanceName } from "./importers/registry";
 import {
+  oauthGrantKey,
   resolveSyncCredential,
   type FetchLike,
   type ImporterPlugin,
@@ -24,6 +25,30 @@ import {
  *  open the app via http://127.0.0.1:<port> and the origin follows). */
 export function oauthRedirectUri(origin: string): string {
   return `${origin.replace(/\/+$/, "")}/api/oauth/callback`;
+}
+
+/**
+ * Where this instance's grant lives. Usually its own id — but Google Calendar and
+ * Gmail are ONE Google account with ONE key, so both resolve to `sourceOAuth.google`
+ * (see `oauthGrantKey`). Reads fall back to the plugin's own id, which is where a
+ * grant minted before the shared key existed still sits; the next write migrates it
+ * to the shared slot without ever deleting the old one.
+ */
+function grantKeyOf(instanceId: string): string {
+  const inst = pluginInstanceById(instanceId);
+  return inst ? oauthGrantKey(inst.plugin, instanceId) : instanceId;
+}
+
+function readGrant(cfg: AppConfig | null, instanceId: string): { grant?: OAuthGrant; key: string } {
+  const key = grantKeyOf(instanceId);
+  return { grant: cfg?.sourceOAuth?.[key] ?? cfg?.sourceOAuth?.[instanceId], key };
+}
+
+/** The scope to ask for. Static for most providers; for Google it is the union over
+ *  the products the user actually TICKED, so unchecking Gmail stops us asking for
+ *  mail access on the next authorize. */
+function scopeToRequest(o: OAuthProviderConfig, cfg: AppConfig | null): string {
+  return o.scopeFor?.(cfg) ?? o.scope;
 }
 
 function oauthPlugin(instanceId: string): { plugin: ImporterPlugin; o: OAuthProviderConfig } {
@@ -52,10 +77,11 @@ export function beginOAuth(
   if (!cfg) throw new Error("Run setup first.");
   const state = crypto.randomBytes(16).toString("hex");
   const redirectUri = oauthRedirectUri(origin);
+  const { grant, key } = readGrant(cfg, instanceId);
   cfg.sourceOAuth = {
     ...(cfg.sourceOAuth ?? {}),
-    [instanceId]: {
-      ...(cfg.sourceOAuth?.[instanceId] ?? {}),
+    [key]: {
+      ...(grant ?? {}),
       clientId: clientId.trim(),
       clientSecret: clientSecret.trim(),
     },
@@ -66,7 +92,7 @@ export function beginOAuth(
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId.trim());
   url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("scope", o.scope);
+  url.searchParams.set("scope", scopeToRequest(o, cfg));
   url.searchParams.set("state", state);
   for (const [k, v] of Object.entries(o.extraAuthParams ?? {})) url.searchParams.set(k, v);
   return { authorizeUrl: url.toString(), redirectUri };
@@ -76,6 +102,10 @@ interface TokenReply {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  /** What the provider actually GRANTED. Google returns this and it is the truth —
+   *  the user can untick a scope on the consent screen, so what we asked for and
+   *  what we got are not the same thing. */
+  scope?: string;
 }
 
 /** Withings wraps every reply in {status, body}; status !== 0 is the error
@@ -132,10 +162,12 @@ function expiryISO(expiresIn: number | undefined): string | undefined {
     : undefined;
 }
 
-function saveGrant(instanceId: string, grant: OAuthGrant, mutate?: (cfg: AppConfig) => void): void {
+/** `key` is the GRANT key (`grantKeyOf`), not necessarily the instance id — a
+ *  shared provider (Google) writes both its products to the one slot. */
+function saveGrant(key: string, grant: OAuthGrant, mutate?: (cfg: AppConfig) => void): void {
   const cfg = readConfig();
   if (!cfg) return;
-  cfg.sourceOAuth = { ...(cfg.sourceOAuth ?? {}), [instanceId]: grant };
+  cfg.sourceOAuth = { ...(cfg.sourceOAuth ?? {}), [key]: grant };
   mutate?.(cfg);
   writeConfig(cfg);
 }
@@ -155,7 +187,7 @@ export async function completeOAuth(
     throw new Error("No matching authorization in progress — start the connect again from Pipeline.");
   }
   const inst = pluginInstanceById(pending.instanceId);
-  const grant = cfg.sourceOAuth?.[pending.instanceId];
+  const { grant, key } = readGrant(cfg, pending.instanceId);
   if (!inst?.plugin.oauth || !grant) {
     throw new Error("The pending authorization lost its app credentials — start the connect again.");
   }
@@ -166,12 +198,15 @@ export async function completeOAuth(
     fetchImpl,
   );
   saveGrant(
-    pending.instanceId,
+    key,
     {
       ...grant,
       accessToken: tok.access_token,
       refreshToken: tok.refresh_token ?? grant.refreshToken,
       expiresAt: expiryISO(tok.expires_in),
+      // What we GOT, not what we asked for — the consent screen lets the user drop a
+      // scope, and a Google card that then claims Gmail is on would be lying.
+      scopes: tok.scope ?? scopeToRequest(inst.plugin.oauth, cfg),
     },
     (latest) => {
       delete latest.oauthPending;
@@ -194,7 +229,7 @@ export async function freshOAuthToken(
   cfg: AppConfig | null = readConfig(),
   fetchImpl: FetchLike = fetch,
 ): Promise<string | undefined> {
-  const grant = cfg?.sourceOAuth?.[instanceId];
+  const { grant, key } = readGrant(cfg, instanceId);
   if (!grant?.accessToken && !grant?.refreshToken) return undefined;
   const valid = grant.accessToken && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now());
   if (valid) return grant.accessToken;
@@ -213,9 +248,10 @@ export async function freshOAuthToken(
     accessToken: tok.access_token,
     refreshToken: tok.refresh_token ?? grant.refreshToken,
     expiresAt: expiryISO(tok.expires_in),
+    scopes: tok.scope ?? grant.scopes,
   };
   try {
-    saveGrant(instanceId, updated);
+    saveGrant(key, updated);
   } catch {
     /* non-fatal: the sync still runs with the fresh token */
   }
@@ -234,7 +270,7 @@ export async function resolveSyncCredentialFresh(
   fetchImpl: FetchLike = fetch,
 ): Promise<string | undefined> {
   if (explicit && explicit.trim()) return explicit.trim();
-  const grant = cfg?.sourceOAuth?.[instanceId];
+  const { grant } = readGrant(cfg, instanceId);
   if (grant?.accessToken || grant?.refreshToken) {
     const token = await freshOAuthToken(instanceId, cfg, fetchImpl);
     if (token && plugin.oauth?.grantCredential === "clientId:token") {

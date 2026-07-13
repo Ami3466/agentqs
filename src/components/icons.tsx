@@ -562,6 +562,27 @@ export const Granola = (p: P) => (
   </svg>
 );
 
+/** Gmail's real mark — the envelope with the "M" fold, traced from the official
+ *  logo and flattened to one monochrome fill. */
+export const Gmail = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M1.64 5.51A1.64 1.64 0 0 1 3.27 4H4.1l7.9 5.77L19.9 4h.83c.9 0 1.63.73 1.63 1.64v12.72c0 .9-.73 1.64-1.63 1.64h-2.46V9.55L12 13.64 5.73 9.55V20H3.27a1.64 1.64 0 0 1-1.63-1.64V5.51Z" />
+  </svg>
+);
+
+/** Google's real "G" mark — the whole account, not one of its products. The
+ *  Pipeline's Google card wears this: it covers Calendar, Gmail and the extension
+ *  scrapes, so stamping it with the Calendar icon said "this is Calendar", which is
+ *  the confusion the card exists to end. */
+export const Google = (p: P) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}>
+    <path d="M12.24 10.29v3.64h5.19a4.45 4.45 0 0 1-1.94 2.92l3.13 2.43c1.83-1.69 2.88-4.17 2.88-7.12 0-.69-.06-1.35-.18-1.99l-9.08.12Z" />
+    <path d="M6.62 13.62a5.9 5.9 0 0 1 0-3.77L3.4 7.35a9.96 9.96 0 0 0 0 8.96l3.22-2.5a5.9 5.9 0 0 1 0-.19Z" />
+    <path d="M12.24 6.18c1.47 0 2.79.51 3.83 1.5l2.86-2.86A9.6 9.6 0 0 0 12.24 2 9.99 9.99 0 0 0 3.4 7.35l3.22 2.5c.77-2.3 2.92-3.67 5.62-3.67Z" />
+    <path d="M12.24 22c2.7 0 4.96-.89 6.62-2.42l-3.13-2.43c-.87.59-1.99.94-3.49.94-2.7 0-4.85-1.37-5.62-3.67l-3.22 2.5A9.99 9.99 0 0 0 12.24 22Z" />
+  </svg>
+);
+
 /** Google Drive's real mark — the three faces of the Drive triangle (the left and
  *  right diagonal bands and the bottom band), traced from the official logo and
  *  flattened to one monochrome fill. Backup target, not a source: it lives in
@@ -578,6 +599,9 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   github: GitHub,
   rescuetime: RescueTime,
   gcal: GoogleCalendar,
+  // The account itself (the Pipeline's Google card), not one of its products.
+  google: Google,
+  gmail: Gmail,
   spotify: Spotify,
   whoop: Whoop,
   "whoop-api": Whoop,
@@ -598,6 +622,9 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   granola: Granola,
   "health-connect": ShieldHeart,
   "apple-weather": Apple,
+  // Live-capture channels — Pipeline rows too, so they get their brand mark, not a plug.
+  slack: Slack,
+  telegram: Telegram,
   // Tier-2 file importers keep their real marks when they hold data.
   chrome: Chrome,
   iphone: Apple,

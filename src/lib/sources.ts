@@ -100,6 +100,14 @@ export interface SourceView {
   /** An aggregate of several record sources (e.g. a Takeout archive) — its id is
    *  not a `daily.source` value, so no single-source Journal filter exists for it. */
   bundle?: boolean;
+  /** Sources that are ONE connection with one key, shown as one card with a product
+   *  tree instead of N strangers in the list ("google" → Calendar, Gmail → Sent).
+   *  Matches the plugin's `oauth.providerKey`. */
+  provider?: string;
+  /** A live-capture channel (Slack, Telegram): data arrives PUSHED to our webhook,
+   *  so there is nothing to schedule and nothing to sync — it is connected by a bot
+   *  token and it fills the inbox. Connect it in Settings → Channels. */
+  channel?: boolean;
   /** Provenance of the working credential: "saved" = the user connected it,
    *  "env" = environment variable, "discovered" = auto-detected from the
    *  source's local desktop app (the user never connected it — surface that). */

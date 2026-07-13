@@ -1,6 +1,7 @@
 import type { ImporterPlugin } from "./plugin";
 import { rescuetimePlugin } from "./rescuetime";
 import { gcalPlugin } from "./gcal";
+import { gmailPlugin } from "./gmail";
 import { spotifyPlugin } from "./spotify";
 import { ouraPlugin } from "./oura";
 import { fitbitPlugin } from "./fitbit";
@@ -33,7 +34,10 @@ import { gdriveBackupPlugin } from "./gdrive-backup";
 export const PLUGINS: ImporterPlugin[] = [
   whoopApiPlugin,
   rescuetimePlugin,
+  // Google, behind ONE key: Calendar and Gmail share the `google` OAuth grant and
+  // are ticked as products on the Pipeline's Google card, not connected separately.
   gcalPlugin,
+  gmailPlugin,
   spotifyPlugin,
   ouraPlugin,
   fitbitPlugin,

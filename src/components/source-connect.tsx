@@ -83,6 +83,8 @@ export function SourceConnect({
   savingInterval = false,
   removing = false,
   job = null,
+  nameOverride,
+  iconId,
   onIntervalChange,
   onRemove,
   onSyncStarted,
@@ -95,6 +97,12 @@ export function SourceConnect({
   removing?: boolean;
   /** Live/last background job — the panel polls /api/sources and threads it here. */
   job?: SourceJobView | null;
+  /** Shown instead of the plugin's own name. A source nested inside a provider card
+   *  is a PRODUCT of it, not a service of its own: inside the Google card, `gcal` is
+   *  "Calendar", not "Google Calendar" — the card already said Google. */
+  nameOverride?: string;
+  /** Draw a different source's mark (the provider's) — same reason. */
+  iconId?: string;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
   /** A sync job was just enqueued — the panel starts polling. */
@@ -207,7 +215,8 @@ export function SourceConnect({
     onSyncStarted?.();
   }
 
-  const Icon = sourceIcon(id);
+  const Icon = sourceIcon(iconId ?? id);
+  const displayName = nameOverride ?? status?.name ?? id;
   // Guarded for SSR — only read once the panel is open (post-hydration anyway).
   const redirectUri = typeof window === "undefined" ? "" : `${window.location.origin}/api/oauth/callback`;
   const connected = status?.connected;
@@ -225,7 +234,7 @@ export function SourceConnect({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <SourceTitle id={id} name={status?.name ?? id} hasData={Boolean(status?.hasData)} />
+            <SourceTitle id={id} name={displayName} hasData={Boolean(status?.hasData)} />
             {connected ? <Check width={13} height={13} className="shrink-0 text-accent" /> : null}
             {!connected && status?.hasData ? (
               <Badge title="Rows from this source exist in your record (imported), but the app holds no authorization to sync more. Connect to keep it updated.">

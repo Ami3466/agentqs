@@ -319,6 +319,40 @@ whoop
     }
   });
 
+const google = program.command("google").description("the Google card: one key, a tree of products (Calendar, Gmail)");
+google
+  .command("status", { isDefault: true })
+  .description("what's connected and which products are ticked")
+  .action(() => {
+    try {
+      out(core.google(), (d: ReturnType<typeof core.google>) =>
+        `Google ${d.connected ? "connected" : "not connected"}${d.needsAuthorize ? ` — re-authorize to add ${d.missingProducts.join(", ")}` : ""}\n` +
+        d.products.map((p) => `  [${p.enabled ? "x" : " "}] ${p.id}${p.hasData ? " (data)" : ""}`).join("\n"));
+    } catch (e) {
+      die(e);
+    }
+  });
+google
+  .command("enable <products...>")
+  .description("tick products (e.g. gmail.inbox gmail.sent) — re-authorize in Pipeline to widen the key")
+  .action((products: string[]) => {
+    try {
+      out(core.google({ enable: products }), (d: ReturnType<typeof core.google>) => `Ticked. Now on: ${d.products.filter((p) => p.enabled && p.leaf).map((p) => p.id).join(", ") || "nothing"}`);
+    } catch (e) {
+      die(e);
+    }
+  });
+google
+  .command("disable <products...>")
+  .description("untick products — the credential and past data stay; it just stops syncing")
+  .action((products: string[]) => {
+    try {
+      out(core.google({ disable: products }), (d: ReturnType<typeof core.google>) => `Unticked. Now on: ${d.products.filter((p) => p.enabled && p.leaf).map((p) => p.id).join(", ") || "nothing"}`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
 const whisper = program.command("whisper").description("manage built-in local Whisper for voice memos");
 whisper
   .command("status", { isDefault: true })

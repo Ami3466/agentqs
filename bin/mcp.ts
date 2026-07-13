@@ -361,6 +361,23 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "google_products",
+    {
+      title: "Google card — one key, a tree of products",
+      description:
+        "Read or set which Google products sync (Calendar, Gmail → Inbox/Sent) behind the ONE shared Google OAuth key. " +
+        "No args → current state. `products` replaces the ticked set; `enable`/`disable` nudge a few. Ticking is NOT connecting — " +
+        "a product the stored grant lacks the scope for returns `needsAuthorize` (re-authorize in Pipeline widens the same key).",
+      inputSchema: {
+        products: z.array(z.string()).optional(),
+        enable: z.array(z.string()).optional(),
+        disable: z.array(z.string()).optional(),
+      },
+    },
+    async ({ products, enable, disable }) => guard(() => core.google({ products, enable, disable })),
+  );
+
+  server.registerTool(
     "whoop_connect",
     {
       title: "Connect WHOOP (unofficial app login)",

@@ -89,6 +89,37 @@ export interface OAuthProviderConfig {
   /** What syncs use as the credential — Trakt's API wants the app client id
    *  alongside the token, in the plugin's "<client_id>:<token>" format. */
   grantCredential?: "token" | "clientId:token";
+  /**
+   * Plugins that SHARE ONE GRANT. Google Calendar and Gmail are not two
+   * connections to two services, they are one Google account with one key and two
+   * products ticked, so both carry `providerKey: "google"` and both read/write
+   * `sourceOAuth.google`. Ticking Gmail widens that grant's scope; it never asks
+   * for a second credential.
+   *
+   * Sharing a key is NOT merging surfaces: `gdrive_backup` speaks the same Google
+   * OAuth and deliberately does NOT share this key — it is a backup target with a
+   * drive.file scope, it lands nothing in the record, and the pipeline is data
+   * coming IN. Same dance, different animal.
+   *
+   * Only the BASE instance shares. A second account ("gcal-2") is a different
+   * Google account, so it keeps its own grant under its own id.
+   */
+  providerKey?: string;
+  /** The scope to ASK for, when it depends on what the user checked (Google: the
+   *  union over the ticked products). Falls back to the static `scope`. */
+  scopeFor?: (cfg: AppConfig | null) => string;
+}
+
+/**
+ * Where a plugin's OAuth grant lives in `config.sourceOAuth`.
+ *
+ * Normally its own id. For a shared provider (Google) the BASE instance reads the
+ * provider's one grant instead, so Calendar and Gmail are literally the same key.
+ * An extra account keeps its own — a second Google account is a second key.
+ */
+export function oauthGrantKey(plugin: ImporterPlugin, instanceId: string = plugin.id): string {
+  if (instanceId !== plugin.id) return instanceId; // extra account → its own grant
+  return plugin.oauth?.providerKey ?? plugin.id;
 }
 
 export interface ImporterPlugin {
@@ -172,7 +203,11 @@ export function resolveCredentialWithOrigin(
   // the connect form), so it satisfies the connection rule exactly like a
   // pasted key. Sync paths mint a FRESH access token via oauth.ts; the stored
   // one here only answers presence/connected checks.
-  const grant = cfg?.sourceOAuth?.[credKey];
+  // The shared provider grant first (Google: Calendar and Gmail are one key), then
+  // the plugin's own id — which is where a grant minted before the provider key
+  // existed still lives, so an already-connected Calendar keeps working untouched.
+  const grantKey = oauthGrantKey(plugin, credKey);
+  const grant = cfg?.sourceOAuth?.[grantKey] ?? cfg?.sourceOAuth?.[credKey];
   if (grant?.refreshToken || grant?.accessToken) {
     return { credential: grant.accessToken || grant.refreshToken, origin: "saved" };
   }

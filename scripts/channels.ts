@@ -238,6 +238,57 @@ async function main() {
     // Unknown channel → 404.
     const unknown = await fetch(`${base}/api/channels/discord`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     check("an unknown channel is a 404", unknown.status === 404);
+
+    // ---- 4. A channel is a PIPELINE SOURCE ----------------------------------
+    // Messages arriving from Slack are data coming IN, so the tab that lists the
+    // data coming in has to show them. It didn't: a live bot filling the inbox
+    // was invisible on the Pipeline, which is how "I don't see my Slack messages
+    // in the pipeline" happened. Both bots here are credentialed by ENV VAR —
+    // the case the Settings badge used to call "Not linked" while the bot worked.
+    console.log("\n  The Pipeline sees the channels:\n");
+    const list = await (await fetch(`${base}/api/sources`, { headers: { cookie } })).json();
+    const sources: any[] = list.sources ?? [];
+    const slackRow = sources.find((s) => s.id === "slack");
+    const tgRow = sources.find((s) => s.id === "telegram");
+
+    check("Slack has a row in the Pipeline at all", Boolean(slackRow), sources.map((s) => s.id).join(","));
+    check("Telegram has one too", Boolean(tgRow));
+    check(
+      "an ENV-credentialed bot reads as CONNECTED (it works, so it must not say 'not connected')",
+      slackRow?.connected === true && tgRow?.connected === true,
+    );
+    check("both are flagged as channels", slackRow?.channel === true && tgRow?.channel === true);
+
+    // Pushed, not polled: nothing to schedule, nothing to sync, never "due".
+    check(
+      "a channel is never scheduled or synced (it is PUSHED to our webhook)",
+      slackRow?.interval === "off" && slackRow?.syncEndpoint === null && slackRow?.due === false,
+      `interval=${slackRow?.interval} endpoint=${slackRow?.syncEndpoint} due=${slackRow?.due}`,
+    );
+
+    // The captures themselves: the telegram memo landed, so its row carries it.
+    check(
+      "the captured memo shows on the Telegram row",
+      tgRow?.hasData === true && /1 message captured/.test(String(tgRow?.detail)),
+      String(tgRow?.detail),
+    );
+    check("…with the time of the last message", Boolean(tgRow?.lastSync));
+    // Slack was only CHATTED with here (no memo), so: connected, zero captures —
+    // the connection rule holds in both directions (data ≠ connected).
+    check(
+      "a connected channel with nothing captured says so (connected ≠ has data)",
+      slackRow?.hasData === false && /nothing captured yet/.test(String(slackRow?.detail)),
+      String(slackRow?.detail),
+    );
+    // A channel row describes what it HAS captured. It must never advertise itself
+    // like a puller that could go and fetch your Slack history — it cannot, and the
+    // row reading "not connected · messages you send the bot land in your inbox" is
+    // exactly what made the Pipeline unreadable.
+    check(
+      "a channel row never claims to import from the platform",
+      !/history|import|sync/i.test(String(slackRow?.detail)) && slackRow?.syncEndpoint === null,
+      String(slackRow?.detail),
+    );
   } finally {
     server.kill("SIGKILL");
     cap.close();
