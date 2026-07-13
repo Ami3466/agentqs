@@ -73,9 +73,8 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 ## Integrations / data pipelines
 
-**Connect by API or OAuth** - GitHub · WHOOP\* · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
+**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google Calendar · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola
 
-\* WHOOP connects through the unofficial app login (email + password) - it exports recovery, strain, sleep and per-minute heart rate.
 
 **Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.
 
