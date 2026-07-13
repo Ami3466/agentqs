@@ -8,28 +8,34 @@ import { num, type DailyTable, type FetchLike } from "./plugin";
  *
  * Not the official public API (daily summary only). This drives the same
  * reverse-engineered mobile-app auth the WHOOP app itself uses: you hand it your
- * email + password, it exchanges them for a bearer token at
+ * email + password, it exchanges them for a bearer token, then pulls the app's
+ * private endpoints for per-cycle metrics and the PER-MINUTE heart-rate stream.
  *
- *   POST https://api-7.whoop.com/oauth/token   (grant_type=password → access + refresh)
+ * WHOOP moved this whole surface off api-7.whoop.com (now deleted from DNS) onto
+ * api.prod.whoop.com/auth-service. Same username+password login, new host — the
+ * exact endpoints the WHOOP web/mobile app calls today (verified against the
+ * maintained `whoop-data` client):
  *
- * then pulls the app's private endpoints:
- *
- *   GET  /users/{id}/cycles                     → recovery, HRV, resting HR, strain, sleep
- *   GET  /users/{id}/metrics/heart_rate?step=60 → PER-MINUTE heart rate
+ *   POST /auth-service/v2/whoop/sign-in            {username,password} → access+refresh
+ *   GET  /auth-service/v2/user                     → { user: { id } }
+ *   GET  /core-details-bff/v0/cycles/details?id=…  → recovery, HRV, resting HR, strain, sleep
+ *   GET  /metrics-service/v1/metrics/user/{id}?step=60&name=heart_rate → PER-MINUTE HR
  *
  * The per-cycle metrics roll up into record/daily/whoop.csv (the daily table the
  * agent reasons over); the per-minute heart-rate stream is written verbatim to
- * record/whoop/hr/<date>.csv — a granularity no journaling app captures. Tokens
- * are cached + refreshed; the email + password are re-used only to re-auth when a
- * refresh token expires, so the scheduled pull never silently dies.
+ * record/whoop/hr/<date>.csv — a granularity no journaling app captures. The
+ * email + password are stored (config 0600) and re-used to mint a fresh bearer
+ * whenever the cached one is stale, so the scheduled pull never silently dies.
  *
  * The whole pipeline (auth → fetch → normalize → merge → rebuild) is injectable
  * via `fetchImpl`, so it runs offline against a fixture — the same trick GitHub
  * uses to make its ships-when test network-free.
  */
 
-const AUTH_URL = "https://api-7.whoop.com/oauth/token";
-const API_BASE = "https://api-7.whoop.com";
+const API_BASE = "https://api.prod.whoop.com";
+const AUTH_URL = `${API_BASE}/auth-service/v2/whoop/sign-in`;
+const USER_URL = `${API_BASE}/auth-service/v2/user`;
+const API_VERSION = "7"; // every authed data call carries apiVersion=7, like the app
 /** Per-minute heart rate is heavy (~1440 rows/day); default to a recent window. */
 const DEFAULT_HR_DAYS = 14;
 const HR_STEP_SECONDS = 60; // 60 = per-minute (6 = per-6s, the app's finest)
@@ -64,27 +70,35 @@ interface TokenResponse {
 
 // ---- auth (the unofficial app login) --------------------------------------
 
-/** When the login host can't be reached, say THAT — never "wrong password". The
- *  distinction matters: a 401 is your credentials, an unreachable host is not,
- *  and the two must never be reported as the same thing. api-7.whoop.com does not
- *  resolve from every network (as of 2026-07); api.prod.whoop.com does answer and
- *  is the likely replacement host — worth wiring up, never a reason to remove
- *  this source (it is the only per-minute HR there is). */
-const UNREACHABLE_HINT =
-  "could not reach api-7.whoop.com (the host does not resolve from this machine) — this is a network/DNS failure, NOT your password. " +
-  "If it resolves for you elsewhere, the login itself is unchanged; the official WHOOP API row (OAuth) is the other way in.";
+/** GET the profile to resolve the numeric user id — sign-in may not include it,
+ *  so it's fetched separately (exactly what the WHOOP app does after login). */
+async function resolveUserId(token: string, fromBody: number | undefined, fetchImpl: FetchLike): Promise<number> {
+  if (fromBody != null) return fromBody;
+  const raw = (await getAuthed(USER_URL, token, fetchImpl)) as { user?: { id?: number }; id?: number };
+  const id = raw?.user?.id ?? raw?.id;
+  if (id == null) throw new Error("WHOOP profile returned no user id — the app auth may have changed.");
+  return Number(id);
+}
 
-async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): Promise<WhoopSession> {
+/**
+ * Sign in with email + password at the app's live auth endpoint
+ * (api.prod.whoop.com/auth-service/v2/whoop/sign-in), returning the bearer
+ * session. This is the SAME username+password login the WHOOP app uses; it
+ * simply moved off the deleted api-7 host. A network failure names itself (never
+ * "wrong password"); a 401/403 is the credential.
+ */
+async function signIn(username: string, password: string, fetchImpl: FetchLike): Promise<WhoopSession> {
   let res: Response;
   try {
     res = await fetchImpl(AUTH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ username, password }),
     });
-  } catch {
-    // DNS/connection failure on a deleted host — the endpoint is gone, not flaky.
-    throw new Error(`WHOOP login → ${UNREACHABLE_HINT}`);
+  } catch (e) {
+    throw new Error(
+      `WHOOP login → could not reach ${new URL(AUTH_URL).host} (${(e as Error).message}) — a network/DNS failure, not your password.`,
+    );
   }
   if (!res.ok) {
     let detail = "";
@@ -93,44 +107,34 @@ async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): P
     } catch {
       /* ignore */
     }
-    if (res.status === 404) throw new Error(`WHOOP login → ${UNREACHABLE_HINT}`);
-    const hint =
-      res.status === 401 || res.status === 403 ? " (wrong email or password?)" : "";
+    const hint = res.status === 401 || res.status === 403 ? " — wrong email or password?" : "";
     throw new Error(`WHOOP login → ${res.status}${hint}${detail ? ` — ${detail}` : ""}`);
   }
-  const j = (await res.json()) as TokenResponse;
-  if (!j.access_token || !j.refresh_token || j.user?.id == null) {
-    throw new Error("WHOOP login returned no token — the app auth may have changed.");
-  }
-  const ttl = Number.isFinite(j.expires_in) ? (j.expires_in as number) : 3600;
+  const j = (await res.json()) as TokenResponse & { accessToken?: string; refreshToken?: string };
+  const access = j.access_token ?? j.accessToken;
+  const refresh = j.refresh_token ?? j.refreshToken ?? "";
+  if (!access) throw new Error("WHOOP login returned no access token — the app auth may have changed.");
+  const userId = await resolveUserId(access, j.user?.id ?? undefined, fetchImpl);
+  const ttl = Number.isFinite(j.expires_in) ? (j.expires_in as number) : 2700; // ~45m default
   return {
-    accessToken: j.access_token,
-    refreshToken: j.refresh_token,
-    userId: j.user.id,
+    accessToken: access,
+    refreshToken: refresh,
+    userId,
     expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
   };
 }
 
-/** Exchange email + password for a bearer token (the app's password grant). */
+/** Exchange email + password for a bearer session (the app's username+password login). */
 export function whoopLogin(email: string, password: string, fetchImpl: FetchLike = fetch): Promise<WhoopSession> {
-  return postToken(
-    { grant_type: "password", issueRefresh: true, username: email, password },
-    fetchImpl,
-  );
-}
-
-/** Exchange a refresh token for a fresh session (no password needed). */
-export function whoopRefresh(refreshToken: string, fetchImpl: FetchLike = fetch): Promise<WhoopSession> {
-  return postToken(
-    { grant_type: "refresh_token", refresh_token: refreshToken, issueRefresh: true, scope: "offline" },
-    fetchImpl,
-  );
+  return signIn(email, password, fetchImpl);
 }
 
 /**
- * Resolve a usable session from stored creds, minting/refreshing as needed:
- *   cached token still valid → reuse (no network) · else refresh · else re-login.
- * Returns the session plus the creds to persist (with the rotated tokens).
+ * Resolve a usable session from stored creds:
+ *   cached token still valid → reuse (no network) · else sign in with email+password.
+ * There is no separate refresh endpoint on the auth-service; like the WHOOP app,
+ * a stale token is replaced by a fresh sign-in. Returns the session plus the
+ * creds to persist (with the rotated token).
  */
 export async function ensureSession(
   creds: WhoopCreds,
@@ -138,7 +142,6 @@ export async function ensureSession(
 ): Promise<{ session: WhoopSession; creds: WhoopCreds }> {
   const validCache =
     creds.accessToken &&
-    creds.refreshToken &&
     creds.userId != null &&
     creds.tokenExpiresAt &&
     new Date(creds.tokenExpiresAt).getTime() - Date.now() > 120_000;
@@ -146,28 +149,17 @@ export async function ensureSession(
     return {
       session: {
         accessToken: creds.accessToken!,
-        refreshToken: creds.refreshToken!,
+        refreshToken: creds.refreshToken ?? "",
         userId: creds.userId!,
         expiresAt: creds.tokenExpiresAt!,
       },
       creds,
     };
   }
-
-  let session: WhoopSession | null = null;
-  if (creds.refreshToken) {
-    try {
-      session = await whoopRefresh(creds.refreshToken, fetchImpl);
-    } catch {
-      session = null; // refresh expired → fall back to email + password
-    }
+  if (!creds.email || !creds.password) {
+    throw new Error("WHOOP needs your email + password to (re)connect.");
   }
-  if (!session) {
-    if (!creds.email || !creds.password) {
-      throw new Error("WHOOP needs your email + password to (re)connect.");
-    }
-    session = await whoopLogin(creds.email, creds.password, fetchImpl);
-  }
+  const session = await signIn(creds.email, creds.password, fetchImpl);
   return { session, creds: mergeTokens(creds, session) };
 }
 
@@ -204,15 +196,49 @@ function dayBounds(from: string, to: string): { start: string; end: string } {
   return { start: `${from}T00:00:00.000Z`, end: `${to}T23:59:59.999Z` };
 }
 
+/**
+ * One record from the cycles-details BFF feed. Recovery/HRV/resting-HR sit at the
+ * record level; strain + day HR + kilojoules are on the nested `cycle`; sleep is
+ * per event under `sleeps`. `cycle.days` is a stringified range —
+ * "['2026-06-01T…','2026-06-02T…')" — whose first element is the cycle's date.
+ */
 export interface WhoopCycle {
-  days?: string[];
-  during?: { lower?: string; upper?: string };
-  recovery?: { score?: number; heartRateVariabilityRmssd?: number; restingHeartRate?: number };
-  strain?: { score?: number; averageHeartRate?: number; maxHeartRate?: number };
-  sleep?: { score?: number; qualityDuration?: number };
+  score?: number; // recovery score 0–100
+  hrv_rmssd_milli?: number; // HRV, already in milliseconds
+  resting_heart_rate?: number;
+  cycle?: {
+    days?: string;
+    scaled_strain?: number;
+    day_avg_heart_rate?: number;
+    day_max_heart_rate?: number;
+    day_kilojoules?: number;
+  };
+  sleeps?: { score?: number; quality_duration?: number }[];
 }
 
-/** Pull recovery / strain / sleep cycles for the window (the app's /cycles feed). */
+/** First calendar date out of the cycle's stringified `days` range. */
+function cycleDate(days: string | undefined): string {
+  if (!days) return "";
+  return days.replace(/^\[/, "").split(",")[0].replace(/['"]/g, "").trim().slice(0, 10);
+}
+
+/** WHOOP caps a cycles-details page; walk the window in ≤25-day chunks (each well
+ *  under one page) so a 90-day sync never silently drops the oldest days. */
+function* chunkWindow(from: string, to: string, days = 25): Generator<{ from: string; to: string }> {
+  let cur = from;
+  while (cur <= to) {
+    const end = new Date(`${cur}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + days - 1);
+    const chunkTo = end.toISOString().slice(0, 10);
+    yield { from: cur, to: chunkTo < to ? chunkTo : to };
+    const next = new Date(`${chunkTo}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    cur = next.toISOString().slice(0, 10);
+  }
+}
+
+/** Pull recovery / strain / sleep cycles for the window (the app's cycles-details
+ *  BFF feed on api.prod.whoop.com), paginated so nothing is dropped. */
 export async function fetchCycles(
   userId: number,
   token: string,
@@ -220,21 +246,30 @@ export async function fetchCycles(
   to: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<WhoopCycle[]> {
-  const { start, end } = dayBounds(from, to);
-  const url = new URL(`${API_BASE}/users/${userId}/cycles`);
-  url.searchParams.set("start", start);
-  url.searchParams.set("end", end);
-  url.searchParams.set("limit", "100");
-  let raw: unknown;
-  try {
-    raw = await getAuthed(url.toString(), token, fetchImpl);
-  } catch (e) {
-    throw new Error(`WHOOP cycles → ${(e as Error).message}`);
+  const all: WhoopCycle[] = [];
+  for (const win of chunkWindow(from, to)) {
+    const { start, end } = dayBounds(win.from, win.to);
+    const url = new URL(`${API_BASE}/core-details-bff/v0/cycles/details`);
+    url.searchParams.set("id", String(userId));
+    url.searchParams.set("startTime", start);
+    url.searchParams.set("endTime", end);
+    url.searchParams.set("limit", "26");
+    url.searchParams.set("apiVersion", API_VERSION);
+    let raw: unknown;
+    try {
+      raw = await getAuthed(url.toString(), token, fetchImpl);
+    } catch (e) {
+      throw new Error(`WHOOP cycles → ${(e as Error).message}`);
+    }
+    // The BFF returns either a bare array or { records: [...] } / { cycles: [...] }.
+    const page = Array.isArray(raw)
+      ? (raw as WhoopCycle[])
+      : ((raw as { records?: WhoopCycle[]; cycles?: WhoopCycle[] }).records ??
+         (raw as { cycles?: WhoopCycle[] }).cycles ??
+         []);
+    all.push(...page);
   }
-  // The app returns either a bare array or { records: [...] } / { cycles: [...] }.
-  if (Array.isArray(raw)) return raw as WhoopCycle[];
-  const obj = raw as { records?: WhoopCycle[]; cycles?: WhoopCycle[] };
-  return obj.records ?? obj.cycles ?? [];
+  return all;
 }
 
 export interface HrSample {
@@ -252,11 +287,12 @@ export async function fetchHeartRate(
   stepSeconds: number = HR_STEP_SECONDS,
 ): Promise<HrSample[]> {
   const { start, end } = dayBounds(from, to);
-  const url = new URL(`${API_BASE}/users/${userId}/metrics/heart_rate`);
+  const url = new URL(`${API_BASE}/metrics-service/v1/metrics/user/${userId}`);
   url.searchParams.set("start", start);
   url.searchParams.set("end", end);
-  url.searchParams.set("order", "t");
   url.searchParams.set("step", String(stepSeconds));
+  url.searchParams.set("name", "heart_rate");
+  url.searchParams.set("apiVersion", API_VERSION);
   let raw: unknown;
   try {
     raw = await getAuthed(url.toString(), token, fetchImpl);
@@ -276,13 +312,6 @@ export async function fetchHeartRate(
 
 // ---- normalize ------------------------------------------------------------
 
-/** WHOOP stores rmssd in SECONDS in the app payload; surface it as ms (20–100). */
-function hrvMs(rmssd?: number): string {
-  if (rmssd == null || !Number.isFinite(rmssd)) return "";
-  const ms = rmssd < 3 ? rmssd * 1000 : rmssd; // <3 → seconds, else already ms
-  return num(ms);
-}
-
 interface DailyCycle {
   recovery: string;
   hrv: string;
@@ -292,22 +321,26 @@ interface DailyCycle {
   sleep_perf: string;
 }
 
-/** Bucket cycles into one summary per calendar day. */
+/** Bucket cycle records into one summary per calendar day. Field names follow the
+ *  cycles-details BFF payload: recovery/HRV/resting-HR at the record level, strain
+ *  on `cycle`, sleep under `sleeps` (the longest event is the night's sleep). */
 export function normalizeCycles(cycles: WhoopCycle[], from: string, to: string): Map<string, DailyCycle> {
   const byDay = new Map<string, DailyCycle>();
   for (const c of cycles) {
-    const day = (c.days?.[0] ?? c.during?.lower ?? "").slice(0, 10);
+    const cyc = c.cycle ?? {};
+    const day = cycleDate(cyc.days);
     if (!day || day < from || day > to) continue;
-    const r = c.recovery ?? {};
-    const s = c.strain ?? {};
-    const sl = c.sleep ?? {};
+    // The main sleep is the longest event of the cycle (naps are shorter).
+    const sleep = (c.sleeps ?? [])
+      .slice()
+      .sort((a, b) => (b.quality_duration ?? 0) - (a.quality_duration ?? 0))[0] ?? {};
     byDay.set(day, {
-      recovery: r.score != null ? num(r.score) : "",
-      hrv: hrvMs(r.heartRateVariabilityRmssd),
-      resting_hr: r.restingHeartRate != null ? num(r.restingHeartRate) : "",
-      strain: s.score != null ? num(s.score) : "",
-      sleep_hours: sl.qualityDuration != null ? num(sl.qualityDuration / 3_600_000) : "",
-      sleep_perf: sl.score != null ? num(sl.score) : "",
+      recovery: c.score != null ? num(c.score) : "",
+      hrv: c.hrv_rmssd_milli != null ? num(c.hrv_rmssd_milli) : "", // already ms
+      resting_hr: c.resting_heart_rate != null ? num(c.resting_heart_rate) : "",
+      strain: cyc.scaled_strain != null ? num(cyc.scaled_strain) : "",
+      sleep_hours: sleep.quality_duration != null ? num(sleep.quality_duration / 3_600_000) : "",
+      sleep_perf: sleep.score != null ? num(sleep.score) : "",
     });
   }
   return byDay;
@@ -470,9 +503,11 @@ export async function importWhoop(opts: {
 // ---- offline fixture (auth + cycles + HR in one routed stand-in) ----------
 
 /**
- * A fetch stand-in that answers all three unofficial endpoints (token, cycles,
- * heart_rate) from in-memory data — so the whole auth → pull → merge pipeline
- * runs with no network. `onCall` (optional) records each URL for assertions.
+ * A fetch stand-in that answers all four live endpoints (sign-in, user, cycles
+ * details, heart_rate) from in-memory data — so the whole auth → pull → merge
+ * pipeline runs with no network. `onCall` (optional) records each URL for
+ * assertions. The sign-in body carries the user id so no extra profile call is
+ * needed (the real endpoint may or may not include it).
  */
 export function whoopFixtureFetch(data: {
   userId?: number;
@@ -485,17 +520,17 @@ export function whoopFixtureFetch(data: {
     const url = typeof input === "string" ? input : input.toString();
     data.onCall?.(url);
     let body: unknown;
-    if (url.includes("/oauth/token")) {
+    if (url.includes("/whoop/sign-in")) {
       body = {
         access_token: `tok-${Date.now()}`,
         refresh_token: "refresh-abc",
-        expires_in: 3600,
-        token_type: "bearer",
         user: { id: userId },
       };
-    } else if (url.includes("/metrics/heart_rate")) {
+    } else if (url.includes("/auth-service/v2/user")) {
+      body = { user: { id: userId } };
+    } else if (url.includes("/metrics-service/") || url.includes("/metrics/user")) {
       body = { values: data.heartRate ?? [] };
-    } else if (url.includes("/cycles")) {
+    } else if (url.includes("/cycles/details") || url.includes("/cycles")) {
       body = data.cycles ?? [];
     } else {
       return new Response("not found", { status: 404 });

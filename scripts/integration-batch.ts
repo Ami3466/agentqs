@@ -87,8 +87,8 @@ async function main() {
     recordDir,
     fetchImpl: whoopFixtureFetch({
       cycles: [
-        { days: ["2026-06-02"], recovery: { score: 71, heartRateVariabilityRmssd: 0.061, restingHeartRate: 51 }, strain: { score: 13.2 }, sleep: { score: 90, qualityDuration: 27_900_000 } },
-        { days: ["2026-06-05"], recovery: { score: 44, heartRateVariabilityRmssd: 0.038, restingHeartRate: 58 }, strain: { score: 8.1 }, sleep: { score: 68, qualityDuration: 20_100_000 } },
+        { score: 71, hrv_rmssd_milli: 61, resting_heart_rate: 51, cycle: { days: "['2026-06-02T00:00:00.000Z','2026-06-03T00:00:00.000Z')", scaled_strain: 13.2 }, sleeps: [{ score: 90, quality_duration: 27_900_000 }] },
+        { score: 44, hrv_rmssd_milli: 38, resting_heart_rate: 58, cycle: { days: "['2026-06-05T00:00:00.000Z','2026-06-06T00:00:00.000Z')", scaled_strain: 8.1 }, sleeps: [{ score: 68, quality_duration: 20_100_000 }] },
       ],
       heartRate: [
         { time: Date.parse("2026-06-05T08:00:00Z"), data: 61 },
