@@ -222,6 +222,38 @@ export function shouldSkipDailyCsvRead(dir: string, file: string): boolean {
   );
 }
 
+/** One daily CSV → its long-form rows, in canonical order. The single reader
+ *  behind both the full rebuild and the per-source cache refresh, so an
+ *  incrementally patched cache holds exactly what a rebuild would put there. */
+function readDailyCsvFile(dir: string, file: string): DailyRow[] {
+  const out: DailyRow[] = [];
+  const source = file.replace(/\.csv$/i, "");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(dir, file), "utf8");
+  } catch {
+    return out; // no file — the source has no rows (a removed source clears them)
+  }
+  const { header, rows } = parseCsv(raw);
+  if (header.length === 0) return out;
+  // Canonical order: by date (first column), stable on ties.
+  const dated = rows
+    .map((r, idx) => ({ r, idx }))
+    .sort((a, b) => cmp((a.r[0] ?? "").trim(), (b.r[0] ?? "").trim()) || a.idx - b.idx);
+  for (const { r } of dated) {
+    const date = (r[0] ?? "").trim();
+    if (date === "") continue;
+    for (let c = 1; c < header.length; c++) {
+      const metric = header[c];
+      if (metric === "") continue;
+      const cell = (r[c] ?? "").trim();
+      if (cell === "") continue;
+      out.push({ date, source, metric, valueText: cell, valueNum: parseNumber(cell) });
+    }
+  }
+  return out;
+}
+
 function readDaily(dir: string): DailyRow[] {
   const out: DailyRow[] = [];
   if (!fs.existsSync(dir)) return out;
@@ -230,31 +262,7 @@ function readDaily(dir: string): DailyRow[] {
     .filter((f) => f.toLowerCase().endsWith(".csv"))
     .filter((f) => !shouldSkipDailyCsvRead(dir, f))
     .sort();
-  for (const file of files) {
-    const source = file.replace(/\.csv$/i, "");
-    const { header, rows } = parseCsv(
-      fs.readFileSync(path.join(dir, file), "utf8"),
-    );
-    if (header.length === 0) continue;
-    // Canonical order: by date (first column), stable on ties.
-    const dated = rows
-      .map((r, idx) => ({ r, idx }))
-      .sort(
-        (a, b) =>
-          cmp((a.r[0] ?? "").trim(), (b.r[0] ?? "").trim()) || a.idx - b.idx,
-      );
-    for (const { r } of dated) {
-      const date = (r[0] ?? "").trim();
-      if (date === "") continue;
-      for (let c = 1; c < header.length; c++) {
-        const metric = header[c];
-        if (metric === "") continue;
-        const raw = (r[c] ?? "").trim();
-        if (raw === "") continue;
-        out.push({ date, source, metric, valueText: raw, valueNum: parseNumber(raw) });
-      }
-    }
-  }
+  for (const file of files) out.push(...readDailyCsvFile(dir, file));
   return out;
 }
 
@@ -711,6 +719,118 @@ export function insertEventsIntoCache(
     }
   } catch {
     return 0; // stale schema / locked cache — the final rebuild catches up
+  }
+}
+
+/** What one source sync changed in the record — everything the cache needs to
+ *  catch up without re-reading the rest of it. */
+export interface SyncCacheChange {
+  /** Daily CSV stems the sync wrote: the source plus any extra tables. */
+  sources: string[];
+  /** A mutable-events source replaced this window before appending (Granola). */
+  eventsReplaced?: { source: string; from: string; to: string };
+  /** Events appended to record/events.jsonl by this sync. */
+  eventsAdded?: EventItem[];
+}
+
+/**
+ * Bring the cache up to date for ONE sync, instead of rebuilding it whole.
+ *
+ * A full rebuild re-reads the entire record — events.jsonl alone can be hundreds
+ * of MB — and rewrites the whole database. better-sqlite3 is synchronous, so on a
+ * large record that is MINUTES of blocking work inside the web server: every other
+ * request (the Pipeline tab's own poll included) stalls behind it, and the app
+ * reads as crashed. A 50-track Spotify sync must never cost that. Only the rows
+ * this sync could have changed are touched here; `agentqs rebuild` stays the
+ * converger, and the record is still the only source of truth.
+ *
+ * Returns null when there is no cache to patch (first import ever) — the caller
+ * then runs the one full rebuild that creates it.
+ */
+export function refreshSyncCache(
+  change: SyncCacheChange,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): { dailyRows: number } | null {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const file = dbPath(opts.dataDir ?? path.dirname(rDir));
+  if (!fs.existsSync(file)) return null;
+  const dailyDir = path.join(rDir, "daily");
+  const db = new Database(file);
+  try {
+    const hasText = db.prepare(
+      "SELECT 1 FROM daily WHERE source = ? AND value_num IS NULL AND length(trim(value_text)) >= 8 LIMIT 1",
+    );
+    const delDaily = db.prepare("DELETE FROM daily WHERE source = ?");
+    const insDaily = db.prepare(
+      "INSERT OR REPLACE INTO daily (date,source,metric,value_num,value_text) VALUES (?,?,?,?,?)",
+    );
+    // `search` is FTS5 — no index to delete by, so a scan is the only way in.
+    // Worth it ONLY when this source has indexable prose on either side of the
+    // sync; a numeric source (Spotify, Fitbit) never pays for it.
+    const delDailySearch = db.prepare("DELETE FROM search WHERE kind = 'daily' AND ref GLOB ?");
+    const insSearch = db.prepare("INSERT INTO search (ref,kind,body) VALUES (?,?,?)");
+    const insEvent = db.prepare(
+      "INSERT OR IGNORE INTO events (id,date,ts,source,title,text,url,meta) VALUES (?,?,?,?,?,?,?,?)",
+    );
+    const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+
+    const tx = db.transaction(() => {
+      for (const source of change.sources) {
+        const hadText = Boolean(hasText.get(source));
+        delDaily.run(source);
+        const rows = readDailyCsvFile(dailyDir, `${source}.csv`);
+        const textRows: DailyRow[] = [];
+        for (const d of rows) {
+          insDaily.run(d.date, d.source, d.metric, d.valueNum, d.valueText);
+          // Same rule as the full rebuild: only prose cells reach the index.
+          if (d.valueNum == null && d.valueText.trim().length >= 8) textRows.push(d);
+        }
+        if (hadText || textRows.length) {
+          delDailySearch.run(`daily:*:${source}:*`);
+          for (const d of textRows) {
+            insSearch.run(`daily:${d.date}:${d.source}:${d.metric}`, "daily", `${d.source}.${d.metric}\n${d.valueText}`);
+          }
+        }
+      }
+      const replaced = change.eventsReplaced;
+      if (replaced) {
+        db.prepare(
+          `DELETE FROM search WHERE kind = 'event' AND ref IN
+             (SELECT 'event:' || id FROM events WHERE source = ? AND date >= ? AND date <= ?)`,
+        ).run(replaced.source, replaced.from, replaced.to);
+        db.prepare("DELETE FROM events WHERE source = ? AND date >= ? AND date <= ?").run(
+          replaced.source,
+          replaced.from,
+          replaced.to,
+        );
+      }
+      for (const e of change.eventsAdded ?? []) {
+        const r = insEvent.run(
+          e.id,
+          e.date,
+          e.ts,
+          e.source,
+          e.title,
+          e.text,
+          e.url,
+          e.meta == null ? null : JSON.stringify(e.meta),
+        );
+        if (r.changes > 0) insSearch.run(`event:${e.id}`, "event", eventSearchBody(e));
+      }
+      const dailyRows = (db.prepare("SELECT COUNT(*) AS n FROM daily").get() as { n: number }).n;
+      const eventRows = (db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n;
+      setMeta.run("daily_rows", String(dailyRows));
+      setMeta.run("event_rows", String(eventRows));
+      // record_hash / events_stamp are deliberately NOT stamped here: they say
+      // "this cache was built from exactly that record text", and only a full
+      // rebuild can promise it. Leaving them stale keeps the next rebuild honest
+      // (it re-parses instead of trusting a fast path).
+      return dailyRows;
+    });
+    const dailyRows = tx() as number;
+    return { dailyRows };
+  } finally {
+    db.close();
   }
 }
 

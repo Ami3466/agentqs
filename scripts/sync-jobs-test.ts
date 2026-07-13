@@ -15,10 +15,11 @@ import path from "path";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-jobs-"));
 process.env.AGENTQS_DATA_DIR = root;
 
-import { readSyncJobs, startSyncJob, waitForSyncJobs } from "../src/lib/sync-jobs";
+import Database from "better-sqlite3";
+import { noteSyncOutcome, readSyncJobs, startSyncJob, waitForSyncJobs } from "../src/lib/sync-jobs";
 import { readSyncRuns } from "../src/lib/sync-runs";
 import { syncSource } from "../src/lib/cli-core";
-import { parseCsv } from "../src/lib/record";
+import { parseCsv, rebuild } from "../src/lib/record";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -122,7 +123,7 @@ async function main() {
   await waitForSyncJobs();
   const rt = readSyncJobs()["rescuetime"];
   check("real sync lands ok through the queue", rt?.status === "ok", rt?.error ?? "");
-  check("sync phases reached the job bar", seen.some((s) => s.startsWith("fetching")) && seen.some((s) => s.startsWith("rebuilding")),
+  check("sync phases reached the job bar", seen.some((s) => s.startsWith("fetching")) && seen.some((s) => s.startsWith("updating")),
     seen.join(" | "));
   const run = readSyncRuns().runs["rescuetime"];
   check("run ledger records the attempt (ok)", run?.ok === true, JSON.stringify(run));
@@ -142,6 +143,63 @@ async function main() {
   const gcalRun = readSyncRuns().runs["gcal"];
   check("credential-less sync fails loudly (job)", gcal?.status === "error", gcal?.error);
   check("…and lands in the run ledger (failure)", gcalRun?.ok === false, JSON.stringify(gcalRun));
+
+  // 8. THE production crash: a sync must PATCH the cache, never rebuild it from
+  // the whole record. A rebuild re-reads events.jsonl and rewrites the entire DB
+  // — minutes of synchronous work on a real record, which blocked the server and
+  // made the app look dead. Proof: plant a row that exists ONLY in the cache (no
+  // record text behind it). A full rebuild would wipe it; the incremental path
+  // keeps it — while still landing the synced source's real rows.
+  const db = new Database(path.join(root, "agentqs.db"));
+  db.prepare("INSERT OR REPLACE INTO daily (date,source,metric,value_num,value_text) VALUES (?,?,?,?,?)").run(
+    "2020-01-01", "cache_only_sentinel", "canary", 1, "1",
+  );
+  db.close();
+
+  startSyncJob("spotify", (progress) =>
+    syncSource({
+      id: "spotify",
+      fixture: path.resolve("samples/spotify-recent.json"),
+      onProgress: progress,
+    }).then((r) => ({ days: r.days, dailyRows: r.dailyRows })),
+  );
+  await waitForSyncJobs();
+  check("spotify sync lands ok", readSyncJobs()["spotify"]?.status === "ok", readSyncJobs()["spotify"]?.error ?? "");
+
+  const after = new Database(path.join(root, "agentqs.db"), { readonly: true });
+  const sentinel = after
+    .prepare("SELECT COUNT(*) AS n FROM daily WHERE source = 'cache_only_sentinel'")
+    .get() as { n: number };
+  const spotifyRows = after
+    .prepare("SELECT COUNT(*) AS n FROM daily WHERE source = 'spotify'")
+    .get() as { n: number };
+  after.close();
+  check("sync did NOT rebuild the whole cache (sentinel survives)", sentinel.n === 1, `sentinel rows=${sentinel.n}`);
+  check("…and the synced source's rows really landed in the cache", spotifyRows.n > 0, `spotify rows=${spotifyRows.n}`);
+
+  // The patched cache must hold exactly what a full rebuild would: same rows.
+  const patched = new Database(path.join(root, "agentqs.db"), { readonly: true })
+    .prepare("SELECT date, metric, value_text FROM daily WHERE source='spotify' ORDER BY date, metric")
+    .all() as Record<string, unknown>[];
+  rebuild({ recordDir: path.join(root, "record") });
+  const rebuilt = new Database(path.join(root, "agentqs.db"), { readonly: true })
+    .prepare("SELECT date, metric, value_text FROM daily WHERE source='spotify' ORDER BY date, metric")
+    .all() as Record<string, unknown>[];
+  check("patched rows are identical to a full rebuild's", JSON.stringify(patched) === JSON.stringify(rebuilt),
+    `${patched.length} vs ${rebuilt.length} rows`);
+
+  // (The incremental EVENT path — replace-window + no duplicate search rows — is
+  // proven against Granola's own multi-endpoint fixture in `npm run granola:test`.)
+
+  // 9. A scheduler/CLI sync (no job queue) refreshes the ROW the UI renders —
+  // otherwise one web failure stays on screen as "failed" forever, even after
+  // the nightly sync succeeded. (This is exactly what prod showed for Spotify.)
+  noteSyncOutcome("spotify", false, "Spotify recently-played → fetch failed");
+  check("row shows the failure", readSyncJobs()["spotify"]?.status === "error");
+  await syncSource({ id: "spotify", fixture: path.resolve("samples/spotify-recent.json") });
+  const cleared = readSyncJobs()["spotify"];
+  check("a later successful sync clears the stale failure", cleared?.status === "ok" && !cleared.error,
+    `${cleared?.status} ${cleared?.error ?? ""}`);
 
   fs.rmSync(root, { recursive: true, force: true });
 

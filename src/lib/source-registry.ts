@@ -200,22 +200,23 @@ function whoopRow(cfg: AppConfig | null, dir: string): SourceView {
   const file = path.join(dir, "daily", "whoop.csv");
   const hasData = hasRows(file);
   const lastSync = cfg?.sourceSyncedAt?.whoop ?? fileMtimeISO(file);
-  const interval = intervalFor(cfg, "whoop");
   const wc = cfg?.whoopCreds;
   const hasCred = Boolean(wc?.email && (wc?.password || wc?.refreshToken));
   return {
     id: "whoop",
     name: "WHOOP (per-minute, unofficial)",
     kind: "api",
-    detail: "per-minute HR, HRV, recovery, sleep, strain",
+    detail: "RETIRED — WHOOP deleted the app-login endpoint; use WHOOP (official API)",
     connected: hasCred,
     hasData,
-    interval,
+    // Retired upstream: the endpoint is gone, so it is never live and never due —
+    // a dead source must not keep failing on the nightly scheduler forever.
+    interval: "off",
     lastSync,
     stale: false,
-    due: hasCred && isDue(lastSync, interval),
+    due: false,
     syncEndpoint: "/api/import/whoop",
-    live: true,
+    live: false,
     credentialOrigin: hasCred ? "saved" : null,
     ...lastRunFields("whoop"),
   };

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { beginOAuth } from "@/lib/oauth";
+import { requestOrigin } from "@/lib/request-origin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,9 +18,10 @@ export async function POST(req: Request, { params }: { params: { source: string 
     clientSecret?: string;
     origin?: string;
   };
-  // The redirect URI must match the one the connect form displayed, so prefer
-  // the browser's own origin over the server-seen request URL.
-  const origin = body.origin?.trim() || new URL(req.url).origin;
+  // The redirect URI must match the one the connect form displayed, so prefer the
+  // browser's own origin; the fallback reads the PROXY headers, never req.url (in
+  // the container that is 0.0.0.0:3000 — a redirect_uri no provider can call back).
+  const origin = body.origin?.trim() || requestOrigin(req);
   try {
     const r = beginOAuth(params.source, body.clientId ?? "", body.clientSecret ?? "", origin);
     return NextResponse.json({ ok: true, ...r });

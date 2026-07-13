@@ -23,15 +23,25 @@ import {
   readInboxFromRecord,
   readRecord,
   recordHash,
+  refreshSyncCache,
   removeEventsBySource,
   revertEditsFromAppliedMeta,
   updateInboxItems,
+  type SyncCacheChange,
 } from "./record";
 import { readJournal } from "./journal";
 import { buildSources } from "./source-registry";
 import { isValidInterval, type Interval } from "./sources";
 import { importGithub, resolveGithubToken, resolveLogin } from "./importers/github";
-import { ensureSession, importWhoop, mergeTokens, whoopFixtureFetch, whoopHrDir, whoopLogin, type WhoopCreds } from "./importers/whoop";
+import {
+  ensureSession,
+  importWhoop,
+  mergeTokens,
+  whoopFixtureFetch,
+  whoopHrDir,
+  WHOOP_RETIRED,
+  type WhoopCreds,
+} from "./importers/whoop";
 import {
   importPlugin,
   resolveCredential,
@@ -40,7 +50,7 @@ import {
   windowDays,
   type FetchLike,
 } from "./importers/plugin";
-import type { JobProgress } from "./sync-jobs";
+import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath, wantsFullHistory } from "./importers/file-plugin";
@@ -461,21 +471,13 @@ export function connectDetectedApp(id: string): { id: string; saved: boolean } {
   return connectSource(id, credential);
 }
 
-/** Connect WHOOP via the unofficial app login — stores email + password (config
- *  0600, never committed); tokens are minted + rotated on the first sync. Two
- *  fields, so it's separate from the single-credential connectSource. */
-export async function whoopConnect(email: string, password: string): Promise<{ email: string; saved: boolean }> {
-  if (!email?.trim() || !password?.trim()) {
-    throw new Error("WHOOP needs both an email and a password.");
-  }
-  // Prove the login BEFORE storing — the connect invariant (only a working
-  // credential is ever saved). Keeping the minted tokens also spares the
-  // first sync a second login.
-  const session = await whoopLogin(email.trim(), password.trim());
-  const cfg = requireConfig();
-  cfg.whoopCreds = mergeTokens({ ...(cfg.whoopCreds ?? {}), email: email.trim(), password: password.trim() }, session);
-  writeConfig(cfg);
-  return { email: email.trim(), saved: true };
+/** WHOOP's unofficial app login (email + password → per-minute HR) is RETIRED
+ *  UPSTREAM: api-7.whoop.com no longer resolves. Connecting it can only ever fail,
+ *  and the DNS failure reads to the user as "wrong password" — so no surface takes
+ *  a WHOOP password any more. It fails here, in the one brain, for every face.
+ *  The official WHOOP API row (`whoop-api`, OAuth) is the connect that works. */
+export async function whoopConnect(_email: string, _password: string): Promise<{ email: string; saved: boolean }> {
+  throw new Error(WHOOP_RETIRED);
 }
 
 /** Set a source's sync cadence — this is "set up an automated import". `off`,
@@ -648,6 +650,15 @@ export interface SyncSourceOpts {
   onProgress?: JobProgress;
 }
 
+/** Land a sync in the cache: patch the rows THIS sync changed, and fall back to a
+ *  full rebuild only when there is no cache yet (first import). A sync must never
+ *  cost a full re-read of the record — on a large one that blocks the whole server
+ *  for minutes, which is how a 50-track Spotify pull took the app down. */
+function landSyncInCache(rDir: string, change: SyncCacheChange): number {
+  const patched = refreshSyncCache(change, { recordDir: rDir });
+  return patched ? patched.dailyRows : rebuild({ recordDir: rDir }).daily;
+}
+
 /** Run one API source now: fetch → merge → rebuild, persisting the sync time.
  *  `fixture` (a JSON file) drives it offline for GitHub-style ships-when tests. */
 export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
@@ -656,9 +667,11 @@ export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
   try {
     const result = await syncSourceInner(opts);
     recordSyncRun(opts.id, true);
+    noteSyncOutcome(opts.id, true, undefined, { days: result.days, dailyRows: result.dailyRows });
     return result;
   } catch (e) {
     recordSyncRun(opts.id, false, (e as Error).message);
+    noteSyncOutcome(opts.id, false, (e as Error).message);
     throw e;
   }
 }
@@ -680,8 +693,8 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     const s = await importGithub({ token, login: opts.login, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
     progress("merging into the record", 75);
     applySavedMerges(rDir); // keep accepted column merges merged on every sync
-    progress("rebuilding the cache", 88);
-    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    progress("updating the cache", 88);
+    const dailyRows = landSyncInCache(rDir, { sources: ["github"] });
     persistSync("github", opts.credential, now);
     return {
       id: "github", name: "GitHub", from: win.from, to: win.to,
@@ -698,7 +711,9 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
       fetchImpl = whoopFixtureFetch(data);
       if (!creds?.email) creds = { email: "fixture@whoop", password: "x" };
     }
-    if (!fetchImpl && !(creds?.email && (creds.password || creds.refreshToken))) {
+    // Retired upstream — only the fixture path (tests) still runs the importer.
+    if (!fetchImpl) throw new Error(WHOOP_RETIRED);
+    if (!(creds?.email && (creds.password || creds.refreshToken))) {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
     progress("pulling WHOOP days + per-minute heart rate", 15);
@@ -750,8 +765,12 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
   const summary = await importPlugin(plugin, { credential, from: win.from, to: win.to, fetchImpl }, rDir, instanceId);
   progress("merging into the record", 75);
   applySavedMerges(rDir);
-  progress("rebuilding the cache", 88);
-  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  progress("updating the cache", 88);
+  const dailyRows = landSyncInCache(rDir, {
+    sources: [instanceId, ...summary.extraSources],
+    eventsReplaced: summary.eventsReplaced,
+    eventsAdded: summary.appendedEvents,
+  });
   persistSync(instanceId, opts.credential, now);
   return {
     id: instanceId, name: plugin.name, from: summary.from, to: summary.to,

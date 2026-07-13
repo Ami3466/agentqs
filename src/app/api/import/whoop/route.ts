@@ -1,15 +1,13 @@
 import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
-import { readConfig, writeConfig } from "@/lib/config";
+import { readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
-import { ensureSession, mergeTokens, whoopHrDir, whoopLogin, type WhoopCreds } from "@/lib/importers/whoop";
+import { whoopHrDir, WHOOP_RETIRED } from "@/lib/importers/whoop";
 import { readSyncRuns } from "@/lib/sync-runs";
-import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
-import { wipeDemoOnImport } from "@/lib/demo";
-import { syncSource } from "@/lib/cli-core";
+import { readSyncJob } from "@/lib/sync-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,68 +90,16 @@ export async function GET() {
 }
 
 /**
- * Connect (email + password) and/or sync WHOOP via the unofficial app login.
- * Fresh credentials are TESTED with a real login first — only working ones are
- * stored (with the minted tokens), so scheduled pulls keep working. The sync
- * itself runs as a background job (202) that survives page refreshes.
+ * RETIRED UPSTREAM. WHOOP deleted the app-login endpoint this source rode on
+ * (api-7.whoop.com no longer resolves), so connecting or syncing can only fail —
+ * and the DNS failure reads to the user as a rejected password. The route says so
+ * instead of taking a password and pointing it at a host that is gone. The record
+ * (GET, above) keeps every minute already imported; the official WHOOP API row is
+ * the connect that works.
  */
-export async function POST(req: Request) {
+export async function POST() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const body = (await req.json().catch(() => ({}))) as {
-    email?: string;
-    password?: string;
-    days?: number;
-    hrDays?: number;
-    test?: boolean;
-  };
-  const cfg = readConfig();
-  if (!cfg) return NextResponse.json({ error: "Not set up." }, { status: 400 });
-
-  const stored = cfg.whoopCreds ?? ({} as WhoopCreds);
-  const email = (body.email ?? stored.email ?? "").trim();
-  const password = (body.password ?? stored.password ?? "").trim();
-  if (!email || !(password || stored.refreshToken)) {
-    return NextResponse.json(
-      { error: "Add your WHOOP email + password to connect." },
-      { status: 400 },
-    );
-  }
-
-  // Fresh email/password → prove the login BEFORE storing anything. The minted
-  // tokens are kept so the first sync doesn't have to log in twice.
-  const freshCreds = Boolean(body.email || body.password);
-  if (freshCreds || body.test === true) {
-    try {
-      if (body.test === true && !password) {
-        // Nothing to password-test: prove the STORED grant the way a sync
-        // would (refresh path — the same verdict as `agentqs source test
-        // whoop`), and persist the rotated tokens.
-        const s = await ensureSession(stored);
-        cfg.whoopCreds = s.creds;
-        writeConfig(cfg);
-        return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });
-      }
-      const session = await whoopLogin(email, password);
-      if (body.test === true) {
-        return NextResponse.json({ id: "whoop", name: "WHOOP (per-minute, unofficial)", ok: true, detail: `logged in as ${email}` });
-      }
-      cfg.whoopCreds = mergeTokens({ ...stored, email, password }, session);
-      writeConfig(cfg);
-    } catch (e) {
-      return NextResponse.json({ error: `WHOOP login failed — ${(e as Error).message}` }, { status: 400 });
-    }
-  }
-
-  wipeDemoOnImport(); // first real import clears the generic demo record
-
-  const days = body.days && body.days > 0 ? body.days : undefined;
-  const hrDays = body.hrDays && body.hrDays > 0 ? body.hrDays : undefined;
-  const job = startSyncJob("whoop", async (progress) => {
-    const r = await syncSource({ id: "whoop", days, hrDays, onProgress: progress });
-    return { days: r.days, dailyRows: r.dailyRows };
-  });
-
-  return NextResponse.json({ ok: true, id: "whoop", name: "WHOOP (per-minute, unofficial)", job }, { status: 202 });
+  return NextResponse.json({ error: WHOOP_RETIRED }, { status: 410 });
 }

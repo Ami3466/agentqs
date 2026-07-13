@@ -27,7 +27,8 @@ import {
   resetGranolaAuthCache,
   transcriptToText,
 } from "../src/lib/granola";
-import { parseCsv } from "../src/lib/record";
+import Database from "better-sqlite3";
+import { parseCsv, rebuild, refreshSyncCache } from "../src/lib/record";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -158,6 +159,38 @@ async function offline(): Promise<void> {
   const updatedTexts = readCsv(recordDir, "granola_texts");
   check("the searchable prose reflects the new summary too",
     (updatedTexts ? cell(updatedTexts, "2026-06-12", "text") : "").includes("REVISED"));
+
+  // --- the cache catches up WITHOUT a full rebuild ---------------------------
+  // A sync patches only what it changed (record.refreshSyncCache); rebuilding the
+  // whole cache per sync re-reads every event in the record and blocks the server
+  // for minutes on a real one. Mutable events make this the hard case: the window
+  // must be REPLACED in the cache — events and their search rows — not appended to.
+  const dataDir = root;
+  rebuild({ recordDir, dataDir }); // the one full build (first import ever)
+  const summary2 = await importPlugin(granolaPlugin, { ...ctx, fetchImpl: fixtureFetch(fx2) }, recordDir);
+  const patch = refreshSyncCache(
+    {
+      sources: ["granola", ...summary2.extraSources],
+      eventsReplaced: summary2.eventsReplaced,
+      eventsAdded: summary2.appendedEvents,
+    },
+    { recordDir, dataDir },
+  );
+  check("the cache was patched, not rebuilt", patch !== null, `${patch?.dailyRows ?? 0} daily rows`);
+
+  const db = new Database(path.join(dataDir, "agentqs.db"), { readonly: true });
+  const evRows = db.prepare("SELECT id, text FROM events WHERE source='granola'").all() as { id: string; text: string }[];
+  const ftsRows = db
+    .prepare("SELECT COUNT(*) AS n FROM search WHERE kind='event' AND ref LIKE 'event:granola:%'")
+    .get() as { n: number };
+  const indexedProse = db
+    .prepare("SELECT COUNT(*) AS n FROM search WHERE kind='daily' AND ref GLOB 'daily:*:granola_texts:*'")
+    .get() as { n: number };
+  db.close();
+  check("re-synced events are REPLACED in the cache, not duplicated", evRows.length === 2, `${evRows.length} events`);
+  check("…and their search rows too", ftsRows.n === 2, `${ftsRows.n} search rows`);
+  check("the patched event carries the new summary", (evRows.find((e) => e.id === `granola:${MEETING_ID}`)?.text ?? "").includes("REVISED"));
+  check("the day's prose is searchable from the patched cache", indexedProse.n > 0, `${indexedProse.n} rows`);
 
   // --- pure helpers --------------------------------------------------------
   const pm = panelToText(fx.panels[MEETING_ID][0].content);

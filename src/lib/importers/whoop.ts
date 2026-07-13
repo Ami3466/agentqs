@@ -69,9 +69,10 @@ interface TokenResponse {
  *  is disabled", and their Auth0 login sits behind a Cloudflare browser
  *  challenge. A network/404 failure here is THAT, not the user's password —
  *  say so, and point at the connect that works. */
-const RETIRED_HINT =
-  "WHOOP retired the unofficial app login (its api-7.whoop.com endpoint no longer exists) — your password is fine. " +
+export const WHOOP_RETIRED =
+  "WHOOP retired the unofficial app login (its api-7.whoop.com endpoint no longer exists) — your password is fine, there is nothing left to log in to. " +
   "Connect the official WHOOP API row instead (recovery, strain & sleep): Pipeline → WHOOP (official API) → Authorize.";
+const RETIRED_HINT = WHOOP_RETIRED;
 
 async function postToken(body: Record<string, unknown>, fetchImpl: FetchLike): Promise<WhoopSession> {
   let res: Response;

@@ -102,6 +102,31 @@ export function readSyncJob(id: string, dir: string = dataDir()): SyncJob | null
   return readSyncJobs(dir)[id] ?? null;
 }
 
+/** Land the outcome of a sync that did NOT come from this queue — the scheduler
+ *  (`sync --due`), the CLI, MCP. The Pipeline row renders the JOB, so without
+ *  this a web sync that failed once stays on screen as "failed" forever, even
+ *  after the nightly scheduler synced the source successfully. A job the queue
+ *  owns (queued/running) is never touched. */
+export function noteSyncOutcome(
+  id: string,
+  ok: boolean,
+  error?: string,
+  summary: SyncJobSummary = {},
+  dir: string = dataDir(),
+): void {
+  if (isActive(readSyncJob(id, dir))) return; // the queue is running it; it writes the outcome
+  const at = new Date().toISOString();
+  patchJob(dir, id, {
+    status: ok ? "ok" : "error",
+    phase: ok ? "synced" : "failed",
+    pct: 100,
+    startedAt: at,
+    finishedAt: at,
+    error: ok ? undefined : error,
+    ...summary,
+  });
+}
+
 function patchJob(dir: string, id: string, patch: Partial<SyncJob>): SyncJob {
   const state = readFile(dir);
   const next: SyncJob = {
