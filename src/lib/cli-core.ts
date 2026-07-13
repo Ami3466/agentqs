@@ -19,6 +19,7 @@ import {
   appendInboxItem,
   applyDailyEdits,
   mergeDailyCsv,
+  parseCsv,
   rebuild,
   readInboxFromRecord,
   readRecord,
@@ -553,6 +554,26 @@ function dailySourceFile(rDir: string, id: string): string {
   return path.join(rDir, "daily", `${id}.csv`);
 }
 
+/** The newest date a source has already landed, or null when it holds nothing.
+ *  This is what tells an importer "resume from here" vs "this is a first import,
+ *  take everything" — a blind trailing window does neither. */
+function lastDailyDate(rDir: string, id: string): string | null {
+  const file = dailySourceFile(rDir, id);
+  if (!fs.existsSync(file)) return null;
+  const { header, rows } = parseCsv(fs.readFileSync(file, "utf8"));
+  const di = header.indexOf("date");
+  if (di < 0) return null;
+  const dates = rows.map((r) => (r[di] ?? "").trim()).filter(Boolean).sort();
+  return dates.at(-1) ?? null;
+}
+
+/** Shift an ISO date by n days (negative = back). */
+function shiftIso(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 function hasRecordBackedSource(rDir: string, id: string): boolean {
   try {
     const file = dailySourceFile(rDir, id);
@@ -709,6 +730,10 @@ export interface SyncSourceOpts {
   fixture?: string;
   login?: string; // github only — public commit sync without a token
   hrDays?: number; // whoop only — per-minute HR backfill window
+  /** whoop only — pull the account's ENTIRE history, whatever the record already
+   *  holds. A first import does this on its own; this forces it on an account whose
+   *  record was seeded with only a recent slice. */
+  allTime?: boolean;
   /** Live phase/percent reporting for the background job bar; optional. */
   onProgress?: JobProgress;
 }
@@ -788,14 +813,29 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
       throw new Error("WHOOP needs email + password — run 'agentqs whoop connect <email> <password>'.");
     }
     const name = whoopInstanceName(instanceId);
-    progress(`pulling ${name} days + per-minute heart rate`, 15);
+    // What window? Never a blind "last 90 days":
+    //   • --days N  → exactly what was asked for.
+    //   • record empty (FIRST import) → ALL TIME. A lifetime of data does not
+    //     arrive 90 days at a time, and an account that stopped recording before
+    //     that window lands nothing at all.
+    //   • record has rows → forward from where it left off (with a week of overlap
+    //     so late-arriving cycles are picked up), never from today minus 90.
+    const lastRecorded = lastDailyDate(rDir, instanceId);
+    const explicitDays = Boolean(opts.days && opts.days > 0);
+    const allTime = opts.allTime === true || (!explicitDays && !lastRecorded);
+    const from = explicitDays || !lastRecorded ? win.from : shiftIso(lastRecorded, -7);
+    progress(
+      allTime ? `pulling ${name}: ENTIRE history + per-minute heart rate` : `pulling ${name} days + per-minute heart rate`,
+      15,
+    );
     const s = await importWhoop({
       creds: creds!,
-      from: win.from,
+      from,
       to: win.to,
       recordDir: rDir,
       instanceId,
       fetchImpl,
+      allTime,
       hrDays: opts.hrDays && opts.hrDays > 0 ? opts.hrDays : undefined,
     });
     progress("merging into the record", 75);

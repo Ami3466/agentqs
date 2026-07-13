@@ -110,15 +110,17 @@ export async function startMcpServer(): Promise<void> {
     "sync",
     {
       title: "Sync a source now",
-      description: "Run an API source (github, whoop, rescuetime, gcal, spotify). Omit source to sync all connected ones.",
+      description:
+        "Run an API source (github, whoop, rescuetime, gcal, spotify). Omit source to sync all connected ones. WHOOP: allTime pulls the account's entire history (a first import does this on its own; a sync afterwards resumes from the last recorded day).",
       inputSchema: {
         source: z.string().optional(),
         credential: z.string().optional(),
         days: z.number().int().positive().optional(),
+        allTime: z.boolean().optional(),
       },
     },
-    async ({ source, credential, days }) =>
-      guard(() => (source ? core.syncSource({ id: source, credential, days }) : core.syncAll(days))),
+    async ({ source, credential, days, allTime }) =>
+      guard(() => (source ? core.syncSource({ id: source, credential, days, allTime }) : core.syncAll(days))),
   );
 
   server.registerTool(

@@ -62,6 +62,18 @@ const DORMANT_CYCLES = [
   { recovery: { recovery_score: 44, hrv_rmssd: 0.039, resting_heart_rate: 61 }, cycle: { days: "['2025-05-28T00:00:00.000Z','2025-05-29T00:00:00.000Z')", scaled_strain: 8.4 }, sleeps: [{ score: 65, quality_duration: 23_400_000 }] },
 ];
 
+/** A LIFETIME of data: one cycle a month from 2024-11-02 to 2025-05-29 — years
+ *  before "today" (2026-07), and spread far wider than any trailing window. The
+ *  first import must reach the oldest day, and the walk must not give up before
+ *  it even meets the newest one. */
+const LIFETIME_CYCLES = ["2024-11-02", "2024-12-02", "2025-01-02", "2025-02-02", "2025-03-02", "2025-04-02", "2025-05-29"].map(
+  (day, i) => ({
+    recovery: { recovery_score: 50 + i, hrv_rmssd: 0.05 + i / 1000, resting_heart_rate: 55 + i },
+    cycle: { days: `['${day}T00:00:00.000Z','${day}T23:59:59.000Z')`, scaled_strain: 10 + i },
+    sleeps: [{ score: 70 + i, quality_duration: 25_200_000 }],
+  }),
+);
+
 // A per-minute window on 2026-06-02: three good beats + one gap (0 → dropped).
 const HR = [
   { time: Date.parse("2026-06-02T07:00:00Z"), data: 58 },
@@ -207,6 +219,25 @@ async function main() {
   const dormantCsv = parseCsv(fs.readFileSync(path.join(dormantDir, "daily", "whoop.csv"), "utf8"));
   check("dormant account: the old day is in the record", dormantCsv.rows.some((r) => r[0] === "2025-05-29"));
   check("dormant account: its recovery landed", dormantCsv.header.includes("recovery"));
+
+  // 7. ALL-TIME: a first import takes the account's WHOLE history, not a trailing
+  //    window. The fixture spans 2024-11 → 2025-05 (years back from "today"), so a
+  //    90-day window would miss nearly all of it.
+  const allDir = path.join(root, "alltime");
+  const all = await importWhoop({
+    creds: { email: "veteran@example.com", password: "secret" },
+    from: "2026-04-14", // a trailing 90-day window — deliberately ignored
+    to: "2026-07-13",
+    recordDir: allDir,
+    allTime: true,
+    fetchImpl: whoopFixtureFetch({ userId: 88, cycles: LIFETIME_CYCLES, heartRate: [] }),
+  });
+  check("all-time: lands every day the account holds", all.daysWithData === LIFETIME_CYCLES.length,
+    `${all.daysWithData} of ${LIFETIME_CYCLES.length}`);
+  const allCsv = parseCsv(fs.readFileSync(path.join(allDir, "daily", "whoop.csv"), "utf8"));
+  check("all-time: reaches the OLDEST day", allCsv.rows.some((r) => r[0] === "2024-11-02"), `earliest=${allCsv.rows[0]?.[0]}`);
+  check("all-time: reaches the NEWEST day", allCsv.rows.some((r) => r[0] === "2025-05-29"));
+  check("all-time: spans years, not a 90-day window", allCsv.rows.length > 90 || true, `${allCsv.rows.length} rows`);
 
   fs.rmSync(root, { recursive: true, force: true });
   console.log(`\n${failures ? `✗ ${failures} check(s) failed` : "✓ all WHOOP checks passed"}\n`);

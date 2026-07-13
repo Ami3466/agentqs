@@ -83,7 +83,7 @@ OAuth sources (Google, Spotify, Fitbit, Strava, Whoop, Withings, Trakt) connect 
 
 **"Connected" means a key is stored - nothing else.** A CSV you dropped, a Takeout archive you unpacked, a history file read off your disk: those are **Imported** and **Local file**, and they say so. They are still yours to filter and remove - they just have no account behind them and nothing syncs them. Only a row with a real credential gets the Connected badge, so the list answers "what is actually live?" at a glance instead of showing you thirty green lights for files you dragged in once.
 
-\* Granola has no API key - the credential is the desktop app's refresh token (`workos_tokens.refresh_token` in its `supabase.json`). Running agentqs on the same machine? It finds the login itself. Whoop connects two ways, and both ship: the official API (Authorize) for daily summaries, and the unofficial app login (email + password) - the only source of **per-minute heart rate**.
+\* Granola has no API key - the credential is the desktop app's refresh token (`workos_tokens.refresh_token` in its `supabase.json`). Running agentqs on the same machine? It finds the login itself. Whoop connects two ways, and both ship: the official API (Authorize) for daily summaries, and the unofficial app login (email + password) - the only source of **per-minute heart rate**. Connecting Whoop imports its **entire history**, not a recent window - it finds where your data starts on its own, and later syncs resume from the last day you have (`agentqs sync whoop --all-time` re-runs a full backfill any time).
 
 **Scrape with the Chrome extension** - the agentqs extension exports your entire Google MyActivity from a signed-in tab. Checkpointed: survives restarts and resumes on its own.
 

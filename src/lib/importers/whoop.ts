@@ -40,6 +40,14 @@ const API_VERSION = "7"; // every authed data call carries apiVersion=7, like th
 /** Per-minute heart rate is heavy (~1440 rows/day); default to a recent window. */
 const DEFAULT_HR_DAYS = 14;
 const HR_STEP_SECONDS = 60; // 60 = per-minute (6 = per-6s, the app's finest)
+/** All-time backfill: how far back the walk may go. WHOOP shipped to consumers in
+ *  2015, so nothing predates this. */
+const ALL_TIME_FLOOR = "2015-01-01";
+/** The walk steps back in windows this wide, and gives up after this many in a row
+ *  come back empty (~1 year of silence) — long enough to stride over a break from
+ *  the strap, short enough not to grind back to 2015 for a 2024 account. */
+const BACKFILL_WINDOW_DAYS = 180;
+const BACKFILL_EMPTY_WINDOWS = 2;
 
 /** Stored WHOOP credentials — kept in config.json (mode 0600, never committed).
  *  The password is retained so a scheduled pull can re-auth once a refresh token
@@ -326,6 +334,60 @@ export async function fetchCycles(
   return all;
 }
 
+/**
+ * EVERY cycle the account has ever recorded. WHOOP exposes no "account created"
+ * date, so the start is discovered: step back from `to` in windows and stop once
+ * BACKFILL_EMPTY_WINDOWS of them in a row hold nothing (or the floor is hit).
+ *
+ * Emptiness is judged on IN-RANGE cycles only. WHOOP answers a window it has no
+ * data for with its newest cycles anyway (dated outside it), so counting the raw
+ * response would walk back to 2015 on every account.
+ *
+ * This is what a FIRST import runs: pulling "the last 90 days" of a lifetime of
+ * data is not an import, and for an account that stopped recording a year ago it
+ * lands nothing at all.
+ */
+export async function fetchAllCycles(
+  userId: number,
+  token: string,
+  to: string,
+  fetchImpl: FetchLike = fetch,
+  floor: string = ALL_TIME_FLOOR,
+): Promise<WhoopCycle[]> {
+  const out: WhoopCycle[] = [];
+  const seen = new Set<string>(); // a cycle can repeat across window edges
+
+  // Start the walk at the account's NEWEST cycle, not at today. A strap that
+  // stopped a year ago would otherwise burn through the empty-window budget before
+  // reaching any data and conclude the account is empty. WHOOP answers even a
+  // window it has nothing for with its newest cycles, so one probe locates them.
+  const probe = await fetchCycles(userId, token, shiftDate(to, -(BACKFILL_WINDOW_DAYS - 1)), to, fetchImpl);
+  const newest = latestCycleDate(probe);
+  let cursor = newest && newest < to ? newest : to;
+  let empty = 0;
+  while (cursor >= floor && empty < BACKFILL_EMPTY_WINDOWS) {
+    const from = maxDate(shiftDate(cursor, -(BACKFILL_WINDOW_DAYS - 1)), floor);
+    const page = await fetchCycles(userId, token, from, cursor, fetchImpl);
+    let landed = 0;
+    for (const c of page) {
+      const day = cycleDate(c.cycle?.days);
+      if (!day || day < from || day > cursor) continue; // out-of-range filler
+      if (seen.has(day)) continue;
+      seen.add(day);
+      out.push(c);
+      landed++;
+    }
+    empty = landed ? 0 : empty + 1;
+    cursor = shiftDate(from, -1);
+  }
+  return out;
+}
+
+/** The later of two ISO dates. */
+function maxDate(a: string, b: string): string {
+  return a > b ? a : b;
+}
+
 export interface HrSample {
   time: number; // epoch ms
   bpm: number;
@@ -565,6 +627,9 @@ export async function importWhoop(opts: {
   recordDir: string;
   instanceId?: string;
   hrDays?: number;
+  /** Take the account's ENTIRE history, ignoring `from` (what a first import does).
+   *  The per-minute HR stream stays capped at `hrDays` — years of it is gigabytes. */
+  allTime?: boolean;
   fetchImpl?: FetchLike;
 }): Promise<ImportWhoopSummary> {
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -573,29 +638,43 @@ export async function importWhoop(opts: {
 
   let from = opts.from;
   let to = opts.to;
-  let cycles = await fetchCycles(session.userId, session.accessToken, from, to, fetchImpl);
-  let dailyCycles = normalizeCycles(cycles, from, to);
-
-  // A window anchored to TODAY finds nothing on an account whose strap stopped
-  // recording months ago — it imported zero days and still reported "ok", which
-  // reads as "WHOOP gives no data". WHOOP hands back its newest cycles even when
-  // the asked-for window is empty, so use them: re-anchor the SAME span to end on
-  // the account's real last day and pull that instead. A daily-worn account never
-  // takes this path (its window has data).
-  const latestCycle = latestCycleDate(cycles) ?? undefined;
+  let cycles: WhoopCycle[];
+  let dailyCycles: Map<string, DailyCycle>;
   let reanchored = false;
-  if (dailyCycles.size === 0 && latestCycle && latestCycle < from) {
-    const span = spanDays(from, to);
-    from = shiftDate(latestCycle, -(span - 1));
-    to = latestCycle;
+
+  if (opts.allTime) {
+    // The FIRST import of an account takes everything it has ever recorded —
+    // "the last 90 days" of a lifetime of data is not an import.
+    cycles = await fetchAllCycles(session.userId, session.accessToken, to, fetchImpl);
+    const earliest = cycles.map((c) => cycleDate(c.cycle?.days)).filter(Boolean).sort()[0];
+    from = earliest || from;
+    dailyCycles = normalizeCycles(cycles, from, to);
+  } else {
     cycles = await fetchCycles(session.userId, session.accessToken, from, to, fetchImpl);
     dailyCycles = normalizeCycles(cycles, from, to);
-    reanchored = true;
-  }
 
-  // HR follows the window that actually holds data (anchoring it to today would
-  // pull an empty minute stream for a dormant account).
-  const { hrFrom, hrTo } = hrWindow(from, to, opts.hrDays ?? DEFAULT_HR_DAYS);
+    // A window anchored to TODAY finds nothing on an account whose strap stopped
+    // recording months ago — it imported zero days and still reported "ok", which
+    // reads as "WHOOP gives no data". WHOOP hands back its newest cycles even when
+    // the asked-for window is empty, so use them: re-anchor the SAME span to end on
+    // the account's real last day. A daily-worn account never takes this path.
+    const newest = latestCycleDate(cycles);
+    if (dailyCycles.size === 0 && newest && newest < from) {
+      const span = spanDays(from, to);
+      from = shiftDate(newest, -(span - 1));
+      to = newest;
+      cycles = await fetchCycles(session.userId, session.accessToken, from, to, fetchImpl);
+      dailyCycles = normalizeCycles(cycles, from, to);
+      reanchored = true;
+    }
+  }
+  const latestCycle = latestCycleDate(cycles) ?? undefined;
+
+  // The per-minute stream is heavy (~1440 rows/day), so it stays capped at hrDays —
+  // but it must hang off the last day that HAS data, not off today, or a dormant
+  // account pulls an empty minute window while its cycles land fine.
+  const lastDataDay = [...dailyCycles.keys()].sort().at(-1) ?? to;
+  const { hrFrom, hrTo } = hrWindow(from, lastDataDay, opts.hrDays ?? DEFAULT_HR_DAYS);
   const samples = await fetchHeartRate(session.userId, session.accessToken, hrFrom, hrTo, fetchImpl);
   const { files, daily: dailyHr } = bucketHeartRate(samples);
   const minutes = writeHeartRateFiles(opts.recordDir, files, instanceId);

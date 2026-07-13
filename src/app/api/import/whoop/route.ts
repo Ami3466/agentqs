@@ -125,6 +125,8 @@ export async function POST(req: Request) {
     password?: string;
     days?: number;
     hrDays?: number;
+    /** Pull the account's ENTIRE history (a first import does this on its own). */
+    allTime?: boolean;
     test?: boolean;
   };
   const cfg = readConfig();
@@ -169,8 +171,9 @@ export async function POST(req: Request) {
 
   const days = body.days && body.days > 0 ? body.days : undefined;
   const hrDays = body.hrDays && body.hrDays > 0 ? body.hrDays : undefined;
+  const allTime = body.allTime === true;
   const job = startSyncJob(instanceId, async (progress) => {
-    const r = await syncSource({ id: instanceId, days, hrDays, onProgress: progress });
+    const r = await syncSource({ id: instanceId, days, hrDays, allTime, onProgress: progress });
     return { days: r.days, dailyRows: r.dailyRows };
   });
 
