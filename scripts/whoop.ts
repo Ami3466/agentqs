@@ -54,6 +54,14 @@ const LEGACY_CYCLE = [
   { score: 55, hrv_rmssd_milli: 44, resting_heart_rate: 58, cycle: { days: "['2026-06-01T00:00:00.000Z','2026-06-02T00:00:00.000Z')", scaled_strain: 9.1 }, sleeps: [{ score: 70, quality_duration: 21_600_000 }] },
 ];
 
+// A DORMANT account: the strap stopped recording in May 2025. Asked for a 2026
+// window, WHOOP answers with its newest cycles anyway — dated in the past. (This is
+// the real behaviour observed against a live account whose data ended 2025-05-29.)
+const DORMANT_CYCLES = [
+  { recovery: { recovery_score: 60, hrv_rmssd: 0.048, resting_heart_rate: 57 }, cycle: { days: "['2025-05-29T00:00:00.000Z','2025-05-30T00:00:00.000Z')", scaled_strain: 10.2 }, sleeps: [{ score: 71, quality_duration: 25_200_000 }] },
+  { recovery: { recovery_score: 44, hrv_rmssd: 0.039, resting_heart_rate: 61 }, cycle: { days: "['2025-05-28T00:00:00.000Z','2025-05-29T00:00:00.000Z')", scaled_strain: 8.4 }, sleeps: [{ score: 65, quality_duration: 23_400_000 }] },
+];
+
 // A per-minute window on 2026-06-02: three good beats + one gap (0 → dropped).
 const HR = [
   { time: Date.parse("2026-06-02T07:00:00Z"), data: 58 },
@@ -179,6 +187,26 @@ async function main() {
   check("base account's daily file is untouched", fs.readFileSync(path.join(recordDir, "daily", "whoop.csv")).equals(after));
   check("the two HR dirs are distinct", whoopHrDir(recordDir, "whoop") !== whoopHrDir(recordDir, "whoop-2"),
     `${whoopHrDir(recordDir, "whoop")} vs ${whoopHrDir(recordDir, "whoop-2")}`);
+
+  // 6. A DORMANT account — the strap stopped recording long before the window we
+  //    ask for. WHOOP still answers with its newest cycles (dated in the past), so
+  //    a window anchored to today normalizes to ZERO days and the sync used to
+  //    report "ok · 0 days" — indistinguishable from a broken source. The pull must
+  //    re-anchor onto the account's real last day and land the data that IS there.
+  const dormantDir = path.join(root, "dormant");
+  const dormant = await importWhoop({
+    creds: { email: "dormant@example.com", password: "secret" },
+    from: "2026-06-01", // today-ish; the account's data ends 2025-05-29
+    to: "2026-06-02",
+    recordDir: dormantDir,
+    fetchImpl: whoopFixtureFetch({ userId: 77, cycles: DORMANT_CYCLES, heartRate: [] }),
+  });
+  check("dormant account: pull re-anchors onto its real data", dormant.reanchored === true);
+  check("dormant account: reports the newest cycle it holds", dormant.latestCycle === "2025-05-29", `latestCycle=${dormant.latestCycle}`);
+  check("dormant account: lands its days instead of nothing", dormant.daysWithData > 0, `${dormant.daysWithData} day(s), ${dormant.cells} cells`);
+  const dormantCsv = parseCsv(fs.readFileSync(path.join(dormantDir, "daily", "whoop.csv"), "utf8"));
+  check("dormant account: the old day is in the record", dormantCsv.rows.some((r) => r[0] === "2025-05-29"));
+  check("dormant account: its recovery landed", dormantCsv.header.includes("recovery"));
 
   fs.rmSync(root, { recursive: true, force: true });
   console.log(`\n${failures ? `✗ ${failures} check(s) failed` : "✓ all WHOOP checks passed"}\n`);

@@ -808,8 +808,21 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
       c2.sourceSyncedAt = { ...(c2.sourceSyncedAt ?? {}), [instanceId]: now };
       writeConfig(c2);
     }
+    // Landing NOTHING is not success. A silent "ok · 0 days" is exactly how a
+    // WHOOP account with no recent data reads as "the source is broken" — say what
+    // the account actually holds so the next move is obvious.
+    if (s.daysWithData === 0) {
+      const backTo = s.latestCycle
+        ? Math.ceil((Date.now() - new Date(`${s.latestCycle}T00:00:00Z`).getTime()) / 86_400_000) + 90
+        : 0;
+      throw new Error(
+        s.latestCycle
+          ? `${name}: no cycles between ${s.from} and ${s.to}. This account's newest cycle is ${s.latestCycle} — the strap has not recorded since. Pull its history with: agentqs sync ${instanceId} --days ${backTo}`
+          : `${name}: WHOOP returned no cycles at all for ${s.from} → ${s.to}. The login worked, so this account holds no data in that window.`,
+      );
+    }
     return {
-      id: instanceId, name, from: win.from, to: win.to,
+      id: instanceId, name, from: s.from, to: s.to,
       days: s.daysWithData, metrics: s.metrics, cells: s.cells, dailyRows, syncedAt: now,
     };
   }
