@@ -16,6 +16,11 @@
  *            refuses a non-empty destination. `--latest` restores through the
  *            same fake. The plugin's probe proves a credential with NO upload.
  *
+ * Also pins the MODEL: a backup target is NOT a data source. Connected and
+ * backing up, Drive still never appears in the Pipeline sources list, never
+ * writes a row into the record, refuses to be synced or scheduled as a source,
+ * and keeps its cadence under config.backup beside GitHub's.
+ *
  * Deterministic, no network. Run: npm run backup:test
  */
 import { execFileSync } from "child_process";
@@ -32,9 +37,14 @@ import {
   restoreArchive,
   restoreIntoStore,
   runDriveBackup,
+  setBackupInterval,
   setBackupPassphrase,
 } from "../src/lib/backup";
 import { gdriveBackupPlugin } from "../src/lib/importers/gdrive-backup";
+import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
+import { buildSources } from "../src/lib/source-registry";
+import { setInterval, syncSource } from "../src/lib/cli-core";
+import { readSyncRuns } from "../src/lib/sync-runs";
 import { writeConfig, readConfig, type AppConfig } from "../src/lib/config";
 import type { FetchLike } from "../src/lib/importers/plugin";
 
@@ -238,10 +248,89 @@ async function main() {
   check("plugin connects via OAuth (drive.file)", gdriveBackupPlugin.oauth?.scope.includes("drive.file") === true);
   check("plugin ships a credential guide", (gdriveBackupPlugin.credentialHelp?.steps.length ?? 0) >= 4);
 
+  // A BACKUP TARGET IS NOT A DATA SOURCE. The pipeline is the data coming IN;
+  // Drive only carries data OUT. It rides the plugin registry for its OAuth
+  // machinery alone — so it must never appear as a source, never land a row in
+  // the record, and never be scheduled like one.
+  console.log("\nnot a source (the pipeline is data coming IN):");
+  check("plugin is flagged a backup target", gdriveBackupPlugin.backupTarget === true);
+  check("it lands no metric in the record (no primaryMetric)", !gdriveBackupPlugin.primaryMetric);
+  check("it is excluded from SOURCE_PLUGINS", !SOURCE_PLUGINS.some((p) => p.id === "gdrive_backup"));
+
+  const cfgS = readConfig()!;
+  cfgS.sourceOAuth = { gdrive_backup: { clientId: "c", clientSecret: "s", refreshToken: "r" } };
+  writeConfig(cfgS);
+  const sources = buildSources(readConfig(), path.join(root, "record"));
+  check(
+    "connected + backed up, it STILL never shows in the Pipeline sources list",
+    !sources.some((s) => s.id === "gdrive_backup"),
+    sources.map((s) => s.id).join(","),
+  );
+  check(
+    "and no stray record row resurrects it either",
+    !sources.some((s) => s.name.toLowerCase().includes("drive")),
+  );
+
+  let syncRefused = "";
+  await syncSource({ id: "gdrive_backup" }).catch((e) => (syncRefused = (e as Error).message));
+  check("syncing it as a source is refused, pointing at `backup drive`", /backup target/.test(syncRefused) && /backup drive/.test(syncRefused), syncRefused);
+  check("the refusal leaves NO failed-sync row in the ledger", !readSyncRuns().runs["gdrive_backup"]);
+  check(
+    "and nothing was written to record/daily",
+    !fs.existsSync(path.join(root, "record", "daily", "gdrive_backup.csv")),
+  );
+
+  let intervalRefused = "";
+  try {
+    setInterval("gdrive_backup", "daily");
+  } catch (e) {
+    intervalRefused = (e as Error).message;
+  }
+  check("scheduling it as a SOURCE is refused", /backup target/.test(intervalRefused), intervalRefused);
+  check("...and no source interval was written", !readConfig()?.sourceIntervals?.["gdrive_backup"]);
+
+  console.log("\nbackup schedule (both targets live under config.backup):");
+  setBackupInterval("drive", "daily");
+  check("drive cadence saved under backup.drive.interval", readConfig()?.backup?.drive?.interval === "daily");
+  check("backupStatus reports it", backupStatus().drive.interval === "daily");
+  setBackupInterval("drive", "off");
+  check("off pauses it (credentials + passphrase stay)", backupStatus().drive.interval === "off" && backupStatus().drive.connected && backupStatus().drive.passphraseSet);
+
+  // A store written before backups moved out of sourceIntervals must keep working.
+  const legacy = readConfig()!;
+  delete legacy.backup!.drive!.interval;
+  legacy.sourceIntervals = { gdrive_backup: "daily" };
+  writeConfig(legacy);
+  check("a LEGACY sourceIntervals cadence is still honored", backupStatus().drive.interval === "daily");
+  setBackupInterval("drive", "weekly");
+  check(
+    "and setting it migrates the key away from sourceIntervals",
+    readConfig()?.backup?.drive?.interval === "weekly" && !readConfig()?.sourceIntervals?.["gdrive_backup"],
+  );
+
   console.log("\nstatus:");
   const st = backupStatus();
   check("drive status: passphrase set + last run visible", st.drive.passphraseSet && st.drive.lastFile === d3.file);
   check("github status: not configured in this store (test ran with explicit dir)", !st.github.configured);
+
+  // A Drive failure is a SENTENCE the user reads, not Google's pretty-printed
+  // JSON envelope: dumped raw, one 401 turned `backup status` into eight lines
+  // of braces with the reason buried and cut off mid-object.
+  console.log("\nerrors read as one line:");
+  const rejectingDrive: FetchLike = async () =>
+    new Response(
+      JSON.stringify(
+        { error: { code: 401, message: "Request had invalid authentication credentials.", errors: [{ message: "Invalid Credentials" }] } },
+        null,
+        2,
+      ),
+      { status: 401 },
+    );
+  let driveErr = "";
+  await runDriveBackup({ credential: "expired", fetchImpl: rejectingDrive }).catch((e) => (driveErr = (e as Error).message));
+  check("a Drive HTTP error collapses to ONE line", Boolean(driveErr) && !driveErr.includes("\n"), driveErr);
+  check("…keeping what Google actually said", driveErr.includes("Request had invalid authentication credentials."));
+  check("…and `backup status` shows that one line", !(backupStatus().drive.lastError ?? "").includes("\n"));
 
   let noPassphrase = false;
   const c1 = readConfig()!;

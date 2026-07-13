@@ -95,6 +95,11 @@ export interface GithubBackupConfig {
 export interface DriveBackupConfig {
   folderId?: string; // Drive folder the archives land in (created on first run)
   keep?: number; // archives kept before rotation (default 8)
+  /** `sync --due` cadence (default off). A backup is data going OUT, so its
+   *  schedule lives HERE, beside GitHub's — never in `sourceIntervals`, which
+   *  is the cadence of data coming IN. (Legacy stores kept it under
+   *  `sourceIntervals.gdrive_backup`; `backupStatus` still reads that.) */
+  interval?: Interval;
   lastAt?: string;
   lastFile?: string;
   lastBytes?: number;
@@ -334,7 +339,12 @@ export interface PublicConfig {
     whisperModel: string;
     whisperLang: string;
   };
-  channels: { telegram: boolean; slack: boolean; replies: Record<string, ChannelReplyPrefs> };
+  channels: {
+    telegram: boolean;
+    slack: boolean;
+    slackVerified: boolean; // signing secret stored — inbound events are signature-checked
+    replies: Record<string, ChannelReplyPrefs>;
+  };
   theme: string;
   dataDir: string;
   recordDir: string;
@@ -386,6 +396,7 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     channels: {
       telegram: Boolean(ch?.telegramBotToken),
       slack: Boolean(ch?.slackBotToken),
+      slackVerified: Boolean(ch?.slackSigningSecret),
       replies: ch?.replies ?? {},
     },
     theme: cfg.theme,

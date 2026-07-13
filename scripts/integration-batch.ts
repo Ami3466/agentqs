@@ -17,7 +17,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { importPlugin } from "../src/lib/importers/plugin";
-import { PLUGINS } from "../src/lib/importers/registry";
+import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
 import { writeGithubRecord } from "../src/lib/importers/github";
 import { importWhoop, whoopFixtureFetch } from "../src/lib/importers/whoop";
 import { rebuild } from "../src/lib/record";
@@ -38,9 +38,7 @@ async function main() {
   const dbFile = path.join(root, "agentqs.db");
   const from = "2026-06-01";
   const to = "2026-06-30";
-  // Hermetic store: gdrive_backup's sync archives dataDir() itself, so the run
-  // must resolve to THIS temp root (with the passphrase its brain requires),
-  // never the real record.
+  // Hermetic store: every write must resolve to THIS temp root, never the real record.
   process.env.AGENTQS_DATA_DIR = root;
   writeConfig({
     username: "t",
@@ -67,7 +65,7 @@ async function main() {
   check("GitHub commits written to record/daily/github.csv", fs.existsSync(path.join(recordDir, "daily", "github.csv")));
 
   // Every single-credential plugin through the real import pipeline.
-  for (const plugin of PLUGINS) {
+  for (const plugin of SOURCE_PLUGINS) {
     const body = JSON.parse(fs.readFileSync(path.resolve(FIXTURES[plugin.id]), "utf8"));
     const summary = await importPlugin(
       plugin,

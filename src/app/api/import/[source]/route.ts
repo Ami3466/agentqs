@@ -53,7 +53,7 @@ function status({ plugin, instanceId }: PluginInstance) {
           clientId: cfg?.sourceOAuth?.[instanceId]?.clientId ?? "",
         }
       : null,
-    primaryMetric: plugin.primaryMetric,
+    primaryMetric: plugin.primaryMetric ?? "",
     unit: plugin.unit ?? "",
     syncedAt: cfg?.sourceSyncedAt?.[instanceId] ?? null,
     // The background job (running or last finished) + the run ledger — the UI
@@ -69,7 +69,7 @@ function status({ plugin, instanceId }: PluginInstance) {
   if (!fs.existsSync(file)) return out;
   const { header, rows } = parseCsv(fs.readFileSync(file, "utf8"));
   const di = header.indexOf("date");
-  const mi = header.indexOf(plugin.primaryMetric);
+  const mi = plugin.primaryMetric ? header.indexOf(plugin.primaryMetric) : -1;
   if (di < 0 || rows.length === 0) return out;
   out.days = rows.filter((r) => (r[di] ?? "").trim() !== "").length;
   if (mi >= 0) {
@@ -89,6 +89,19 @@ function status({ plugin, instanceId }: PluginInstance) {
   return out;
 }
 
+/** A backup target (Google Drive) rides the plugin contract for its OAuth
+ *  machinery, but importing FROM it is not a thing it does — this route is the
+ *  data coming IN. Its face is /api/backup. */
+function backupTargetError(inst: PluginInstance): NextResponse | null {
+  if (!inst.plugin.backupTarget) return null;
+  return NextResponse.json(
+    {
+      error: `${inst.instanceId} is a backup target, not a data source — use /api/backup ({"target":"drive"} to run one, {"target":"drive","schedule":"daily"} to set its cadence).`,
+    },
+    { status: 400 },
+  );
+}
+
 /** Current state of a Tier-1 plugin source, read straight from the record. */
 export async function GET(_req: Request, { params }: { params: { source: string } }) {
   if (!getCurrentUser()) {
@@ -96,7 +109,7 @@ export async function GET(_req: Request, { params }: { params: { source: string 
   }
   const inst = pluginInstanceById(params.source);
   if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
-  return NextResponse.json(status(inst));
+  return backupTargetError(inst) ?? NextResponse.json(status(inst));
 }
 
 /**
@@ -114,6 +127,8 @@ export async function POST(req: Request, { params }: { params: { source: string 
   }
   const inst = pluginInstanceById(params.source);
   if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
+  const notASource = backupTargetError(inst);
+  if (notASource) return notASource;
   const { plugin, instanceId } = inst;
 
   const body = (await req.json().catch(() => ({}))) as {

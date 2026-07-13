@@ -97,6 +97,17 @@ export interface ImporterPlugin {
   detail: string; // one-line description for the Pipeline tab
   /** api sources are auto-syncable; a not-yet-wired adapter would be `false`. */
   live: boolean;
+  /**
+   * NOT a data source — an EXPORT destination (Google Drive backup) that rides
+   * this contract ONLY for its credential machinery: the OAuth dance, the token
+   * refresh, `source authorize`, `source test`. The pipeline is data coming IN;
+   * a backup is data going OUT, so a backup target NEVER appears in the sources
+   * list / Pipeline tab, never writes to the record, and schedules itself under
+   * `config.backup.*` instead of `sourceIntervals`. Its face is Settings → Data
+   * (`agentqs backup`). A future Google Drive that IMPORTS files would be a
+   * separate, ordinary source plugin.
+   */
+  backupTarget?: boolean;
   /** Whether a credential is required to sync (all Tier-1 APIs need one). */
   requiresCredential: boolean;
   credentialLabel: string; // "RescueTime API key" | "OAuth access token"
@@ -107,8 +118,9 @@ export interface ImporterPlugin {
   /** OAuth2 authorization-code app config — only for expiring-token providers. */
   oauth?: OAuthProviderConfig;
   envKey?: string; // env var the credential can come from
-  /** The metric column the Pipeline-tab sparkline / headline number reads. */
-  primaryMetric: string;
+  /** The metric column the Pipeline-tab sparkline / headline number reads.
+   *  A `backupTarget` lands nothing in the record, so it has none. */
+  primaryMetric?: string;
   unit?: string; // shown after the headline number (e.g. "meetings")
   /**
    * The source's per-item records are re-derived on every sync, not immutable
@@ -122,9 +134,9 @@ export interface ImporterPlugin {
    *  holds a login on this machine (Granola). Base account only, like `envKey`,
    *  so extra accounts never silently inherit the desktop login. */
   discoverCredential?(): string | undefined;
-  /** Cheap credential proof for `source test` — a source whose fetch() has a
-   *  real side effect (gdrive_backup uploads an archive) MUST set one, so a
-   *  test never runs the side effect. Returns the human detail line. */
+  /** Cheap credential proof for `source test` — a plugin whose real work has a
+   *  side effect (a `backupTarget` uploads an archive) MUST set one, so a test
+   *  never runs that side effect. Returns the human detail line. */
   probe?(ctx: ImporterContext): Promise<string>;
   /** Fetch a window and normalize it into the wide daily table. */
   fetch(ctx: ImporterContext): Promise<ImporterResult>;

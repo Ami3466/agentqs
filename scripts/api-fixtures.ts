@@ -1,8 +1,11 @@
 /**
  * The one fixture table for the single-credential API plugins. Every script that
- * drives PLUGINS offline (api-sources, integration-batch) imports from here, so
- * adding a source is ONE entry — a map that only lives in one script rots as
- * plugins are added (integration-batch crashed exactly that way).
+ * drives SOURCE_PLUGINS offline (api-sources, integration-batch) imports from
+ * here, so adding a source is ONE entry — a map that only lives in one script
+ * rots as plugins are added (integration-batch crashed exactly that way).
+ *
+ * Backup targets are absent on purpose: they are not sources, they import
+ * nothing, and their own proof is scripts/backup-test.ts (fake Drive included).
  */
 
 export const FIXTURES: Record<string, string> = {
@@ -23,7 +26,6 @@ export const FIXTURES: Record<string, string> = {
   mastodon: "samples/mastodon-statuses.json",
   withings: "samples/withings-measures.json",
   granola: "samples/granola-documents.json",
-  gdrive_backup: "samples/gdrive-backup.json",
 };
 
 // Split-credential sources take "<a>:<b>" in the single credential slot.
@@ -32,7 +34,6 @@ export const CRED: Record<string, string> = {
   trakt: "CLIENTID:ACCESSTOKEN",
   mastodon: "mastodon.example:ACCESSTOKEN",
   granola: "test-refresh-token",
-  gdrive_backup: "ya29.fixture-token",
 };
 
 /** Multi-request sources need a fixture keyed by endpoint — and, for the
@@ -61,19 +62,6 @@ const MULTI: Record<string, Router> = {
     if (href.includes("get-document-panels")) return byDoc("panels");
     if (href.includes("get-document-transcript")) return byDoc("transcript");
     return {};
-  },
-  // A fake Drive, not fixture data: the plugin's sync tars + encrypts the (temp)
-  // store itself, so the fixture only answers the folder/upload/rotation calls.
-  gdrive_backup: (href) => {
-    const url = decodeURIComponent(href);
-    if (url.includes("uploadType=resumable")) {
-      return new Response(null, { status: 200, headers: { Location: "https://drive.fixture/upload-session-1" } });
-    }
-    if (url.includes("upload-session-1")) return { id: "file-1", name: "agentqs-backup-fixture" };
-    if (url.includes("/about")) return { user: { emailAddress: "fixture@example.com" } };
-    if (url.includes("/files?q=") && url.includes("mimeType=")) return { files: [{ id: "folder-1", name: "agentqs-backups" }] };
-    if (url.includes("/files?q=")) return { files: [] }; // rotation list — nothing old
-    return { id: "folder-1" }; // folder verify / create
   },
 };
 

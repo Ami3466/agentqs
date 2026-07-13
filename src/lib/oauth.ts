@@ -141,8 +141,9 @@ function saveGrant(instanceId: string, grant: OAuthGrant, mutate?: (cfg: AppConf
 }
 
 /** The provider redirected back: validate state, exchange the code, store the
- *  tokens. A fresh OAuth connect defaults to daily auto-sync, like the
- *  paste-a-key form does. Returns the connected instance for the redirect. */
+ *  tokens. A fresh OAuth connect defaults to daily — auto-sync for a source,
+ *  auto-backup for a backup target (whose cadence lives under `config.backup`,
+ *  never in `sourceIntervals`). Returns the connected instance for the redirect. */
 export async function completeOAuth(
   code: string,
   state: string,
@@ -174,7 +175,11 @@ export async function completeOAuth(
     },
     (latest) => {
       delete latest.oauthPending;
-      if (!latest.sourceIntervals?.[pending.instanceId]) {
+      if (inst.plugin.backupTarget) {
+        if (!latest.backup?.drive?.interval) {
+          latest.backup = { ...(latest.backup ?? {}), drive: { ...(latest.backup?.drive ?? {}), interval: "daily" } };
+        }
+      } else if (!latest.sourceIntervals?.[pending.instanceId]) {
         latest.sourceIntervals = { ...(latest.sourceIntervals ?? {}), [pending.instanceId]: "daily" };
       }
     },

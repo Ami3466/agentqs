@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { driveBackupConnected } from "./backup";
 import { readConfig } from "./config";
+import { pluginInstanceById } from "./importers/registry";
 import { recordDir } from "./paths";
 
 /**
@@ -44,10 +46,18 @@ export function onboardingGuide(): OnboardingGuide {
       return false;
     }
   };
-  const dataSourceConnected =
-    Object.keys(cfg?.sourceCreds ?? {}).length > 0 ||
-    Object.keys(cfg?.sourceOAuth ?? {}).some((k) => k !== "gdrive_backup");
-  const driveGrant = cfg?.sourceOAuth?.["gdrive_backup"];
+  // A backup target's credential is NOT a connected data source — whichever way
+  // it was stored (an OAuth grant OR a pasted token). Backups move data out; the
+  // pipeline brings it in. Asking the plugin beats listing ids by hand: the next
+  // backup target inherits the rule instead of silently ticking this step.
+  const isBackupCred = (key: string) => Boolean(pluginInstanceById(key)?.plugin.backupTarget);
+  const dataSourceConnected = [
+    ...Object.keys(cfg?.sourceCreds ?? {}),
+    ...Object.keys(cfg?.sourceOAuth ?? {}),
+  ].some((key) => !isBackupCred(key));
+  // One definition of "Drive is connected", shared with backupStatus() — the
+  // checklist and Settings → Data must never disagree about the same switch.
+  const driveConnected = driveBackupConnected(cfg);
 
   const steps: OnboardingStep[] = [
     {
@@ -103,11 +113,11 @@ export function onboardingGuide(): OnboardingGuide {
     {
       id: "backup_drive",
       title: "Back up everything to Google Drive",
-      why: "the whole store as one AES-256-GCM archive — covers what GitHub can't.",
-      done: Boolean((driveGrant?.refreshToken || driveGrant?.accessToken) && cfg?.backup?.passphrase),
-      cli: "agentqs backup passphrase --generate (store it OFF this machine) → agentqs source authorize gdrive_backup --client-id … --client-secret … → agentqs source interval gdrive_backup daily",
-      mcp: 'backup_run {"target":"drive"} · backup_status',
-      api: 'POST /api/backup {"target":"passphrase","generate":true} · POST /api/oauth/gdrive_backup {"clientId","clientSecret"}',
+      why: "the whole store as one AES-256-GCM archive — covers what GitHub can't. A backup target, not a data source: it never shows up in the pipeline.",
+      done: driveConnected && Boolean(cfg?.backup?.passphrase),
+      cli: "agentqs backup passphrase --generate (store it OFF this machine) → agentqs source authorize gdrive_backup --client-id … --client-secret … → agentqs backup drive --schedule daily",
+      mcp: 'backup_run {"target":"drive"} · schedule: backup_run {"target":"drive","schedule":"daily"} · backup_status',
+      api: 'POST /api/backup {"target":"passphrase","generate":true} · POST /api/oauth/gdrive_backup {"clientId","clientSecret"} · POST /api/backup {"target":"drive","schedule":"daily"}',
     },
     {
       id: "channels",

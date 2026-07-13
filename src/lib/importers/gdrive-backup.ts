@@ -1,22 +1,27 @@
 import type { ImporterContext, ImporterPlugin, ImporterResult } from "./plugin";
-import { runDriveBackup } from "../backup";
+import { driveErrorDetail } from "../backup";
 
 /**
- * Google Drive backup — an EXPORT target riding the importer-plugin contract,
- * so it inherits the whole source machinery instead of duplicating it:
- * connect = the standard OAuth dance (drive.file scope — the app only ever
- * sees files it created), schedule = the source interval, sync = tar+encrypt
- * the whole store and upload ONE archive (src/lib/backup.ts is the brain).
- * The "table" it lands is the receipt — backup_mb on the day it ran — so the
- * Pipeline tab shows schedule / last run / history like any source. `probe`
- * keeps `source test` cheap: proving the credential must never upload a
- * multi-hundred-MB archive.
+ * Google Drive backup — a BACKUP TARGET, not a data source. It rides the
+ * importer-plugin contract for one thing only: the credential machinery (the
+ * OAuth dance on drive.file scope — the app only ever sees files it created —
+ * plus token refresh, `source authorize` and `source test`). Everything else a
+ * source does, it deliberately does NOT do: it never appears in the Pipeline
+ * (that list is the data coming IN), never lands a row in the record, and
+ * schedules itself under `config.backup.drive.interval`, not `sourceIntervals`.
+ *
+ * The run lives in src/lib/backup.ts (`runDriveBackup`, reached through
+ * `backupDrive()`), its face is Settings → Data / `agentqs backup drive`.
+ * `probe` keeps `source test` cheap: proving the credential must never upload a
+ * multi-hundred-MB archive. A Drive that IMPORTS files would be a separate,
+ * ordinary source plugin — pulling data in has nothing to do with backup.
  */
 export const gdriveBackupPlugin: ImporterPlugin = {
   id: "gdrive_backup",
   name: "Google Drive backup",
   detail: "encrypted store archive uploaded to Drive",
   live: true,
+  backupTarget: true,
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "ya29.… (OAuth access token)",
@@ -38,22 +43,22 @@ export const gdriveBackupPlugin: ImporterPlugin = {
     // offline + consent → Google actually returns a refresh token, every time.
     extraAuthParams: { access_type: "offline", prompt: "consent" },
   },
-  primaryMetric: "backup_mb",
-  unit: "MB",
   async probe(ctx: ImporterContext): Promise<string> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
     const res = await fetchImpl("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)", {
       headers: { Authorization: `Bearer ${ctx.credential ?? ""}` },
     });
-    if (!res.ok) throw new Error(`Drive about → HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) throw new Error(`Drive about → HTTP ${res.status}: ${driveErrorDetail(await res.text())}`);
     const who = (await res.json()) as { user?: { emailAddress?: string } };
     return `Drive reachable as ${who.user?.emailAddress ?? "unknown account"}`;
   },
-  async fetch(ctx: ImporterContext): Promise<ImporterResult> {
-    const r = await runDriveBackup({ credential: ctx.credential ?? "", fetchImpl: ctx.fetchImpl });
-    return {
-      table: { header: ["date", "backup_mb"], rows: [[r.date, String(r.mb)]] },
-      meta: { file: r.file, bytes: r.bytes, rotationDeleted: r.rotation.deleted },
-    };
+  /** A backup target is never synced as a source — `backupDrive()` runs it. The
+   *  throw is the guard rail: no path may quietly land backup receipts in the
+   *  record (the record is data you captured, not bookkeeping about backups). */
+  async fetch(): Promise<ImporterResult> {
+    throw new Error(
+      "Google Drive is a backup target, not a data source — run `agentqs backup drive` " +
+        '(API: POST /api/backup {"target":"drive"}), or set its cadence with `agentqs backup drive --schedule daily`.',
+    );
   },
 };

@@ -48,11 +48,19 @@ export const PLUGINS: ImporterPlugin[] = [
   mastodonPlugin,
   withingsPlugin,
   granolaPlugin,
-  // Not an importer: the encrypted-Drive BACKUP target. It lives here because a
-  // registry entry is what buys the OAuth dance, the schedule and the Pipeline
-  // row — its sync uploads an archive and lands only the backup_mb receipt.
+  // NOT an importer and NOT a source: the encrypted-Drive BACKUP target. It sits
+  // in this registry for one reason — a registry entry is what buys the OAuth
+  // dance, the token refresh and `source authorize`. It brings no data in, so it
+  // stays out of the pipeline: iterate SOURCE_PLUGINS whenever you mean "the
+  // sources we pull data from".
   gdriveBackupPlugin,
 ];
+
+/** The DATA SOURCES — every plugin except the backup targets. The pipeline is
+ *  data coming IN; a backup is data going OUT. Anything listing, syncing or
+ *  scheduling sources iterates THIS, never PLUGINS (which also carries the
+ *  credential-only backup targets). */
+export const SOURCE_PLUGINS: ImporterPlugin[] = PLUGINS.filter((p) => !p.backupTarget);
 
 export function pluginById(id: string): ImporterPlugin | undefined {
   return PLUGINS.find((p) => p.id === id);

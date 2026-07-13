@@ -75,6 +75,9 @@ interface BackupView {
     lastFile?: string;
     lastError?: string;
   };
+  /** The Drive upload runs as a background job (minutes, survives a reload) —
+   *  this is its live phase, polled from the same GET. */
+  driveJob: { status: string; phase: string; pct: number; error?: string } | null;
 }
 
 interface WhisperStatus {
@@ -269,12 +272,48 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [stt, setStt] = useState<SttCap | null>(null);
   const [tgToken, setTgToken] = useState("");
   const [slackToken, setSlackToken] = useState("");
+  const [slackSecret, setSlackSecret] = useState("");
   // Per-channel reply behaviour: AI replies vs log-only, persona, model override.
   const [replies, setReplies] = useState<Record<string, ChannelReplyPrefs>>({
     telegram: { ai: true, ...config.channels.replies.telegram },
     slack: { ai: true, ...config.channels.replies.slack },
   });
   const [origin, setOrigin] = useState("");
+  // Slack's create-from-manifest path sets the scopes, the events AND the request
+  // URL in one paste — the click-by-click alternative is where people get lost
+  // hunting a bot token that does not exist until the app is installed.
+  const slackWebhook = `${origin || "https://<your-host>"}/api/channels/slack`;
+  const slackManifest = [
+    "display_information:",
+    "  name: agentqs",
+    "features:",
+    "  bot_user:",
+    "    display_name: agentqs",
+    "  app_home:",
+    "    messages_tab_enabled: true",
+    // Without this Slack BLOCKS every DM to the bot ("sending messages is turned
+    // off") — it is off by default and there is no hint of it in the DM itself.
+    "    messages_tab_read_only_enabled: false",
+    "oauth_config:",
+    "  scopes:",
+    "    bot:",
+    "      - chat:write",
+    "      - im:history",
+    "      - app_mentions:read",
+    // Channel capture: public needs channels:*, private needs groups:*. Slack does
+    // NOT auto-add these when you subscribe to the matching message event.
+    "      - channels:history",
+    "      - channels:join",
+    "      - groups:history",
+    "settings:",
+    "  event_subscriptions:",
+    `    request_url: ${slackWebhook}`,
+    "    bot_events:",
+    "      - message.im",
+    "      - app_mention",
+    "      - message.channels",
+    "      - message.groups",
+  ].join("\n");
   useEffect(() => {
     if (typeof window !== "undefined") setOrigin(window.location.origin);
   }, []);
@@ -293,39 +332,46 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** GitHub backup runs synchronously (a push is fast); Drive rides the
-   *  background-job sync route so a multi-minute upload survives reloads. */
+  // A running Drive upload is polled quietly (never a loading flag — the panel
+  // the user is in must not unmount), so the row shows its phase live and lands
+  // on the finished archive even if the page was reopened mid-upload.
+  const driveRunning = backup?.driveJob?.status === "running" || backup?.driveJob?.status === "queued";
+  useEffect(() => {
+    if (!driveRunning) return;
+    const t = window.setInterval(() => void loadBackup(), 2500);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveRunning]);
+
+  /** Every target speaks to /api/backup — a backup is not a source import.
+   *  GitHub pushes synchronously (fast); Drive answers 202 with a background
+   *  job (encrypt + upload takes minutes and must survive a reload), whose
+   *  progress the poll below reads back from the same GET. */
   async function runBackup(target: "github" | "drive" | "passphrase") {
     setBackupBusy(true);
     setBackupMsg("");
     try {
-      if (target === "drive") {
-        const res = await fetch("/api/import/gdrive_backup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        });
-        const r = await res.json();
-        setBackupMsg(res.ok ? "Backup started — progress shows on the Pipeline tab." : r.error || "Backup failed.");
-      } else {
-        const body =
-          target === "github"
-            ? { target, remote: ghRemote.trim() || undefined, token: ghToken.trim() || undefined }
-            : { target, generate: true };
-        const res = await fetch("/api/backup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const r = await res.json();
-        if (!res.ok) setBackupMsg(r.error || "Backup failed.");
-        else if (target === "passphrase") {
-          setBackupMsg(`Passphrase: ${r.generated} — copy it somewhere safe NOW; it is never shown again.`);
-        } else setBackupMsg(r.message || "Pushed.");
-        if (target === "github") {
-          setGhToken("");
-          if (res.ok) setGhSetupOpen(false);
-        }
+      const body =
+        target === "github"
+          ? { target, remote: ghRemote.trim() || undefined, token: ghToken.trim() || undefined }
+          : target === "passphrase"
+            ? { target, generate: true }
+            : { target };
+      const res = await fetch("/api/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const r = await res.json();
+      if (!res.ok) setBackupMsg(r.error || "Backup failed.");
+      else if (target === "passphrase") {
+        setBackupMsg(`Passphrase: ${r.generated} — copy it somewhere safe NOW; it is never shown again.`);
+      } else if (target === "drive") {
+        setBackupMsg("Encrypting and uploading — this keeps running if you leave the page.");
+      } else setBackupMsg(r.message || "Pushed.");
+      if (target === "github") {
+        setGhToken("");
+        if (res.ok) setGhSetupOpen(false);
       }
       await loadBackup();
     } catch {
@@ -361,7 +407,8 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   }
 
   /** The Drive switch: unconnected → reveal the one-time OAuth setup;
-   *  connected → pause/resume the source schedule. Resuming with no
+   *  connected → pause/resume the BACKUP schedule (it lives under config.backup
+   *  beside GitHub's — Drive is a backup target, not a source). Resuming with no
    *  passphrase generates one first (shown once). */
   async function toggleDrive(on: boolean) {
     setBackupMsg("");
@@ -372,15 +419,15 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     if (on && !backup.drive.passphraseSet) await runBackup("passphrase");
     setBackupBusy(true);
     try {
-      const res = await fetch("/api/sources", {
+      const res = await fetch("/api/backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: "gdrive_backup", interval: on ? "daily" : "off" }),
+        body: JSON.stringify({ target: "drive", schedule: on ? "daily" : "off" }),
       });
       if (!res.ok) setBackupMsg((await res.json()).error || "Failed.");
       await loadBackup();
     } catch {
-      setBackupMsg("Failed — try the CLI: agentqs source interval gdrive_backup daily");
+      setBackupMsg("Failed — try the CLI: agentqs backup drive --schedule daily");
     } finally {
       setBackupBusy(false);
     }
@@ -649,6 +696,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       channels: {
         ...(tgToken ? { telegramBotToken: tgToken } : {}),
         ...(slackToken ? { slackBotToken: slackToken } : {}),
+        ...(slackSecret ? { slackSigningSecret: slackSecret } : {}),
         replies,
       },
     };
@@ -672,6 +720,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     setVoiceKey("");
     setTgToken("");
     setSlackToken("");
+    setSlackSecret("");
     setTimeout(() => setSaved(false), 2000);
     router.refresh();
   }
@@ -1065,12 +1114,17 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         token={slackToken}
         onToken={setSlackToken}
         tokenPlaceholder="xoxb-…"
-        webhook={`${origin || "https://<your-host>"}/api/channels/slack`}
+        webhook={slackWebhook}
+        secret={slackSecret}
+        onSecret={setSlackSecret}
+        secretSet={config.channels.slackVerified}
+        manifest={slackManifest}
         steps={[
-          "Create an app at api.slack.com/apps → OAuth & Permissions → add the chat:write, im:history and app_mentions:read bot scopes.",
-          "Install the app to your workspace and copy the xoxb- bot token below.",
-          "Event Subscriptions → enable, set the Request URL to the webhook URL, subscribe to message.im and app_mention.",
-          "DM the bot or @mention it. Plain text chats with your record; “// a note” logs a memo.",
+          "api.slack.com/apps → Create New App → From a manifest → pick your workspace → paste the manifest below. It sets the scopes, the events and this webhook URL in one go.",
+          "Install to Workspace → Allow. The xoxb- token is BORN here: it only appears after installing, on OAuth & Permissions as “Bot User OAuth Token”. It is not the xoxp- user token, not the Verification Token, not the App-Level (xapp-) token.",
+          "Paste that xoxb- token below, plus the Signing Secret from Basic Information → App Credentials. Save.",
+          "DM the bot (Slack → Apps → agentqs) or @mention it in a channel. Plain text chats with your record; “// a note” logs a memo.",
+          "To capture a whole channel (a daily log): invite the bot with /invite @agentqs — a bot can join a public channel itself, but a PRIVATE one only by invite. Set Replies to “Log only” below and every line posted there becomes a capture, zero tokens.",
         ]}
         prefs={replies.slack}
         onPrefs={(up) => patchReplies("slack", up)}
@@ -1220,13 +1274,15 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
                       className="truncate text-xs text-muted-fg"
                       title={backup?.drive.lastError || backup?.drive.lastFile || ""}
                     >
-                      {backup?.drive.connected
-                        ? backup.drive.lastError
-                          ? `error — ${backup.drive.lastError}`
-                          : driveOn
-                            ? `encrypted archive · ${backup.drive.lastFile ? `uploaded ${ago(backup.drive.lastAt)}` : "first upload pending"}`
-                            : "paused"
-                        : "everything, as one encrypted archive"}
+                      {driveRunning
+                        ? `${backup?.driveJob?.phase ?? "uploading"} · ${backup?.driveJob?.pct ?? 0}%`
+                        : backup?.drive.connected
+                          ? backup.drive.lastError
+                            ? `error — ${backup.drive.lastError}`
+                            : driveOn
+                              ? `encrypted archive · ${backup.drive.lastFile ? `uploaded ${ago(backup.drive.lastAt)}` : "first upload pending"}`
+                              : "paused"
+                          : "everything, as one encrypted archive"}
                     </p>
                   </div>
                   <Switch
@@ -1389,8 +1445,8 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "GET", path: "/api/audit", desc: "Index audit: deterministic evidence for an AI review — impossible dates, one-day sources, coverage holes, stale sources, outlier values." },
   { method: "POST", path: "/api/store/migrate", body: `{"dryRun":true}`, desc: "Move the store to the sync-safe app-data dir (hash-verified; restart after). Omit dryRun to migrate." },
   { method: "GET", path: "/api/onboarding", desc: "The live setup checklist: every step (account → key → capture → sources → schedules → backups → channels → migrate) with its exact CLI / MCP / API call and a done flag. Agents start here." },
-  { method: "GET", path: "/api/backup", desc: "Off-site backup status: GitHub snapshot branch + encrypted Google Drive archive — schedule, last run, last error per target." },
-  { method: "POST", path: "/api/backup", body: `{"target":"github"}`, desc: "Run a backup now: github pushes the record snapshot branch (oversized files excluded loudly); drive encrypts the whole store and uploads one archive, rotating old ones. target restore + confirm:\"replace-record\" pulls the newest Drive archive INTO this store (record replaced + retired beside it, this instance's config kept) — the migration path onto a fresh instance." },
+  { method: "GET", path: "/api/backup", desc: "Off-site backup status: GitHub snapshot branch + encrypted Google Drive archive — schedule, last run, last error per target, plus the live Drive upload job. Backups are data going OUT: neither target is a source, so neither appears in /api/sources or /api/pipeline." },
+  { method: "POST", path: "/api/backup", body: `{"target":"github"}`, desc: "Run a backup now: github pushes the record snapshot branch (oversized files excluded loudly); drive encrypts the whole store and uploads one archive as a background job (202 — poll GET for its phase), rotating old ones. Add \"schedule\":\"daily|off\" to only set the cadence sync --due sweeps. target restore + confirm:\"replace-record\" pulls the newest Drive archive INTO this store (record replaced + retired beside it, this instance's config kept) — the migration path onto a fresh instance." },
   { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source: the key is TESTED against the real API first (only a working key is saved), then the sync runs as a background job (202 + job) that survives page reloads — poll GET /api/import/{source} for its phase/progress. Pass {\"test\": true} to probe a credential without saving anything." },
   { method: "POST", path: "/api/oauth/{source}", body: `{"clientId":"…","clientSecret":"…"}`, desc: "Start the OAuth dance for an expiring-token source (spotify, gcal, fitbit, strava): saves your provider app's credentials and returns the authorize URL. The provider redirects to GET /api/oauth/callback, which stores the tokens; syncs then refresh them automatically. GET /api/import/{source} carries each source's credentialHelp guide + oauth state." },
   { method: "GET", path: "/api/automations", desc: "Browser-import recipes. POST saves one; POST /api/automations/run replays it; DELETE removes it." },
@@ -1640,6 +1696,10 @@ function ChannelCard({
   tokenPlaceholder,
   webhook,
   steps,
+  manifest,
+  secret,
+  onSecret,
+  secretSet,
   prefs,
   onPrefs,
   skills,
@@ -1654,6 +1714,13 @@ function ChannelCard({
   tokenPlaceholder: string;
   webhook: string;
   steps: string[];
+  /** Platform app manifest to paste when creating the app (Slack) — one paste sets
+   *  scopes + events + the request URL. Omitted by platforms without one. */
+  manifest?: string;
+  /** Request-signing secret (Slack). Absent → the channel has no signature check. */
+  secret?: string;
+  onSecret?: (v: string) => void;
+  secretSet?: boolean;
   prefs: ChannelReplyPrefs;
   onPrefs: (up: Partial<ChannelReplyPrefs>) => void;
   skills: Skill[];
@@ -1662,12 +1729,20 @@ function ChannelCard({
   // The guide starts open until the bot is linked, then folds away.
   const [guideOpen, setGuideOpen] = useState(!linked);
   const [copied, setCopied] = useState(false);
+  const [copiedManifest, setCopiedManifest] = useState(false);
   const ai = prefs.ai !== false;
 
   function copyWebhook() {
     navigator.clipboard?.writeText(webhook);
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
+  }
+
+  function copyManifest() {
+    if (!manifest) return;
+    navigator.clipboard?.writeText(manifest);
+    setCopiedManifest(true);
+    setTimeout(() => setCopiedManifest(false), 1200);
   }
 
   return (
@@ -1700,16 +1775,42 @@ function ChannelCard({
       </div>
 
       {guideOpen ? (
-        <ol className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-fg">
-          {steps.map((s, i) => (
-            <li key={i} className="flex gap-2">
-              <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-fg/10 text-[10px] font-semibold tabular-nums text-fg">
-                {i + 1}
-              </span>
-              <span className="pt-px">{s}</span>
-            </li>
-          ))}
-        </ol>
+        <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
+          <ol className="space-y-1.5 text-xs text-muted-fg">
+            {steps.map((s, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-fg/10 text-[10px] font-semibold tabular-nums text-fg">
+                  {i + 1}
+                </span>
+                <span className="pt-px">{s}</span>
+              </li>
+            ))}
+          </ol>
+          {manifest ? (
+            <div className="rounded-md border border-border bg-card">
+              <div className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-1.5">
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-fg">
+                  App manifest — paste at Create New App → From a manifest
+                </span>
+                <button
+                  type="button"
+                  onClick={copyManifest}
+                  aria-label="Copy app manifest"
+                  className="shrink-0 rounded-md p-1 text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+                >
+                  {copiedManifest ? (
+                    <Check width={13} height={13} className="text-accent" />
+                  ) : (
+                    <Copy width={13} height={13} />
+                  )}
+                </button>
+              </div>
+              <pre className="scrollbar-thin max-h-40 overflow-auto px-2.5 py-2 font-mono text-[11px] leading-relaxed text-fg">
+                {manifest}
+              </pre>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1722,6 +1823,24 @@ function ChannelCard({
             className="font-mono"
           />
         </Field>
+        {onSecret ? (
+          <Field
+            label="Signing secret"
+            hint={
+              secretSet
+                ? "Saved. Inbound events are signature-checked."
+                : "Basic Information → App Credentials. Without it, anyone who knows the webhook URL can post fake events."
+            }
+          >
+            <Input
+              type="password"
+              value={secret ?? ""}
+              onChange={(e) => onSecret(e.target.value)}
+              placeholder="a1b2c3…"
+              className="font-mono"
+            />
+          </Field>
+        ) : null}
         <Field label="Webhook URL" hint="Point the platform's events here.">
           <div className="flex h-10 items-center gap-1.5 rounded-lg border border-border bg-muted/40 pl-3 pr-1">
             <code className="scrollbar-none flex-1 overflow-x-auto whitespace-nowrap font-mono text-[12px] text-fg">

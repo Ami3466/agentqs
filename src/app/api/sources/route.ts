@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { readConfig, writeConfig } from "@/lib/config";
+import { readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { buildSources } from "@/lib/source-registry";
-import { disconnectSource } from "@/lib/cli-core";
+import { disconnectSource, setInterval as setSourceInterval } from "@/lib/cli-core";
 import { isValidInterval } from "@/lib/sources";
 
 export const runtime = "nodejs";
@@ -18,7 +18,9 @@ export async function GET() {
   return NextResponse.json({ sources: buildSources(cfg, recordDir()) });
 }
 
-/** Set one source's sync interval (persisted per user), return the fresh list. */
+/** Set one source's sync interval (persisted per user), return the fresh list.
+ *  Goes through the core setter, so a backup target — not a source — is refused
+ *  here too, with a pointer to POST /api/backup. */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -31,15 +33,12 @@ export async function POST(req: Request) {
   if (!isValidInterval(body.interval)) {
     return NextResponse.json({ error: "Invalid interval." }, { status: 400 });
   }
-
-  const cfg = readConfig();
-  if (!cfg) {
-    return NextResponse.json({ error: "No config." }, { status: 500 });
+  try {
+    setSourceInterval(id, body.interval);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
-  cfg.sourceIntervals = { ...(cfg.sourceIntervals ?? {}), [id]: body.interval };
-  writeConfig(cfg);
-
-  return NextResponse.json({ ok: true, sources: buildSources(cfg, recordDir()) });
+  return NextResponse.json({ ok: true, sources: buildSources(readConfig(), recordDir()) });
 }
 
 /** Remove an automated import — drop its data, credential, and schedule. Returns
