@@ -363,6 +363,18 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
       in the `due` flag, so the cron obeyed it and `agentqs sync` / POST
       `/api/import/gcal` pulled an unticked Calendar anyway. The guard belongs in
       `syncSource`, where every face goes through.
+- ⛔ A DAY IS THE DAY YOU LIVED IT, never the day UTC was having. Eight importers
+  bucketed by `new Date(ts).toISOString().slice(0, 10)`, so a New Yorker's 9pm film,
+  7pm check-in and evening browsing (all past midnight UTC) were filed on TOMORROW,
+  and an Israeli's 1am music on YESTERDAY. Every correlation over those days was then
+  comparing the wrong ones - "does late-night browsing hurt my next-day recovery?" was
+  a day against ITSELF. Use `localDay(instant, tz)` (plugin.ts); the zone is
+  `recordTimeZone()` = `config.timezone` or this machine's (`agentqs config set
+  timezone Asia/Jerusalem` - SET IT ON A HOSTED INSTANCE, whose server clock has
+  nothing to do with where the user lives). A source that ships its OWN offset
+  (Swarm's `timeZoneOffset`, Withings' `timezone`) uses that instead - it is where the
+  user physically was. Strava (`start_date_local`), whoop-api and Apple Health already
+  did this deliberately; copy them, not the eight that did not.
 - A DATE IS NOT ASSUMED. Slashed dates were ALL read as US M/D, so a European export
   silently misfiled half its rows (05/07/2026 is 5 July; it landed on 7 May) and the
   other half became impossible dates (`2026-31-01`) that merged anyway. A cell cannot

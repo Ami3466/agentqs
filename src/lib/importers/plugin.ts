@@ -444,6 +444,56 @@ export function iso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * THE DAY YOU LIVED IT.
+ *
+ * Eight importers bucketed a day by slicing a UTC timestamp: `new
+ * Date(ts).toISOString().slice(0, 10)`. That is the day UTC was having, not the day the
+ * person was having, and for anyone who does not live on the prime meridian it is
+ * routinely the WRONG ONE. A New Yorker watching a film at 21:00 (Trakt), checking in
+ * for dinner at 19:00 (Swarm) or in a 17:00 meeting (Granola) is past midnight UTC, so
+ * all of it was filed on TOMORROW. East of UTC the error runs the other way: an Israeli
+ * playing music at 01:00 was filed on YESTERDAY.
+ *
+ * Every downstream question is then quietly wrong — "does late-night browsing hurt my
+ * next-day recovery?" was comparing a day against ITSELF. The plugins that got this
+ * right did it deliberately: Strava reads `start_date_local`, Apple Health uses the
+ * export's own wall-clock date, and the Takeout ICS parser has a comment spelling out
+ * the rule. This makes it one function so the other eight can stop being wrong.
+ *
+ * Sources that ship their own offset (Swarm's `timeZoneOffset`, Withings' `timezone`)
+ * should use THAT — it is the truth about where the user actually was.
+ */
+export function recordTimeZone(cfg: AppConfig | null = readConfig()): string {
+  try {
+    return cfg?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+/** An instant → the calendar day it fell on, in `tz`. `en-CA` formats as YYYY-MM-DD. */
+export function localDay(instant: string | number | Date, tz: string = recordTimeZone()): string {
+  const d = instant instanceof Date ? instant : new Date(instant);
+  if (Number.isNaN(d.getTime())) return "";
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10); // an unknown tz must not lose the row
+  }
+}
+
+/** A day at a KNOWN offset from UTC, in minutes (Swarm and Withings ship one per item:
+ *  where the user actually was, which beats any setting). */
+export function dayAtOffset(epochMs: number, offsetMinutes: number): string {
+  return new Date(epochMs + offsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
 export function inWindow(date: string, from: string, to: string): boolean {
   return date >= from && date <= to;
 }

@@ -1,5 +1,7 @@
 import {
   getJson,
+  localDay,
+  recordTimeZone,
   pageAll,
   num,
   unixSec,
@@ -28,6 +30,9 @@ interface Measure {
 }
 interface MeasureGroup {
   date?: number; // unix seconds
+  /** The IANA zone the measurement was TAKEN in — Withings ships it on every group and
+   *  we never read it, so a late-evening weigh-in west of UTC landed on tomorrow. */
+  timezone?: string;
   measures?: Measure[];
 }
 interface MeasureResp {
@@ -40,14 +45,14 @@ interface MeasureResp {
 const API = "https://wbsapi.withings.net/measure";
 const WEIGHT_TYPE = 1;
 
-export function normalizeWithings(groups: MeasureGroup[], from: string, to: string): DailyTable {
+export function normalizeWithings(groups: MeasureGroup[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   // Latest weight reading wins for each day (groups arrive newest-first).
   const seen = new Set<string>();
   const byDay = new Map<string, number>();
   const ordered = [...groups].sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
   for (const g of ordered) {
     if (!g.date) continue;
-    const day = new Date(g.date * 1000).toISOString().slice(0, 10);
+    const day = localDay(g.date * 1000, g.timezone || tz);
     if (day < from || day > to || seen.has(day)) continue;
     const m = (g.measures ?? []).find((x) => x.type === WEIGHT_TYPE && typeof x.value === "number");
     if (!m) continue;
@@ -112,6 +117,6 @@ export const withingsPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Withings getmeas → ${(e as Error).message}`);
     }
-    return { table: normalizeWithings(groups, ctx.from, ctx.to), meta: { groups: groups.length } };
+    return { table: normalizeWithings(groups, ctx.from, ctx.to, recordTimeZone()), meta: { groups: groups.length } };
   },
 };

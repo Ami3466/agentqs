@@ -65,6 +65,7 @@ import {
 } from "./importers/plugin";
 import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
 import { googlePluginOn } from "./google";
+import { recordTimeZone } from "./importers/plugin";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
@@ -1580,7 +1581,7 @@ export function scan(opts: { fix?: boolean } = {}): ScanResult {
 
 // ---- config ---------------------------------------------------------------
 
-const CONFIG_KEYS = ["provider", "model", "key", "theme", "username"] as const;
+const CONFIG_KEYS = ["provider", "model", "key", "theme", "username", "timezone"] as const;
 type ConfigKey = (typeof CONFIG_KEYS)[number];
 
 /** Safe, redacted view of the settable config. */
@@ -1594,6 +1595,8 @@ export function configList() {
     providers: effectiveProviders(cfg).length,
     theme: cfg?.theme ?? "system",
     username: cfg?.username ?? "",
+    // The zone the record's days are counted in — this machine's unless overridden.
+    timezone: recordTimeZone(cfg),
     dataDir: recordDir().replace(/\/record$/, ""),
     keys: CONFIG_KEYS,
   };
@@ -1638,6 +1641,23 @@ export function configSet(key: string, value: string): { key: string; value: str
       if (value.trim().length < 2) throw new Error("username too short.");
       cfg.username = value.trim();
       break;
+    case "timezone": {
+      // The timezone the record's DAYS are counted in. Defaults to this machine's — set
+      // it on a hosted instance, whose server clock has nothing to do with where the
+      // user lives. A day in the record is a day in someone's life, not a slice of UTC.
+      const tz = value.trim();
+      if (!tz) {
+        delete cfg.timezone; // back to this machine's
+        break;
+      }
+      try {
+        new Intl.DateTimeFormat("en-CA", { timeZone: tz });
+      } catch {
+        throw new Error(`Unknown timezone "${tz}". Use an IANA name, e.g. Asia/Jerusalem or America/New_York.`);
+      }
+      cfg.timezone = tz;
+      break;
+    }
   }
   writeConfig(cfg);
   return { key, value: key === "key" ? `••••${value.slice(-4)}` : value };

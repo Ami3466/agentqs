@@ -1,5 +1,7 @@
 import {
   getJson,
+  localDay,
+  recordTimeZone,
   pageAll,
   inWindow,
   splitCredential,
@@ -33,10 +35,10 @@ interface Status {
 
 const PER_PAGE = 40;
 
-export function normalizeMastodon(statuses: Status[], from: string, to: string): DailyTable {
+export function normalizeMastodon(statuses: Status[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const posts = new Map<string, number>();
   for (const s of statuses) {
-    const day = (s.created_at ?? "").slice(0, 10);
+    const day = s.created_at ? localDay(s.created_at, tz) : "";
     if (!day || !inWindow(day, from, to)) continue;
     posts.set(day, (posts.get(day) ?? 0) + 1);
   }
@@ -109,6 +111,6 @@ export const mastodonPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Mastodon statuses → ${(e as Error).message}`);
     }
-    return { table: normalizeMastodon(list, ctx.from, ctx.to), meta: { pulled: list.length } };
+    return { table: normalizeMastodon(list, ctx.from, ctx.to, recordTimeZone()), meta: { pulled: list.length } };
   },
 };

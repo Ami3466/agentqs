@@ -824,7 +824,7 @@ backup
   });
 
 // ---- config ---------------------------------------------------------------
-const config = program.command("config").description("provider, model, key, theme");
+const config = program.command("config").description("provider, model, key, theme, timezone");
 config
   .command("list")
   .description("show current settings")

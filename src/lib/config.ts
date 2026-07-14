@@ -173,6 +173,16 @@ export interface AppConfig {
    */
   oauthApps?: Record<string, OAuthApp>;
   oauthPending?: OAuthPending; // authorize dance in flight (cleared by the callback)
+  /**
+   * THE TIMEZONE THE RECORD'S DAYS ARE COUNTED IN. Defaults to this machine's.
+   *
+   * A day in the record is a day in someone's LIFE, not a slice of UTC. Eight importers
+   * used to bucket by `toISOString().slice(0, 10)`, so a New Yorker's 9pm was filed on
+   * tomorrow and an Israeli's 1am on yesterday — and every correlation over those days
+   * was quietly comparing the wrong ones. Set this on a hosted instance, whose server
+   * clock has nothing to do with where the user lives.
+   */
+  timezone?: string;
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
   hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)

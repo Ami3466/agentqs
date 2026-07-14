@@ -1,5 +1,8 @@
 import {
+  dayAtOffset,
   getJson,
+  localDay,
+  recordTimeZone,
   pageAll,
   inWindow,
   unixSec,
@@ -21,6 +24,11 @@ import {
 
 interface SwarmCheckin {
   createdAt?: number;
+  /** Minutes from UTC where the check-in actually HAPPENED. Foursquare ships it on
+   *  every check-in and we never read it, so a New Yorker's 7pm dinner — past midnight
+   *  UTC — was filed on tomorrow. This is better than any setting: it is where the user
+   *  physically was, which is the whole point of a check-in. */
+  timeZoneOffset?: number;
 }
 interface SwarmResp {
   response?: { checkins?: { items?: SwarmCheckin[] } };
@@ -29,12 +37,15 @@ interface SwarmResp {
 const PER_PAGE = 200;
 const API = "https://api.foursquare.com/v2/users/self/checkins";
 
-export function normalizeSwarm(items: SwarmCheckin[], from: string, to: string): DailyTable {
+export function normalizeSwarm(items: SwarmCheckin[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const byDay = new Map<string, number>();
   for (const c of items) {
     const ts = Number(c.createdAt);
     if (!Number.isFinite(ts) || ts <= 0) continue;
-    const day = new Date(ts * 1000).toISOString().slice(0, 10);
+    const day =
+      typeof c.timeZoneOffset === "number"
+        ? dayAtOffset(ts * 1000, c.timeZoneOffset)
+        : localDay(ts * 1000, tz);
     if (!inWindow(day, from, to)) continue;
     byDay.set(day, (byDay.get(day) ?? 0) + 1);
   }
@@ -94,6 +105,6 @@ export const swarmPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Swarm check-ins → ${(e as Error).message}`);
     }
-    return { table: normalizeSwarm(items, ctx.from, ctx.to), meta: { pulledCheckins: items.length } };
+    return { table: normalizeSwarm(items, ctx.from, ctx.to, recordTimeZone()), meta: { pulledCheckins: items.length } };
   },
 };

@@ -1,5 +1,7 @@
 import {
   getJson,
+  localDay,
+  recordTimeZone,
   pageAll,
   inWindow,
   type DailyTable,
@@ -30,12 +32,12 @@ interface DeezerResp {
 const PER_PAGE = 200;
 const API = "https://api.deezer.com/user/me/history";
 
-export function normalizeDeezer(plays: DeezerPlay[], from: string, to: string): DailyTable {
+export function normalizeDeezer(plays: DeezerPlay[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const byDay = new Map<string, number>();
   for (const p of plays) {
     const ts = Number(p.timestamp);
     if (!Number.isFinite(ts) || ts <= 0) continue;
-    const day = new Date(ts * 1000).toISOString().slice(0, 10);
+    const day = localDay(ts * 1000, tz);
     if (!inWindow(day, from, to)) continue;
     byDay.set(day, (byDay.get(day) ?? 0) + 1);
   }
@@ -101,6 +103,6 @@ export const deezerPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Deezer history → ${(e as Error).message}`);
     }
-    return { table: normalizeDeezer(plays, ctx.from, ctx.to), meta: { pulledPlays: plays.length } };
+    return { table: normalizeDeezer(plays, ctx.from, ctx.to, recordTimeZone()), meta: { pulledPlays: plays.length } };
   },
 };
