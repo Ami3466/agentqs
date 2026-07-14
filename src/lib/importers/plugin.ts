@@ -7,6 +7,7 @@ import {
   type AppendEventInput,
   type DailyMergeResult,
   type EventItem,
+  type MergePolicy,
 } from "../record";
 import { recordDir } from "../paths";
 
@@ -181,6 +182,18 @@ export interface ImporterPlugin {
    */
   backfillDays?: number;
   /**
+   * How this source's numbers meet the ones already in the record. Default `replace`:
+   * the source saw the day whole, so its answer is the answer.
+   *
+   * Set `max` when the API can only ever hand back a RECENT SLICE and the plugin
+   * recomputes a day's total from it — Spotify's last-50 plays, Deezer's last-200,
+   * a recency-ordered feed with no date range. Such a source's count for a day can
+   * only shrink as its buffer slides past, so replacing on every sync made every day
+   * decay toward zero, and ate an imported lifetime export the moment a sync touched
+   * one of its days. A shorter look is not news. (Counts only — never a gauge.)
+   */
+  mergePolicy?: MergePolicy;
+  /**
    * Why this source cannot hand over its full history — shown instead of letting a
    * hard API ceiling read as a broken importer. Spotify's recently-played endpoint
    * returns the last 50 plays and takes no date range at all: no window we send can
@@ -342,7 +355,7 @@ export async function importPlugin(
     throw new Error(`${plugin.name} needs a ${plugin.credentialLabel}.`);
   }
   const result = await plugin.fetch(ctx);
-  const merge = mergeDailyCsv(dir, fileId, result.table);
+  const merge = mergeDailyCsv(dir, fileId, result.table, { policy: plugin.mergePolicy });
 
   const extraSources: string[] = [];
   for (const [suffix, table] of Object.entries(result.extraTables ?? {})) {

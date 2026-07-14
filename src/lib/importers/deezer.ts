@@ -49,6 +49,11 @@ export const deezerPlugin: ImporterPlugin = {
   name: "Deezer",
   detail: "tracks played per day",
   live: true,
+  // A partial view never lowers a fuller one: the history feed returns the newest ~200 plays and takes no date range, so a day is recomputed from whatever slice of it is still in that buffer.
+  // Replacing on every sync made each day decay toward zero as the buffer slid
+  // past it, and ate an imported lifetime export the moment a sync touched one of
+  // its days. A shorter look is not news. See MergePolicy in record.ts.
+  mergePolicy: "max",
   requiresCredential: true,
   credentialLabel: "Deezer access token",
   credentialPlaceholder: "your Deezer OAuth access token",

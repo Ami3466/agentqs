@@ -318,7 +318,25 @@ export function importTree(root: string): ImportTreeReport {
       known.add(id);
 
       const table = structureCsv(text);
-      if (table) {
+      // A PER-EVENT file (three expenses on Tuesday) is not daily data yet. The daily
+      // table holds one row per date and `mergeDailyCsv` is keyed by date, so merging
+      // it kept only the LAST row of each day and threw the rest away — while the
+      // receipt reported every cell as structured. It goes to the inbox to be rolled
+      // up (sum? count? average? only the reader knows), which is exactly what the
+      // inbox is for. Oversized ones can't be landed raw, so they are named as residue
+      // rather than flattened in silence.
+      if (table && table.duplicateDates > 0) {
+        if (oversized) {
+          push("residue", `${table.duplicateDates} row(s) share a date — per-event data, too large to land raw`, bytes);
+        } else {
+          land({ id, text, source: "drop", kind: "file", meta: { filename: name, duplicateDates: table.duplicateDates } }, bytes);
+          push(
+            "inbox",
+            `${table.duplicateDates} of ${table.rows.length} row(s) share a date — per-event data; landed raw to be rolled up, NOT flattened`,
+            bytes,
+          );
+        }
+      } else if (table) {
         // Full basename — slugSource strips the extension itself; pre-stripping
         // here would name the same file differently than importRaw does.
         const source = sourceName(name, "import");

@@ -48,6 +48,11 @@ export const notionPlugin: ImporterPlugin = {
   name: "Notion",
   detail: "pages edited per day",
   live: true,
+  // A partial view never lowers a fuller one: search returns the 100 most-recently-edited pages and takes no date range, so a day is recomputed from whatever slice of it is still in that buffer.
+  // Replacing on every sync made each day decay toward zero as the buffer slid
+  // past it, and ate an imported lifetime export the moment a sync touched one of
+  // its days. A shorter look is not news. See MergePolicy in record.ts.
+  mergePolicy: "max",
   requiresCredential: true,
   credentialLabel: "Notion integration token",
   credentialPlaceholder: "secret_… (internal integration token)",

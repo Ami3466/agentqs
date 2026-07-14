@@ -1026,10 +1026,38 @@ function loadDailyTable(file: string): DailyTable {
  * is overwritten by a non-empty incoming value, blanks never clobber. Rows are
  * re-sorted by date. Deterministic: same inputs → byte-identical file.
  */
+/**
+ * How an incoming cell meets one already in the record.
+ *
+ * `replace` (the default) — the source saw the day WHOLE, so its answer is the answer.
+ *
+ * `max` — the source can only ever see PART of a day, so a smaller number is not news,
+ * it is a shorter look. Spotify serves the last ~50 plays and no date range, so it
+ * recomputes a day from whatever slice is still in that buffer: a day you played 87
+ * tracks lands as 87, and the next sync — with only 6 of those plays left in the
+ * window — overwrote it with 6. Every day's count decayed as the buffer slid past it,
+ * and an imported lifetime export was eaten by the next sync that touched it. For a
+ * COUNT that a partial view can only ever undercount, the truth is the largest thing
+ * anyone has seen. (Only for counts. A gauge — a weight, a recovery score — must never
+ * take a max, and every source that reports one can see its day whole.)
+ */
+export type MergePolicy = "replace" | "max";
+
+/** Is the incoming value a bigger NUMBER than the one we hold? Anything that is not a
+ *  clean number on both sides is not comparable, so the incoming value wins — a `max`
+ *  source must still be able to correct a text cell. */
+function isBigger(incoming: string, prev: string): boolean {
+  const a = Number(incoming);
+  const b = Number(prev);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return true;
+  return a > b;
+}
+
 export function mergeDailyCsv(
   recordDir: string,
   source: string,
   incoming: { header: string[]; rows: string[][] },
+  opts: { policy?: MergePolicy } = {},
 ): DailyMergeResult {
   const dailyDir = path.join(recordDir, "daily");
   fs.mkdirSync(dailyDir, { recursive: true });
@@ -1051,6 +1079,7 @@ export function mergeDailyCsv(
   const touchedD = new Set<string>();
   const applied: AppliedCell[] = [];
   let cells = 0;
+  const policy = opts.policy ?? "replace";
   for (const r of incoming.rows) {
     const date = (r[0] ?? "").trim();
     if (!date) continue;
@@ -1061,6 +1090,8 @@ export function mergeDailyCsv(
       if (!m || v === "") continue;
       addMetric(m);
       const prev = row.get(m);
+      // A partial view never lowers a fuller one — see MergePolicy.
+      if (policy === "max" && prev !== undefined && !isBigger(v, prev)) continue;
       if (prev !== v) applied.push({ d: date, m, p: prev ?? null, v });
       row.set(m, v);
       if (!touchedM.has(m)) {
