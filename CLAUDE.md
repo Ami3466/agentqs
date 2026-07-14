@@ -218,7 +218,7 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   unofficial-instance test, so `whoop-api` is never treated as one.
 - THE SYNC WINDOW COMES FROM THE RECORD, never from a constant (`syncWindow` in
   cli-core - the one rule, every source): `--days N` -> exactly that; record EMPTY
-  -> the first import takes the history (`plugin.backfillDays`, default 5 years);
+  -> the first import takes the history (`plugin.backfillDays`, default 10 years);
   record has rows -> resume from the last recorded day minus a week of overlap.
   Every source used to send a flat trailing `windowDays(90)`, which is wrong twice
   over: it lands a sliver of a lifetime, and because every LATER sync re-asks for
