@@ -32,6 +32,10 @@ ENV HOSTNAME=0.0.0.0
 # git + tar are FEATURES here, not conveniences: `backup github` pushes a snapshot
 # branch with git plumbing, and `backup drive` streams the store through tar.
 # ca-certificates: every source syncs over TLS.
+# curl: node:20-slim installs it to fetch node and PURGES it in the same layer, so the
+# image ships none. A hosting platform's HTTP health check (Coolify's default) shells
+# INTO the container and runs curl - without it the app deploys fine and is then marked
+# unhealthy, which reads as a broken app.
 RUN apt-get update && apt-get install -y --no-install-recommends git tar ca-certificates curl \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd -g 1001 nodejs \
