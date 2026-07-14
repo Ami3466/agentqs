@@ -65,6 +65,11 @@ export const spotifyPlugin: ImporterPlugin = {
   // days a sync covers is Spotify's 50-item ceiling, not a broken importer.
   historyNote:
     "Spotify's API only returns your last ~50 plays and accepts no date range, so a sync covers a few days at most — that is Spotify's limit, not a failed import. Your listening history lives in the account export (Spotify → Privacy Settings → Extended streaming history): drop the zip into Data, or run `agentqs source file spotify --path <my_spotify_data.zip>`. It lands in this same source, so Spotify shows the lifetime and the sync keeps the last few days fresh.",
+  // A partial view never lowers a fuller one: recently-played serves the last ~50 plays and takes no date range, so a day is recomputed from whatever slice of it is still in that buffer.
+  // Replacing on every sync made each day decay toward zero as the buffer slid
+  // past it, and ate an imported lifetime export the moment a sync touched one of
+  // its days. A shorter look is not news. See MergePolicy in record.ts.
+  mergePolicy: "max",
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "BQ… (OAuth access token)",
@@ -94,22 +99,28 @@ export const spotifyPlugin: ImporterPlugin = {
     // a single page was a cap we chose, on top of the one Spotify imposes, and only
     // one of those is real.
     const items: SpotifyItem[] = [];
+    // A play is uniquely its timestamp, so the SAME play can never be counted twice.
+    // This is not belt-and-braces: at the end of the 50-play pool Spotify hands back
+    // a cursor that returns the very same page, and pushing a batch before noticing
+    // it had not moved DOUBLED every track and minute on those days.
+    const seen = new Set<string>();
     let url = API;
     let pages = 0;
-    let oldest = "";
     try {
       while (pages++ < MAX_PAGES) {
         const page = (await getJson(url, headers, fetchImpl)) as SpotifyList;
-        const batch = page?.items ?? [];
+        const batch = (page?.items ?? []).filter((it) => {
+          const at = it.played_at;
+          if (!at || seen.has(at)) return false;
+          seen.add(at);
+          return true;
+        });
+        // Nothing here we had not already counted → the pool is exhausted.
         if (!batch.length) break;
         items.push(...batch);
         const last = batch.at(-1)?.played_at ?? "";
-        // No cursor, no movement, or already past the window we were asked for → done.
-        // (Without the movement guard a cursor Spotify keeps echoing back would page
-        // forever over the same 50 plays.)
-        if (!last || (oldest && last >= oldest)) break;
-        oldest = last;
-        if (last.slice(0, 10) < ctx.from) break;
+        if (!last) break;
+        if (last.slice(0, 10) < ctx.from) break; // past the window we were asked for
         const before = page.cursors?.before ?? String(Date.parse(last));
         if (!before || before === "NaN") break;
         url = `${API}&before=${before}`;

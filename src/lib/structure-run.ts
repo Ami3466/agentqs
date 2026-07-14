@@ -37,6 +37,12 @@ export function csvLossText(s: Structured): string {
     );
   }
   if (s.droppedColumns) parts.push(`${s.droppedColumns} column(s) with data but an empty header`);
+  // The daily table is one row per date, so rows sharing a date overwrite each other.
+  if (s.duplicateDates) {
+    parts.push(
+      `${s.duplicateDates} row(s) share a date with an earlier row — this is per-EVENT data, and the daily table holds one row per day, so only the last row of each date would survive. Roll it up first (sum / count / average — only you know which)`,
+    );
+  }
   return parts.join("; ");
 }
 

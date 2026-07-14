@@ -23,6 +23,21 @@ export interface Structured {
   skippedRows: number; // rows whose date cell didn't parse — NOT merged
   skippedSamples: string[]; // up to 3 raw date cells from skipped rows
   droppedColumns: number; // empty-header columns that held data — NOT merged
+  /**
+   * Rows sharing a date with an earlier row — a PER-EVENT file (three expenses on
+   * Tuesday, two workouts on Friday) rather than a daily one.
+   *
+   * The daily table holds ONE row per date, and `mergeDailyCsv` is keyed by date, so
+   * every one of these quietly overwrote the last: a 4,812-row expense export landed
+   * as one row per day — the final transaction of each — while the receipt reported
+   * all 4,812 cells as structured. The loudest silent loss in the whole path, and the
+   * accounting counted the rows it was about to throw away.
+   *
+   * Such a file is not daily data yet. It has to be rolled up (summed, counted,
+   * averaged — only the reader knows which), so it goes to the inbox for that,
+   * instead of being flattened on the way in.
+   */
+  duplicateDates: number;
 }
 
 // Header names that unambiguously mark the date column.
@@ -146,6 +161,7 @@ export function structureCsv(text: string): Structured | null {
   const dateSet = new Set<string>();
   const skippedSamples: string[] = [];
   let skippedRows = 0;
+  let duplicateDates = 0;
   let cells = 0;
   for (const r of rows) {
     const raw = (r[dateCol] ?? "").trim();
@@ -165,6 +181,7 @@ export function structureCsv(text: string): Structured | null {
       row.push(v);
       if (v !== "") cells++;
     }
+    if (dateSet.has(date)) duplicateDates++;
     outRows.push(row);
     dateSet.add(date);
   }
@@ -179,6 +196,7 @@ export function structureCsv(text: string): Structured | null {
     skippedRows,
     skippedSamples,
     droppedColumns,
+    duplicateDates,
   };
 }
 

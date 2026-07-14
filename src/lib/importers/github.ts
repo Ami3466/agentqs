@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { readConfig } from "../config";
 import { parseCsv } from "../record";
+import { netFetch } from "./plugin";
 
 /**
  * GitHub importer — the first Tier-1 source, end to end.
@@ -40,6 +41,9 @@ export type FetchLike = typeof fetch;
 const API = "https://api.github.com";
 const PER_PAGE = 100;
 const MAX_PAGES = 10; // Search API hard-caps results at 1000 (10 × 100)
+/** The Search API will never serve more than this for ONE query, however you page it.
+ *  A window holding more must be SPLIT, never truncated — see searchWindow. */
+const MAX_RESULTS = PER_PAGE * MAX_PAGES;
 
 function headers(token?: string): Record<string, string> {
   const h: Record<string, string> = {
@@ -128,35 +132,98 @@ export async function fetchGithubCommits(opts: {
   }
 
   const counts = new Map<string, number>();
+  const state = { total: 0, capped: false };
+  await searchWindow(login, opts.token, opts.from, opts.to, fetchImpl, counts, state);
+
+  return {
+    login,
+    from: opts.from,
+    to: opts.to,
+    days: densify(counts, opts.from, opts.to),
+    total: state.total,
+    capped: state.capped,
+  };
+}
+
+/** Halfway between two ISO dates (floor) — used to split an over-full window. */
+function midIso(from: string, to: string): string {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = Date.parse(`${to}T00:00:00Z`);
+  return new Date(a + Math.floor((b - a) / 2)).toISOString().slice(0, 10);
+}
+
+/**
+ * Count one window's commits — SPLITTING it until the Search API can answer it whole.
+ *
+ * The Search API hard-caps a query at 1,000 results. Asking it for twelve years and
+ * taking what came back meant reading the OLDEST 1,000 commits (`order=asc`) and
+ * calling it the answer — and then `densify` filled every remaining day of that window
+ * with a `0`, which `writeGithubRecord` wrote straight over the real history. A dev
+ * with 8,000 commits ended up with nine years of `date,0` in their record, from a sync
+ * that reported `ok`. The `capped` flag that would have caught it was computed and
+ * never read by anything.
+ *
+ * So when the API says it holds more than it will hand over, we do not shrug and
+ * truncate: we cut the window in half and ask again, until every query fits under the
+ * ceiling. A day that alone exceeds 1,000 commits cannot be split further — that one
+ * we flag rather than invent.
+ */
+async function searchWindow(
+  login: string,
+  token: string | undefined,
+  from: string,
+  to: string,
+  fetchImpl: FetchLike,
+  counts: Map<string, number>,
+  state: { total: number; capped: boolean },
+): Promise<void> {
   let fetched = 0;
-  let total = 0;
-  let capped = false;
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = new URL(`${API}/search/commits`);
-    url.searchParams.set("q", `author:${login} author-date:${opts.from}..${opts.to}`);
+    url.searchParams.set("q", `author:${login} author-date:${from}..${to}`);
     url.searchParams.set("sort", "author-date");
     url.searchParams.set("order", "asc");
     url.searchParams.set("per_page", String(PER_PAGE));
     url.searchParams.set("page", String(page));
 
-    const res = await fetchImpl(url.toString(), { headers: headers(opts.token) });
+    const res = await netFetch(url.toString(), { headers: headers(token) }, fetchImpl);
     if (!res.ok) throw new Error(`GitHub search → ${res.status}. ${await bodyText(res)}`);
     const j = (await res.json()) as SearchPage;
     const items = j.items ?? [];
+
+    // The API told us up front it holds more than it will ever serve. Split BEFORE
+    // counting anything, so no commit is counted twice across the two halves.
+    if (page === 1 && (j.total_count ?? 0) > MAX_RESULTS) {
+      if (from === to) {
+        // One day, >1000 commits. Nothing left to split; take what we can see and say so.
+        state.capped = true;
+      } else {
+        const mid = midIso(from, to);
+        await searchWindow(login, token, from, mid, fetchImpl, counts, state);
+        await searchWindow(login, token, shiftDay(mid, 1), to, fetchImpl, counts, state);
+        return;
+      }
+    }
+
     for (const it of items) {
       const d = it.commit?.author?.date;
       if (!d) continue;
       const day = d.slice(0, 10); // author-local calendar day
       counts.set(day, (counts.get(day) ?? 0) + 1);
-      total++;
+      state.total++;
     }
     fetched += items.length;
     if (items.length < PER_PAGE) break;
-    if (page === MAX_PAGES && (j.total_count ?? 0) > fetched) capped = true;
+    if (page === MAX_PAGES && (j.total_count ?? 0) > fetched) state.capped = true;
   }
+}
 
-  return { login, from: opts.from, to: opts.to, days: densify(counts, opts.from, opts.to), total, capped };
+/** Shift an ISO date by n days. */
+function shiftDay(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }
 
 /** Serialize a dense series to the record's wide CSV shape. */
