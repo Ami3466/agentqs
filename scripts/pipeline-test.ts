@@ -7,7 +7,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-pipeline-"));
 // Pin all paths to the temp data dir before anything resolves them.
 process.env.AGENTQS_DATA_DIR = tmp;
 
+import Database from "better-sqlite3";
 import { connectionState, resolveCredentialWithOrigin, resolveSyncCredential, type ImporterPlugin } from "../src/lib/importers/plugin";
+import { coverageBySource } from "../src/lib/daily";
 import { pipelineReport, detectScheduler } from "../src/lib/pipeline";
 import { buildSources } from "../src/lib/source-registry";
 import { readSyncRuns, recordDueRun, recordSyncRun } from "../src/lib/sync-runs";
@@ -173,5 +175,32 @@ if (repDrop?.connected || repDrop?.provenance !== "imported")
 const repGoogle = rep.find((s) => s.id === "google_activity_all");
 if (repGoogle?.connected)
   throw new Error("An extension scrape is imported data, never a connection.");
+
+// --- Coverage may never full-scan the events table. Every Pipeline row hangs off
+// coverageBySource, and SQLite here is SYNCHRONOUS: on a real record (1.5M events,
+// a 1.3GB cache) an uncovered GROUP BY spent seconds fetching every row just to
+// read its date — it timed the Sources list out AND froze the whole server thread
+// while it ran. Assert the PLAN, not the clock: a wall-time budget is flaky on a
+// loaded machine and passes on a toy record no matter how bad the query is.
+const dropIdx = new Database(dbPath());
+dropIdx.exec("DROP INDEX IF EXISTS events_source_date; DROP INDEX IF EXISTS daily_source_date;");
+dropIdx.close();
+
+// A cache built by an OLDER version arrives without them, and a full rebuild costs
+// minutes — so the read path must heal it in place. This call is that migration.
+coverageBySource(dbPath());
+
+const planDb = new Database(dbPath(), { readonly: true });
+for (const [table, sql] of [
+  ["events", "SELECT source, COUNT(*) n, MIN(date) f, MAX(date) t FROM events GROUP BY source"],
+  ["daily", "SELECT source, COUNT(DISTINCT date) d, MIN(date) f, MAX(date) t FROM daily GROUP BY source"],
+] as const) {
+  const plan = (planDb.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>)
+    .map((r) => r.detail)
+    .join(" | ");
+  if (!/COVERING INDEX \w*source_date/.test(plan))
+    throw new Error(`coverage over ${table} must be answered from a covering (source, date) index, got: ${plan}`);
+}
+planDb.close();
 
 console.log("pipeline-test: PASS");

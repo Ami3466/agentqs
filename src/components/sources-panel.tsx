@@ -89,9 +89,13 @@ export function SourcesPanel({
     if (wizardSeed !== null) wizardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [wizardSeed]);
 
+  // A slow list is the server's problem, never the user's: a timeout here used to
+  // tell them to restart the app, which fixed nothing (the cost was a full scan of
+  // the events table on every load, not a wedged process). The request is given
+  // room to finish, and a failure offers a retry instead of a chore.
   const load = useCallback(async (): Promise<SourceView[] | null> => {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 15000);
+    const timer = window.setTimeout(() => controller.abort(), 60000);
     try {
       setSourceError("");
       const res = await fetch("/api/sources", { signal: controller.signal });
@@ -103,7 +107,11 @@ export function SourcesPanel({
       setSources(data.sources);
       return data.sources;
     } catch (e) {
-      setSourceError((e as Error).name === "AbortError" ? "Sources took too long to load. Restart AgentQS and try again." : (e as Error).message);
+      setSourceError(
+        (e as Error).name === "AbortError"
+          ? "Sources are still loading after 60s — the server may be busy importing."
+          : (e as Error).message,
+      );
       setSources([]);
       return null;
     } finally {
@@ -416,8 +424,13 @@ export function SourcesPanel({
         </div>
       ) : null}
       {sourceError ? (
-        <div className="border-b border-border bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
-          {sourceError}
+        <div className="flex items-center gap-2 border-b border-border bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
+          <span className="min-w-0 flex-1 truncate" title={sourceError}>
+            {sourceError}
+          </span>
+          <Button size="sm" variant="secondary" className="shrink-0" onClick={() => void load()}>
+            Retry
+          </Button>
         </div>
       ) : null}
       {sources === null ? (
