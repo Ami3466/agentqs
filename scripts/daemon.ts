@@ -26,7 +26,6 @@ import Database from "better-sqlite3";
 import {
   importFile,
   resolveFilePath,
-  wantsFullHistory,
 } from "../src/lib/importers/file-plugin";
 import { FILE_IMPORTERS } from "../src/lib/importers/files/registry";
 import { windowDays } from "../src/lib/importers/plugin";
@@ -84,7 +83,14 @@ interface IngestResult {
 async function ingest(args: Args): Promise<IngestResult> {
   const rDir = args.record ?? recordDir(args.data);
   const dbFile = dbPath(args.data);
-  const win = windowDays(args.days ? Number(args.days) : 90);
+  // A FILE IS FINITE AND ALREADY ON YOUR DISK, so it is read WHOLE. Clipping your own
+  // ten-year Chrome history to a trailing 90 days throws away years that were sitting
+  // right there — and because every later run re-asks for the same trailing 90, those
+  // years are never fetched even once. This is the banned hardcoded window (CLAUDE.md),
+  // and it outlived its own fix: cli-core stopped doing it, these two shipped faces did
+  // not — including the daemon the README tells hosted users to schedule.
+  // `--days N` still means exactly that, for someone who wants a quick top-up.
+  const win = windowDays(args.days ? Number(args.days) : 1);
 
   const imported: IngestResult["imported"] = [];
   const skipped: IngestResult["skipped"] = [];
@@ -97,9 +103,7 @@ async function ingest(args: Args): Promise<IngestResult> {
       continue;
     }
     try {
-      // A lifetime export found at a default path (Apple Health export.zip)
-      // must not be trimmed to the daemon's rolling window.
-      const from = !args.days && wantsFullHistory(importer, filePath) ? "0001-01-01" : win.from;
+      const from = args.days ? win.from : "0001-01-01";
       const s = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
       imported.push({ id: importer.id, path: filePath, days: s.daysWithData, cells: s.cells });
       anyImported = true;

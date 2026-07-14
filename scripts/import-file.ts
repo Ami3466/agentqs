@@ -17,7 +17,7 @@
  * Flags:
  *   --source <id>   chrome | iphone                          (required)
  *   --path <file>   local file / backup dir (default: probe platform locations)
- *   --days <n>      trailing window length in days (default: 90; Takeout JSON defaults to all)
+ *   --days <n>      trailing window (default: the WHOLE file — it is finite and on disk)
  *   --from <date>   window start YYYY-MM-DD (overrides --days)
  *   --to <date>     window end   YYYY-MM-DD (default: today)
  *   --record <dir>  record dir to write (default: <data>/record)
@@ -30,7 +30,6 @@ import Database from "better-sqlite3";
 import {
   importFile,
   resolveFilePath,
-  wantsFullHistory,
   type FileImporter,
 } from "../src/lib/importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "../src/lib/importers/files/registry";
@@ -104,9 +103,15 @@ async function main(): Promise<void> {
 
   const rDir = args.record ?? recordDir(args.data);
   const dbFile = dbPath(args.data);
-  const fullHistory = wantsFullHistory(importer, filePath);
-  const win = windowDays(args.days ? Number(args.days) : 90);
-  const from = args.from ?? (!args.days && fullHistory ? "0001-01-01" : win.from);
+  // A FILE IS FINITE AND ALREADY ON YOUR DISK, so it is read WHOLE. Clipping your own
+  // ten-year Chrome history to a trailing 90 days throws away years that were sitting
+  // right there — and because every later run re-asks for the same trailing 90, those
+  // years are never fetched even once. This is the banned hardcoded window (CLAUDE.md),
+  // and it outlived its own fix: cli-core stopped doing it, these two shipped faces did
+  // not — including the daemon the README tells hosted users to schedule.
+  // `--days N` still means exactly that, for someone who wants a quick top-up.
+  const win = windowDays(args.days ? Number(args.days) : 1);
+  const from = args.from ?? (args.days ? win.from : "0001-01-01");
   const to = args.to ?? win.to;
 
   let summary;

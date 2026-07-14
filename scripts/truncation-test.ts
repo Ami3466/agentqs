@@ -183,6 +183,103 @@ async function main() {
     ranges.join(" | "),
   );
 
+  // ---- 5. A GAP IN A LIFE IS NOT THE END OF ONE ------------------------------
+  // The walk stepped back a year at a time and stopped after two empty chunks. But a
+  // life is not a tidy run of activity ending in silence — it has GAPS. Two quiet years
+  // is a job change, a broken strap, a phone you stopped carrying. The walk hit the gap,
+  // decided the history had ended there, and never asked about anything older. Everything
+  // before it was unreachable by ANY command, forever, and the sync said ok.
+  //
+  // Real repro: mail in 2026 and mail in 2019, three quiet years between. The walk never
+  // asked Gmail about anything before 2023-07-16. It landed 2 days and reported success.
+  console.log("\na quiet stretch does not end the history:");
+  const gapDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-gap-"));
+  process.env.AGENTQS_DATA_DIR = gapDir;
+  fs.mkdirSync(path.join(gapDir, "record", "daily"), { recursive: true });
+  const { writeConfig } = await import("../src/lib/config");
+  const { syncSource } = await import("../src/lib/cli-core");
+  writeConfig({
+    username: "t",
+    passwordHash: "x",
+    sessionSecret: "s",
+    createdAt: new Date().toISOString(),
+    googleProducts: ["calendar", "gmail.inbox", "gmail.sent"],
+    sourceOAuth: {
+      google: { clientId: "c", clientSecret: "s", accessToken: "at", refreshToken: "rt", expiresAt: Date.now() + 3.6e6 },
+    },
+  } as never);
+
+  const mail: Record<string, number> = { "2026-07-10": 12, "2026-06-01": 8, "2019-05-05": 9, "2019-04-01": 5 };
+  let oldestAsked = "9999";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: unknown) => {
+    const u = new URL(String(url));
+    if (u.host.includes("oauth2")) {
+      return new Response(JSON.stringify({ access_token: "at", expires_in: 3600 }), { status: 200 });
+    }
+    const q = u.searchParams.get("q") ?? "";
+    const after = Number(/after:(\d+)/.exec(q)?.[1] ?? 0);
+    const before = Number(/before:(\d+)/.exec(q)?.[1] ?? 0);
+    // Gmail answers a RANGE. The per-day counter asks about one day; the cheap
+    // hasAnyData probe asks about a whole year.
+    const wFrom = new Date(after * 1000).toISOString().slice(0, 10);
+    const wTo = new Date((before - 1) * 1000).toISOString().slice(0, 10);
+    if (wFrom < oldestAsked) oldestAsked = wFrom;
+    const n = Object.entries(mail)
+      .filter(([day]) => day >= wFrom && day <= wTo)
+      .reduce((sum, [, c]) => sum + c, 0);
+    return new Response(JSON.stringify({ messages: Array.from({ length: n }, (_, i) => ({ id: `m${i}` })) }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  let landed: string[] = [];
+  try {
+    await syncSource({ id: "gmail" });
+    landed = fs
+      .readFileSync(path.join(gapDir, "record", "daily", "gmail.csv"), "utf8")
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((l) => l.split(",")[0]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  check(
+    `the walk asks past the gap, all the way to the floor (oldest asked: ${oldestAsked})`,
+    oldestAsked === "2000-01-01",
+    oldestAsked,
+  );
+  check(
+    `mail from BEFORE a 3-year silence still lands (${landed.length} days)`,
+    landed.includes("2019-04-01") && landed.includes("2019-05-05"),
+    landed.join(" ") || "NOTHING — everything behind the gap was lost",
+  );
+  check(
+    "…and the recent side lands too",
+    landed.includes("2026-06-01") && landed.includes("2026-07-10"),
+  );
+  fs.rmSync(gapDir, { recursive: true, force: true });
+
+  // ---- 6. NO FACE MAY REACH FOR A TRAILING WINDOW ----------------------------
+  // The rule (CLAUDE.md): a file is finite and already on your disk, so it is read
+  // WHOLE. Clipping ten years of your own Chrome history to a trailing 90 days throws
+  // away years that were sitting right there — and since every later run re-asks for
+  // the same trailing 90, they are never fetched even once.
+  //
+  // cli-core was fixed. These two were not, and they are the faces the README tells
+  // hosted users to schedule (`npm run daemon -- run --push`). sync:test's guard only
+  // greps cli-core's sync body, so it could never have seen them. This one looks at
+  // every face.
+  console.log("\nno import face defaults to a trailing window:");
+  const FACES = ["scripts/daemon.ts", "scripts/import-file.ts", "src/lib/cli-core.ts"];
+  for (const face of FACES) {
+    const src = fs.readFileSync(path.join(__dirname, "..", face), "utf8");
+    const stray = src.match(/windowDays\([^)]*:\s*(\d{2,})\s*\)/g) ?? [];
+    check(`${face} holds no trailing-window default${stray.length ? ` (found: ${stray.join(", ")})` : ""}`, stray.length === 0);
+  }
+
   if (failures) {
     console.log(`\n✗ ${failures} check(s) failed.\n`);
     process.exit(1);

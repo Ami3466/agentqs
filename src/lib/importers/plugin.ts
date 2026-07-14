@@ -192,6 +192,21 @@ export interface ImporterPlugin {
    * decay toward zero, and ate an imported lifetime export the moment a sync touched
    * one of its days. A shorter look is not news. (Counts only — never a gauge.)
    */
+  /**
+   * ONE CHEAP QUESTION: does this window hold ANY data at all?
+   *
+   * The first import walks every year back to the floor, because a gap in a life is
+   * not the end of it (see backfillPlugin). For most sources that walk is free — one
+   * request a year. For a source where FETCHING a year is expensive (Gmail counts a
+   * day at a time: 730 requests) it would not be, so such a source answers this
+   * instead, and a quiet decade costs ten questions rather than seven thousand.
+   *
+   * Only implement it where the fetch is expensive. A source without one just fetches:
+   * for those the fetch IS the probe. (Not to be confused with `probe` above, which
+   * proves a CREDENTIAL for `source test`.)
+   */
+  hasAnyData?: (ctx: ImporterContext) => Promise<boolean>;
+
   mergePolicy?: MergePolicy;
   /**
    * Why this source cannot hand over its full history — shown instead of letting a
@@ -204,11 +219,12 @@ export interface ImporterPlugin {
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }
 
-/** A backfill walks back a year at a time, and gives up after this many in a row
- *  come back empty — long enough to stride over a fallow year, short enough not to
- *  grind to the floor for an account opened last spring. */
+/** A backfill asks about one year at a time. It NEVER gives up early: it used to stop
+ *  after two empty chunks, which mistook a quiet stretch in a life (a job change, a
+ *  broken strap, an app you came back to) for the end of one — and everything before
+ *  the gap became unreachable by any command, silently, forever. */
 export const BACKFILL_CHUNK_DAYS = 365;
-export const BACKFILL_EMPTY_CHUNKS = 2;
+
 /** The walk's absolute stop. Not a guess about any person's history — simply older
  *  than the services themselves (Gmail 2004, Google Calendar 2006, Spotify 2008),
  *  so no real account can begin before it. */

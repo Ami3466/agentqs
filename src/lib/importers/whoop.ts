@@ -47,7 +47,6 @@ const ALL_TIME_FLOOR = "2015-01-01";
  *  come back empty (~1 year of silence) — long enough to stride over a break from
  *  the strap, short enough not to grind back to 2015 for a 2024 account. */
 const BACKFILL_WINDOW_DAYS = 180;
-const BACKFILL_EMPTY_WINDOWS = 2;
 
 /** Stored WHOOP credentials — kept in config.json (mode 0600, never committed).
  *  The password is retained so a scheduled pull can re-auth once a refresh token
@@ -337,7 +336,7 @@ export async function fetchCycles(
 /**
  * EVERY cycle the account has ever recorded. WHOOP exposes no "account created"
  * date, so the start is discovered: step back from `to` in windows and stop once
- * BACKFILL_EMPTY_WINDOWS of them in a row hold nothing (or the floor is hit).
+ * the floor is hit. It does NOT stop at a quiet stretch — a gap is not an ending.
  *
  * Emptiness is judged on IN-RANGE cycles only. WHOOP answers a window it has no
  * data for with its newest cycles anyway (dated outside it), so counting the raw
@@ -364,20 +363,25 @@ export async function fetchAllCycles(
   const probe = await fetchCycles(userId, token, shiftDate(to, -(BACKFILL_WINDOW_DAYS - 1)), to, fetchImpl);
   const newest = latestCycleDate(probe);
   let cursor = newest && newest < to ? newest : to;
-  let empty = 0;
-  while (cursor >= floor && empty < BACKFILL_EMPTY_WINDOWS) {
+  // TO THE FLOOR, with no early exit. This used to give up after two empty 180-day
+  // windows — i.e. after ONE QUIET YEAR — and its own comment called that "long enough
+  // to stride over a break from the strap". It is not. An athlete who stopped wearing
+  // it for fourteen months (an injury, a switch to an Oura, a lost charger) came back,
+  // connected, and the walk stopped dead at the gap: every year of WHOOP data BEFORE
+  // the break was silently absent, the earliest day in the record read as the start of
+  // the account, and the sync reported ok. You cannot tell a gap from an ending by
+  // looking at the gap. One window per 180 days back to the floor is a few dozen cheap
+  // requests — a rounding error against losing half of someone's history.
+  while (cursor >= floor) {
     const from = maxDate(shiftDate(cursor, -(BACKFILL_WINDOW_DAYS - 1)), floor);
     const page = await fetchCycles(userId, token, from, cursor, fetchImpl);
-    let landed = 0;
     for (const c of page) {
       const day = cycleDate(c.cycle?.days);
       if (!day || day < from || day > cursor) continue; // out-of-range filler
       if (seen.has(day)) continue;
       seen.add(day);
       out.push(c);
-      landed++;
     }
-    empty = landed ? 0 : empty + 1;
     cursor = shiftDate(from, -1);
   }
   return out;
