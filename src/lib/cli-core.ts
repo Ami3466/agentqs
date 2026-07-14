@@ -52,13 +52,17 @@ import {
   type WhoopCreds,
 } from "./importers/whoop";
 import {
-  DEFAULT_BACKFILL_DAYS,
+  BACKFILL_CHUNK_DAYS,
+  BACKFILL_EMPTY_CHUNKS,
+  BACKFILL_FLOOR,
   importPlugin,
   resolveCredential,
   resolveCredentialWithOrigin,
   resolveSyncCredential,
   windowDays,
   type FetchLike,
+  type ImporterPlugin,
+  type PluginImportSummary,
 } from "./importers/plugin";
 import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
@@ -601,9 +605,76 @@ export function syncWindow(
   }
   const last = lastDailyDate(rDir, id);
   if (!last) {
-    return { from: windowDays(opts.backfillDays ?? DEFAULT_BACKFILL_DAYS, now).from, to, firstImport: true };
+    // A first import has no window: it DISCOVERS one (backfillPlugin walks back until
+    // the source runs dry). `backfillDays` is only for an API that cannot walk —
+    // then, and only then, is there a number.
+    const from = opts.backfillDays
+      ? windowDays(opts.backfillDays, now).from
+      : windowDays(BACKFILL_CHUNK_DAYS, now).from;
+    return { from, to, firstImport: true };
   }
   return { from: shiftIso(last, -7), to, firstImport: false };
+}
+
+/**
+ * THE FIRST IMPORT: ask the source where its history begins, never assume.
+ *
+ * Walks backwards a year at a time and stops once BACKFILL_EMPTY_CHUNKS in a row
+ * come back with nothing (or the floor is reached). No constant decides how far back
+ * your life goes — the data does. A fixed default cannot: five years gave one
+ * calendar 1,077 days, ten gave it 1,824, and its history actually began at 1,891.
+ * Whatever number you pick, it is a guess about a stranger, and the days it clips are
+ * days they never find out they are missing.
+ *
+ * Each chunk merges as it lands, so a long walk is resumable — an interrupted
+ * backfill leaves real days in the record, and the next sync picks up from there.
+ */
+async function backfillPlugin(
+  plugin: ImporterPlugin,
+  ctx: { credential?: string; fetchImpl?: FetchLike },
+  rDir: string,
+  instanceId: string,
+  to: string,
+  progress: (phase: string, pct: number) => void,
+): Promise<PluginImportSummary> {
+  let cursor = to;
+  let empty = 0;
+  let chunks = 0;
+  let earliest = to;
+  // The last chunk that HELD data seeds the summary; the rest is accumulated onto it,
+  // so the shape stays exactly what a single import returns.
+  let merged: PluginImportSummary | null = null;
+  let daysWithData = 0;
+  let cells = 0;
+  const metrics = new Set<string>();
+
+  while (cursor > BACKFILL_FLOOR && empty < BACKFILL_EMPTY_CHUNKS) {
+    const from = maxIso(shiftIso(cursor, -(BACKFILL_CHUNK_DAYS - 1)), BACKFILL_FLOOR);
+    chunks++;
+    progress(`fetching your ${plugin.name} history — ${from.slice(0, 4)}`, Math.min(70, 15 + chunks * 4));
+    const s = await importPlugin(plugin, { ...ctx, from, to: cursor }, rDir, instanceId);
+    if (s.daysWithData > 0) {
+      empty = 0;
+      earliest = from;
+      daysWithData += s.daysWithData;
+      cells += s.cells;
+      for (const m of s.metrics) metrics.add(m);
+      merged = merged
+        ? { ...s, appendedEvents: [...merged.appendedEvents, ...s.appendedEvents] }
+        : s;
+    } else {
+      empty++;
+    }
+    cursor = shiftIso(from, -1);
+  }
+  // Nothing anywhere: report the empty window honestly rather than inventing one.
+  if (!merged) return await importPlugin(plugin, { ...ctx, from: earliest, to }, rDir, instanceId);
+  return { ...merged, from: earliest, to, daysWithData, cells, metrics: [...metrics] };
+}
+
+/** The later of two ISO dates. */
+function maxIso(a: string, b: string): string {
+  return a > b ? a : b;
 }
 
 function hasRecordBackedSource(rDir: string, id: string): boolean {
@@ -920,8 +991,16 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     );
   }
   const pw = syncWindow(rDir, instanceId, { days: opts.days, backfillDays: plugin.backfillDays });
-  progress(pw.firstImport ? `fetching your ${plugin.name} history` : `fetching your ${plugin.name} data`, 15);
-  const summary = await importPlugin(plugin, { credential, from: pw.from, to: pw.to, fetchImpl }, rDir, instanceId);
+  // A first import DISCOVERS its range by walking back until the source runs dry —
+  // unless the API can't walk (`backfillDays`), in which case one capped window is
+  // the most it can ever give and pretending otherwise just burns calls.
+  const summary =
+    pw.firstImport && !plugin.backfillDays
+      ? await backfillPlugin(plugin, { credential, fetchImpl }, rDir, instanceId, pw.to, progress)
+      : await (async () => {
+          progress(pw.firstImport ? `fetching your ${plugin.name} history` : `fetching your ${plugin.name} data`, 15);
+          return importPlugin(plugin, { credential, from: pw.from, to: pw.to, fetchImpl }, rDir, instanceId);
+        })();
   progress("merging into the record", 75);
   applySavedMerges(rDir);
   progress("updating the cache", 88);

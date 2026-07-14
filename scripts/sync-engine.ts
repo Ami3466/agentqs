@@ -125,13 +125,14 @@ const today = new Date("2026-07-13T00:00:00Z");
 const wRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-window-"));
 fs.mkdirSync(path.join(wRoot, "daily"), { recursive: true });
 
-// A source with NOTHING in the record: the FIRST import takes the history (a DECADE
-// back), not the 90-day sliver every source used to ask for. Google Calendar at a
-// 5-year window gave 1,077 days; at 10 it gave 1,824 — the difference was history
-// that had always been there and was simply never requested.
+// A source with NOTHING in the record is a FIRST IMPORT — flagged, so the sync walks
+// backwards until the source runs dry (backfillPlugin) instead of guessing a window.
+// No constant can do this: 5 years of one calendar gave 1,077 days, 10 gave 1,824,
+// and its history actually began at 1,891. Every number clips days the user never
+// learns are missing. The window here is only the walk's FIRST step.
 const first = syncWindow(wRoot, "gcal", { today });
-check(`first import reaches back a decade, not 90 days (${first.from} → ${first.to})`,
-  first.from === "2016-07-16" && first.to === "2026-07-13" && first.firstImport);
+check(`an empty source is a first import — it discovers its range (${first.from} → ${first.to})`,
+  first.firstImport === true && first.to === "2026-07-13");
 
 // A plugin bounded by its OWN API (Gmail counts one day at a time, max 400 per run)
 // asks for exactly what one run can carry, not five years it would silently trim.

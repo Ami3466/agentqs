@@ -218,7 +218,12 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   unofficial-instance test, so `whoop-api` is never treated as one.
 - THE SYNC WINDOW COMES FROM THE RECORD, never from a constant (`syncWindow` in
   cli-core - the one rule, every source): `--days N` -> exactly that; record EMPTY
-  -> the first import takes the history (`plugin.backfillDays`, default 10 years);
+  -> the FIRST import DISCOVERS its range: `backfillPlugin` walks back a year at a
+  time until the source runs dry (2 empty chunks), floor 2000-01-01. NEVER pick a
+  constant: 5 years of a calendar gave 1,077 days, 10 gave 1,824, and its history
+  actually began at 1,891 - every number clips days the user never learns are
+  missing. `plugin.backfillDays` is a HARD CAP for an API that cannot walk (Gmail
+  counts a day at a time, 400/run), not a default;
   record has rows -> resume from the last recorded day minus a week of overlap.
   Every source used to send a flat trailing `windowDays(90)`, which is wrong twice
   over: it lands a sliver of a lifetime, and because every LATER sync re-asks for

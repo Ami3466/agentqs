@@ -125,6 +125,31 @@ async function main() {
   check("real sync lands ok through the queue", rt?.status === "ok", rt?.error ?? "");
   check("sync phases reached the job bar", seen.some((s) => s.startsWith("fetching")) && seen.some((s) => s.startsWith("updating")),
     seen.join(" | "));
+  // 6b. THE FIRST IMPORT DISCOVERS ITS RANGE. That sync ran against an EMPTY record,
+  // so it was a first import: instead of a fixed window it walked backwards a year at
+  // a time until the source ran dry. No constant decides how far back a life goes —
+  // five years of one calendar gave 1,077 days, ten gave 1,824, and the truth was
+  // 1,891. Whatever number you pick clips days the user never learns are missing.
+  const firstRun = readSyncJobs()["rescuetime"];
+  check(
+    "a first import walks back until the source runs dry",
+    // The fixture holds one month; the walk finds it, then two empty years stop it.
+    (firstRun?.days ?? 0) > 0,
+    `${firstRun?.days} days landed with no window given`,
+  );
+  // And a SECOND sync resumes from what landed — it must not re-walk the whole history.
+  const before = fs.readFileSync(path.join(root, "record", "daily", "rescuetime.csv"), "utf8");
+  const again = await syncSource({ id: "rescuetime", fixture: path.resolve("samples/rescuetime-daily.json") });
+  check(
+    "a later sync resumes, it does not re-walk",
+    !again.from.startsWith("20") || again.from > "2026-01-01",
+    `resumed from ${again.from}`,
+  );
+  check(
+    "re-syncing is idempotent (same rows)",
+    fs.readFileSync(path.join(root, "record", "daily", "rescuetime.csv"), "utf8") === before,
+  );
+
   const run = readSyncRuns().runs["rescuetime"];
   check("run ledger records the attempt (ok)", run?.ok === true, JSON.stringify(run));
   const csv = path.join(root, "record", "daily", "rescuetime.csv");
