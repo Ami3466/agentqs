@@ -12,6 +12,7 @@ export const FIXTURES: Record<string, string> = {
   "whoop-api": "samples/whoop-api.json",
   rescuetime: "samples/rescuetime-daily.json",
   gcal: "samples/gcal-events.json",
+  gmail: "samples/gmail-messages.json",
   spotify: "samples/spotify-recent.json",
   oura: "samples/oura-readiness.json",
   fitbit: "samples/fitbit-steps.json",
@@ -53,6 +54,13 @@ const MULTI: Record<string, Router> = {
   // Two endpoints: anapi/data (per-day productivity seconds, includes today) and
   // the daily_summary_feed (pulse for completed days only).
   rescuetime: (href, body) => (href.includes("/anapi/data") ? body.interval : body.summary),
+  // Gmail asks TWICE PER DAY — once for mail that arrived, once for mail you sent —
+  // and the two must not answer with the same count, or a swapped query would pass.
+  // Q_SENT starts with "in:sent"; Q_RECEIVED starts with "-in:sent".
+  gmail: (href, body) => {
+    const q = new URL(href).searchParams.get("q") ?? "";
+    return q.startsWith("in:sent") ? body.sent : body.received;
+  },
   mastodon: (href, body) => (href.includes("/verify_credentials") ? { id: "42" } : body),
   granola: (href, body, req) => {
     const byDoc = (key: string) =>

@@ -426,9 +426,25 @@ function hostOf(url: string): string {
   }
 }
 
+/** Statuses that mean "ask me again", not "no": the API is rate-limiting us (429)
+ *  or briefly unwell (5xx). A history walk makes thousands of calls, so it WILL
+ *  meet one — and aborting a half-hour backfill over a blip the server itself told
+ *  us to wait out would read as "the source is broken". Any other 4xx is a real
+ *  answer (bad credential, bad request) and must surface at once. */
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+
+/** How long to wait before retrying — the server's own `Retry-After` if it sent
+ *  one (capped, so a hostile header can't park a sync for an hour), else backoff. */
+function retryAfterMs(res: Response, attempt: number): number {
+  const header = res.headers?.get?.("retry-after");
+  const secs = header ? Number(header) : NaN;
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 60_000);
+  return 500 * 2 ** attempt;
+}
+
 /** One HTTP call, with the transport handling every importer needs: a network
- *  failure is RETRIED (the first sync right after an OAuth connect hits a
- *  container whose DNS may still be warming up — one blip must not fail the
+ *  failure or a rate-limit is RETRIED (the first sync right after an OAuth connect
+ *  hits a container whose DNS may still be warming up — one blip must not fail the
  *  connect), and if it still fails the thrown message names the host and the
  *  real cause. Non-network errors (a fixture's "unexpected URL") pass through
  *  untouched, so tests still fail loudly. */
@@ -441,7 +457,12 @@ export async function netFetch(
   let last: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await fetchImpl(url, init);
+      const res = await fetchImpl(url, init);
+      if (RETRY_STATUS.has(res.status) && i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, retryAfterMs(res, i)));
+        continue;
+      }
+      return res;
     } catch (e) {
       last = e;
       if (!networkCause(e)) break;
@@ -451,6 +472,29 @@ export async function netFetch(
   const cause = networkCause(last);
   if (cause) throw new Error(`could not reach ${hostOf(url)} (${cause}) — network failure, not a bad credential`);
   throw last;
+}
+
+/**
+ * Map over items with at most `limit` calls in flight. An importer that must ask
+ * the API once PER DAY (Gmail counts a day at a time) does years of history in
+ * thousands of round-trips: serially that is hours of latency and nothing else,
+ * which is precisely why Gmail was capped at 400 days and a lifetime stayed out
+ * of reach. Order is preserved; the first rejection wins.
+ */
+export async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (let i = next++; i < items.length; i = next++) {
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 /** GET a URL and parse JSON, surfacing a short error body like the GitHub client. */

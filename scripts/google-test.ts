@@ -31,7 +31,7 @@ import { connectionState, type FetchLike } from "../src/lib/importers/plugin";
 import { beginOAuth, completeOAuth } from "../src/lib/oauth";
 import { SCOPE_CALENDAR, SCOPE_GMAIL, googleScopes } from "../src/lib/google";
 import { googleState } from "../src/lib/google-connect";
-import { disconnectSource, google } from "../src/lib/cli-core";
+import { disconnectSource, google, syncSource } from "../src/lib/cli-core";
 import { buildSources } from "../src/lib/source-registry";
 import { normalizeGmail } from "../src/lib/importers/gmail";
 
@@ -211,6 +211,64 @@ async function main() {
     JSON.stringify(normalizeGmail([{ date: "2026-07-10", received: 12 }], { inbox: true, sent: false })) ===
       JSON.stringify({ header: ["date", "emails_received"], rows: [["2026-07-10", "12"]] }),
   );
+  check(
+    "a day with no mail at all lands NO row — we never claim you received nothing in 2011",
+    normalizeGmail([{ date: "2011-01-01", received: 0, sent: 0 }], { inbox: true, sent: true }).rows.length === 0,
+  );
+
+  // ---- 4b. A FIRST IMPORT TAKES THE WHOLE ACCOUNT ------------------------------
+  // Gmail used to declare a 400-day ceiling, and that ceiling was PERMANENT: the
+  // first import took the last 400 days, every later sync resumed from the newest
+  // recorded day, and `--days 3000` was sliced straight back to the same recent 400.
+  // Mail from 2022 was unreachable by any command — the record just reported that
+  // Gmail began the year you connected it. Drives the REAL sync path (syncWindow →
+  // backfill walk → merge), with Google's token endpoint and Gmail both faked.
+  console.log("\na first Gmail import walks the whole account:");
+  google({ enable: ["gmail.inbox", "gmail.sent"] });
+  const lifetime = {
+    "2022-03-15": { received: 7, sent: 2 }, // ~1,580 days back — far past any 400-day cap
+    "2023-06-01": { received: 9, sent: 1 },
+    "2024-01-01": { received: 4, sent: 0 },
+    "2025-05-05": { received: 11, sent: 3 },
+    "2026-07-10": { received: 12, sent: 3 },
+  };
+  const mail = fakeGmail(lifetime);
+  const realFetch = globalThis.fetch;
+  // One stub for the whole path: refresh the grant, then count mail.
+  globalThis.fetch = (async (url: unknown, init: unknown) =>
+    String(url).includes("oauth2.googleapis.com")
+      ? await fakeToken(`${SCOPE_CALENDAR} ${SCOPE_GMAIL}`)(url as string, init as RequestInit)
+      : await mail.fn(url as string, init as RequestInit)) as unknown as typeof fetch;
+  let synced: Awaited<ReturnType<typeof syncSource>> | null = null;
+  try {
+    synced = await syncSource({ id: "gmail" });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const landed = fs.readFileSync(path.join(dataDir, "record", "daily", "gmail.csv"), "utf8").trim().split("\n");
+  const dates = landed.slice(1).map((l) => l.split(",")[0]);
+  check(
+    `it reaches back to the account's first mail (${dates[0]}), not a 400-day slice`,
+    dates[0] === "2022-03-15",
+    dates[0],
+  );
+  check(
+    "every year in between lands too, and only the days that HAD mail",
+    JSON.stringify(dates) === JSON.stringify(Object.keys(lifetime)),
+    JSON.stringify(dates),
+  );
+  check(
+    `the walk stops when the account runs dry, it does not grind to the floor (from=${synced?.from})`,
+    (synced?.from ?? "") > "2020-01-01",
+  );
+  // That was a REAL sync: it stamped the ledger AND wrote record/daily/gmail.csv,
+  // and "when did this last sync?" falls back to that file's mtime. The scheduling
+  // checks below ask whether a ticked Gmail is DUE, which presumes it has never run —
+  // so put the world back exactly as they found it.
+  const afterSync = readConfig()!;
+  delete afterSync.sourceSyncedAt?.gmail;
+  writeConfig(afterSync);
+  fs.rmSync(path.join(dataDir, "record", "daily", "gmail.csv"), { force: true });
 
   // ---- 5. Unticking actually STOPS it -----------------------------------------
   // The trap: Gmail shares the connected key, so it stays "connected" when unticked.

@@ -2,6 +2,7 @@ import { readConfig, type AppConfig } from "../config";
 import { gmailParts, googleScopes, SCOPE_GMAIL } from "../google";
 import {
   getJson,
+  mapPool,
   type DailyTable,
   type FetchLike,
   type ImporterContext,
@@ -42,10 +43,21 @@ const API = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 const Q_RECEIVED = "-in:sent -in:draft -in:chats";
 const Q_SENT = "in:sent";
 
-/** A sync window wider than this would be thousands of API round-trips (two per
- *  day). We stop, and we SAY we stopped — a silent cap would read as "Gmail has
- *  no mail before 2024". Re-run with an earlier window to go further back. */
-const MAX_DAYS = 400;
+/**
+ * Gmail is counted one day at a time, so a year of history is ~730 round-trips.
+ * That cost once bought a HARD CAP of 400 days — and a cap is a lie about your
+ * mail: the first import took the last 400 days, every later sync resumed from the
+ * newest recorded day, and `--days 3000` was silently trimmed back to the same
+ * recent 400. There was no path to 2019 at all; the record simply reported that
+ * Gmail began the year you connected it.
+ *
+ * The cost was never Google's limit, it was our patience. Gmail's quota allows ~50
+ * list calls a second; the walk was just SERIAL. So we fan the days out (`mapPool`)
+ * and let Gmail take the same backward walk as every other source — a year-chunk at
+ * a time until the account runs dry, each chunk merged as it lands, so a long first
+ * import is resumable and never re-fetches what it already has.
+ */
+const DAY_CONCURRENCY = 8;
 
 export interface GmailDay {
   date: string;
@@ -96,12 +108,21 @@ async function countMessages(
 }
 
 /** Pure: days → the daily table. A half that was never fetched lands NO column
- *  (an unchecked Sent must not write a wall of zeroes into the record). */
+ *  (an unchecked Sent must not write a wall of zeroes into the record).
+ *
+ *  A day where every fetched half is zero lands NO ROW. Before the account existed
+ *  there is no mail to count, and writing `0` for those days would be a claim we
+ *  cannot make — that you received no mail in 2011, rather than that Gmail did not
+ *  yet know you. It also matters mechanically: the backward walk stops when a chunk
+ *  comes back empty, so a year of invented zeroes would look like data and march the
+ *  walk all the way to the floor, one wasted round-trip per day. (An active account
+ *  does not have zero-mail days; a day with a single newsletter still lands.) */
 export function normalizeGmail(days: GmailDay[], parts: { inbox: boolean; sent: boolean }): DailyTable {
   const header = ["date"];
   if (parts.inbox) header.push("emails_received");
   if (parts.sent) header.push("emails_sent");
   const rows = [...days]
+    .filter((d) => (parts.inbox ? (d.received ?? 0) : 0) + (parts.sent ? (d.sent ?? 0) : 0) > 0)
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
     .map((d) => {
       const row = [d.date];
@@ -117,12 +138,12 @@ export const gmailPlugin: ImporterPlugin = {
   name: "Gmail",
   detail: "mail received & sent per day",
   live: true,
-  // Gmail is counted a day at a time (one search per day), so a run is bounded by
-  // MAX_DAYS — asking for five years would just be silently trimmed to the recent
-  // end. A first import therefore takes exactly what one run can carry; the result's
-  // `note` says how to reach further back.
-  backfillDays: MAX_DAYS,
-  historyNote: `Gmail is counted one day at a time, so a single sync covers up to ${MAX_DAYS} days. To reach further back, re-run with --days.`,
+  // NO backfillDays. Gmail takes the same walk as every other source: a first import
+  // steps back a year at a time until the account runs dry. It is the slowest source
+  // we have (one search per day, per half) — that is a reason to fan out and to warn,
+  // never a reason to decide on the user's behalf that their mail begins in 2025.
+  historyNote:
+    "Gmail is counted one day at a time, so a first import walks your whole account year by year and can take several minutes — it runs in the background and each year is saved as it lands, so it picks up where it left off.",
   requiresCredential: true,
   credentialLabel: "OAuth access token",
   credentialPlaceholder: "ya29.… (OAuth access token)",
@@ -161,12 +182,12 @@ export const gmailPlugin: ImporterPlugin = {
     }
     const credential = ctx.credential ?? "";
 
-    const all = eachDay(ctx.from, ctx.to);
-    const days = all.slice(-MAX_DAYS); // keep the RECENT end of an over-wide window
-    const skipped = all.length - days.length;
-
-    const out: GmailDay[] = [];
-    for (const date of days) {
+    // The window is asked for EXACTLY as given — no slicing back to a "recent end".
+    // The old cap kept the newest 400 days of whatever it was handed, which is why
+    // asking for more could never reach further back: the extra days were thrown
+    // away rather than fetched.
+    const days = eachDay(ctx.from, ctx.to);
+    const out = await mapPool(days, DAY_CONCURRENCY, async (date) => {
       const start = epochDay(date);
       const end = start + 86_400;
       const window = `after:${start} before:${end}`;
@@ -177,20 +198,14 @@ export const gmailPlugin: ImporterPlugin = {
       } catch (e) {
         throw new Error(`Gmail messages (${date}) → ${(e as Error).message}`);
       }
-      out.push(day);
-    }
+      return day;
+    });
 
     return {
       table: normalizeGmail(out, parts),
       meta: {
         days: days.length,
         parts: [parts.inbox ? "inbox" : null, parts.sent ? "sent" : null].filter(Boolean).join("+"),
-        ...(skipped > 0
-          ? {
-              skippedDays: skipped,
-              note: `Window was ${all.length} days; Gmail is counted a day at a time, so this run covered the most recent ${days.length}. Re-run with an earlier --from to reach the other ${skipped}.`,
-            }
-          : {}),
       },
     };
   },
