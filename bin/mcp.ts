@@ -412,6 +412,17 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "reset_source",
+    {
+      title: "Wipe a source's data, keep its connection",
+      description:
+        "Drop everything a source landed (its daily file, its events, WHOOP's per-minute HR) while KEEPING its credential, OAuth grant and schedule, so the next sync re-walks its whole history into a clean file. The repair tool for a record poisoned by an importer bug: a re-sync only MERGES, so it can raise a value but never delete an invented row (a zero-filled day, a row filed on the wrong day) — only starting the file empty can.",
+      inputSchema: { source: z.string() },
+    },
+    async ({ source }) => guard(() => core.resetSource(source)),
+  );
+
+  server.registerTool(
     "automation_list",
     {
       title: "List browser automations",

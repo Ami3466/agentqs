@@ -890,6 +890,75 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
   return { id, removed: true, dailyRows };
 }
 
+/** Wipe what a source LANDED, keep the CONNECTION: drop record/daily/<id>.csv and the
+ *  events it wrote, clear only its last-sync stamp, and rebuild. The credential, the
+ *  OAuth grant, the schedule, the automation recipe and every saved graph pointing at
+ *  it all stay — so the very next `sync <id>` sees an empty record for this source and
+ *  re-walks its WHOLE history (syncWindow reads the record, so an empty file IS a first
+ *  import) into a clean file.
+ *
+ *  This is the repair tool for a record poisoned by a bug in an importer, and it exists
+ *  because a re-sync alone CANNOT undo one. A sync MERGES into the daily file: it can
+ *  raise a value, but it can never delete a row the corrected importer no longer writes
+ *  at all. So what survives a re-walk is exactly the invented rows — GitHub's densify()
+ *  zeros on days that had no commits, a UTC-bucketed row filed on a day the user did not
+ *  live, a count decayed by a recency buffer — and the only way out of them is to start
+ *  the file empty.
+ *
+ *  disconnectSource starts it empty too, but it also forgets the credential: cleaning a
+ *  poisoned Google or Strava would have meant re-running the whole OAuth dance just to
+ *  drop some bad rows, which is why the damage kept getting fixed by hand instead. Reset
+ *  is the same wipe with the key left in. */
+export function resetSource(id: string): {
+  id: string;
+  reset: boolean;
+  sources: string[];
+  dailyRows: number;
+} {
+  const rDir = recordDir();
+  const bundle = sourceBundleById(id);
+  const bundleSourceIds = bundle?.sourceIds(rDir) ?? [];
+  const known =
+    isAutomation(id) ||
+    Boolean(bundle && bundleSourceIds.length) ||
+    id === "github" ||
+    isWhoopInstance(id) ||
+    Boolean(pluginInstanceById(id)) ||
+    Boolean(fileImporterById(id)) ||
+    hasRecordBackedSource(rDir, id);
+  if (!known) {
+    throw new Error(
+      `Unknown source "${id}". Try a connected source or a record-backed import in record/daily/<source>.csv.`,
+    );
+  }
+  // A bundle (the Google extension scrapes) writes several daily files under one row —
+  // resetting the row has to clear all of them, or the re-walk merges into a half-clean
+  // record and the poison lives on in the sibling the user never named.
+  const ids = bundle && bundleSourceIds.length ? bundleSourceIds : [id];
+  for (const sourceId of ids) removeDailySourceFile(rDir, sourceId);
+  if (isWhoopInstance(id)) {
+    // Per-minute HR is landed data too — leaving it behind would keep a poisoned minute
+    // stream beside a freshly re-walked daily table.
+    try {
+      fs.rmSync(whoopHrDir(rDir, id), { recursive: true, force: true });
+    } catch {
+      /* non-fatal — nothing to remove */
+    }
+  }
+  const cfg = requireConfig();
+  // Clear ONLY the "when did we last run" stamps. They are the one part of the config
+  // that describes the data rather than the connection, and after a reset they would be
+  // claiming a sync that no longer has anything to show for it.
+  for (const sourceId of ids) {
+    if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[sourceId];
+  }
+  if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
+  if (id === "github") delete cfg.githubSyncedAt;
+  writeConfig(cfg);
+  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  return { id, reset: true, sources: ids, dailyRows };
+}
+
 // ---- automations (browser-driven imports for sources with no API) ---------
 
 /** Every configured automation recipe (redacted — secrets shown as booleans). */

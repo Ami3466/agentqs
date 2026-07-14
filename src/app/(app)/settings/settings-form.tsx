@@ -1529,7 +1529,7 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "GET", path: "/api/daily", desc: "The structured daily table." },
   { method: "GET", path: "/api/events", desc: "Raw timeline events (?start=YYYY-MM-DD&end=…&limit=500)." },
   { method: "GET", path: "/api/log", desc: "Captured log items; POST /api/log/reject {\"id\":\"…\"} undoes an import." },
-  { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; DELETE disconnects." },
+  { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; POST {\"id\":\"…\",\"action\":\"reset\"} wipes what a source landed but KEEPS its credential and schedule, so the next sync re-walks its whole history into a clean file (the repair path for rows a buggy importer invented — a sync only merges, so it can raise a value but never delete one); DELETE disconnects, taking the credential with it." },
   { method: "GET", path: "/api/pipeline", desc: "Pipeline truth table: per-source origin, credential provenance, schedule, last run outcome, coverage." },
   { method: "GET", path: "/api/google", desc: "Google as ONE connection with a product tree (Calendar, Gmail → Inbox/Sent). POST {\"enable\":[\"gmail.sent\"]} ticks a product; {\"products\":[…]} replaces the set. Ticking is not connecting: a product whose scope the stored key lacks answers needsAuthorize — re-authorize widens the SAME key." },
   { method: "GET", path: "/api/doctor", desc: "Store health: sync-engine exposure (iCloud/Dropbox/OneDrive), evicted files, conflict twins, split stores." },
