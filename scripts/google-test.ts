@@ -29,7 +29,7 @@ import { readConfig, writeConfig, type AppConfig } from "../src/lib/config";
 import { pluginById } from "../src/lib/importers/registry";
 import { connectionState, type FetchLike } from "../src/lib/importers/plugin";
 import { beginOAuth, completeOAuth } from "../src/lib/oauth";
-import { SCOPE_CALENDAR, SCOPE_GMAIL, googleScopes } from "../src/lib/google";
+import { SCOPE_CALENDAR, SCOPE_GMAIL, googleEnabled, googleScopes, nextGoogleSelection } from "../src/lib/google";
 import { googleState } from "../src/lib/google-connect";
 import { disconnectSource, google, syncSource } from "../src/lib/cli-core";
 import { buildSources } from "../src/lib/source-registry";
@@ -269,6 +269,42 @@ async function main() {
   delete afterSync.sourceSyncedAt?.gmail;
   writeConfig(afterSync);
   fs.rmSync(path.join(dataDir, "record", "daily", "gmail.csv"), { force: true });
+
+  // ---- 4c. "I ticked Sent, and it saved BOTH" ---------------------------------
+  // The card used to POST deltas (enable/disable), which the server applies to
+  // whatever it holds WHEN THEY ARRIVE. The natural way to get "Gmail, sent only" is
+  // to tick Gmail — which turns on both leaves — and then untick Inbox. Two deltas,
+  // in flight together: if `disable:[inbox]` reached the server before
+  // `enable:[inbox,sent]`, the enable won and Inbox came back ON. You asked for Sent,
+  // you got both, and nothing you clicked afterwards looked like it saved.
+  // The card now sends the WHOLE TICKED SET, which cannot be reordered into a
+  // different answer, and this is that set — the same function the checkboxes call.
+  console.log("\nticking Sent saves Sent, and nothing else:");
+  google({ products: ["calendar"] }); // back to the default
+  const ticked = () => googleEnabled(readConfig()).join(",");
+
+  // Straight at the leaf.
+  google({ products: nextGoogleSelection(googleEnabled(readConfig()), ["gmail.sent"], true) });
+  check(`tick Sent → Sent only (${ticked()})`, ticked() === "calendar,gmail.sent");
+
+  // The branch: one click, both leaves. Then take Inbox back off.
+  google({ products: ["calendar"] });
+  const bothOn = nextGoogleSelection(googleEnabled(readConfig()), ["gmail"], true);
+  google({ products: bothOn });
+  check(`tick the Gmail branch → both leaves (${ticked()})`, ticked() === "calendar,gmail.inbox,gmail.sent");
+  google({ products: nextGoogleSelection(googleEnabled(readConfig()), ["gmail.inbox"], false) });
+  check(`…then untick Inbox → Sent survives (${ticked()})`, ticked() === "calendar,gmail.sent");
+
+  // The set is a STATEMENT, not an instruction: replaying it in any order lands the
+  // same place. A delta could not say that — which is the whole bug.
+  const sentOnly = nextGoogleSelection(["calendar", "gmail.inbox", "gmail.sent"], ["gmail.inbox"], false);
+  google({ products: sentOnly });
+  google({ products: sentOnly });
+  check(`re-sending the same set is idempotent (${ticked()})`, ticked() === "calendar,gmail.sent");
+  check(
+    "unticking the Gmail branch clears BOTH leaves, never half of it",
+    nextGoogleSelection(["calendar", "gmail.inbox", "gmail.sent"], ["gmail"], false).join(",") === "calendar",
+  );
 
   // ---- 5. Unticking actually STOPS it -----------------------------------------
   // The trap: Gmail shares the connected key, so it stays "connected" when unticked.
