@@ -22,6 +22,7 @@ import { mergeDailyCsv } from "../src/lib/record";
 import { normalizeDate, structureCsv } from "../src/lib/structure";
 import { fetchGithubCommits, type FetchLike } from "../src/lib/importers/github";
 import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
+import { localDay } from "../src/lib/importers/plugin";
 import { PAGING, pagingFetch } from "./paging-fixtures";
 
 let failures = 0;
@@ -320,6 +321,67 @@ async function main() {
   writeBackfillState("gcal", { cursor: undefined, done: true, at: "2026-07-14T00:00:00Z" });
   check("only a walk that reaches the floor is done", readBackfillState("gcal").done === true);
   fs.rmSync(rDir2, { recursive: true, force: true });
+
+  // ---- 5d. A DAY IS THE DAY YOU LIVED IT --------------------------------------
+  // Eight importers bucketed a day by slicing a UTC timestamp. That is the day UTC was
+  // having, not the day the person was having. A New Yorker watching a film at 21:00,
+  // checking in for dinner at 19:00, or browsing 8-11pm is past midnight UTC — so all
+  // of it was filed on TOMORROW. East of UTC it runs the other way: an Israeli playing
+  // music at 01:00 was filed on YESTERDAY. Every correlation over those days was
+  // quietly comparing the wrong ones.
+  console.log("\na day is the day you lived it, not the day UTC was having:");
+  const NY = "America/New_York";
+  const IL = "Asia/Jerusalem";
+
+  // 2026-06-11T01:00Z — 9pm on the 10th in New York.
+  const lateNight = Date.parse("2026-06-11T01:00:00Z");
+  check(
+    `9pm Tuesday in New York is Tuesday, not Wednesday (${localDay(lateNight, NY)})`,
+    localDay(lateNight, NY) === "2026-06-10",
+    localDay(lateNight, NY),
+  );
+  // 2026-06-10T22:30Z — 1:30am on the 11th in Israel.
+  const smallHours = Date.parse("2026-06-10T22:30:00Z");
+  check(
+    `1:30am Thursday in Israel is Thursday, not Wednesday (${localDay(smallHours, IL)})`,
+    localDay(smallHours, IL) === "2026-06-11",
+    localDay(smallHours, IL),
+  );
+
+  // The importers actually USE it — a Trakt play at 9pm NY lands on the day it happened.
+  const trakt = SOURCE_PLUGINS.find((p) => p.id === "trakt")!;
+  const traktFetch = (async () =>
+    new Response(JSON.stringify([{ watched_at: "2026-06-11T01:00:00Z" }]), { status: 200 })) as unknown as typeof fetch;
+  const played = await trakt.fetch!({
+    credential: "CLIENTID:TOKEN",
+    from: "2026-06-01",
+    to: "2026-06-30",
+    fetchImpl: traktFetch,
+  });
+  // (the plugin reads the record's timezone; drive it explicitly through normalize)
+  const { normalizeTrakt } = await import("../src/lib/importers/trakt");
+  const nyRows = normalizeTrakt([{ watched_at: "2026-06-11T01:00:00Z" }], "2026-06-01", "2026-06-30", NY).rows;
+  check(
+    `Trakt files a 9pm-in-New-York play on the 10th (${nyRows[0]?.[0]})`,
+    nyRows[0]?.[0] === "2026-06-10",
+    nyRows[0]?.[0] ?? "no row",
+  );
+  check("…and the plugin's own fetch still lands the play", played.table.rows.length === 1);
+
+  // A browser history is the most local thing there is.
+  const { normalizeVisits } = await import("../src/lib/importers/files/chrome");
+  const browsed = normalizeVisits(
+    [{ t: lateNight, url: "https://example.com/a" }],
+    "2026-06-01",
+    "2026-06-30",
+    (t) => t,
+    NY,
+  ).rows;
+  check(
+    `Chrome files 9pm browsing on the day you were browsing (${browsed[0]?.[0]})`,
+    browsed[0]?.[0] === "2026-06-10",
+    browsed[0]?.[0] ?? "no row",
+  );
 
   // ---- 6. NO FACE MAY REACH FOR A TRAILING WINDOW ----------------------------
   // The rule (CLAUDE.md): a file is finite and already on your disk, so it is read

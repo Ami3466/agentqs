@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import type { DailyTable } from "../plugin";
+import { localDay, type DailyTable } from "../plugin";
 import type { FileImporter, FileImportContext, FileImportResult } from "../file-plugin";
 
 /**
@@ -87,12 +87,12 @@ function backupDay(backupDir: string, manifest: string): string {
     const m = xml.match(/<key>Last Backup Date<\/key>\s*<date>([^<]+)<\/date>/);
     if (m) {
       const d = new Date(m[1]);
-      if (Number.isFinite(d.getTime())) return d.toISOString().slice(0, 10);
+      if (Number.isFinite(d.getTime())) return localDay(d);
     }
   } catch {
     /* fall through to mtime */
   }
-  return fs.statSync(manifest).mtime.toISOString().slice(0, 10);
+  return localDay(fs.statSync(manifest).mtime); // an evening backup in the Americas was filed on tomorrow
 }
 
 export async function readIphoneBackup(

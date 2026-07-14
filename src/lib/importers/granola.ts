@@ -17,6 +17,8 @@ import {
 } from "../granola";
 import {
   inWindow,
+  localDay,
+  recordTimeZone,
   type DailyTable,
   type ImporterContext,
   type ImporterEvent,
@@ -198,8 +200,10 @@ export const granolaPlugin: ImporterPlugin = {
       throw new Error(`Granola get-documents → ${(e as Error).message}`);
     }
 
+    // The day a meeting HAPPENED, in the user's own day — not the day UTC was having.
+    const tz = recordTimeZone();
     const windowed = docs.filter((d) => {
-      const created = (d.created_at ?? "").slice(0, 10);
+      const created = d.created_at ? localDay(d.created_at, tz) : "";
       return created && inWindow(created, ctx.from, ctx.to);
     });
 
@@ -229,7 +233,7 @@ export const granolaPlugin: ImporterPlugin = {
       const ts = doc.created_at ?? `${ctx.to}T00:00:00.000Z`;
       resolved.push({
         doc,
-        date: ts.slice(0, 10),
+        date: localDay(ts, tz),
         ts,
         title: meetingTitle(doc),
         notes,

@@ -1,5 +1,7 @@
 import {
   getJson,
+  localDay,
+  recordTimeZone,
   pageAll,
   inWindow,
   splitCredential,
@@ -35,12 +37,12 @@ interface LfmResp {
 
 const API = "https://ws.audioscrobbler.com/2.0/";
 
-export function normalizeLastfm(tracks: LfmTrack[], from: string, to: string): DailyTable {
+export function normalizeLastfm(tracks: LfmTrack[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const scrobbles = new Map<string, number>();
   for (const t of tracks) {
     const uts = Number(t.date?.uts);
     if (!Number.isFinite(uts) || uts <= 0) continue; // now-playing has no date
-    const day = new Date(uts * 1000).toISOString().slice(0, 10);
+    const day = localDay(uts * 1000, tz);
     if (!inWindow(day, from, to)) continue;
     scrobbles.set(day, (scrobbles.get(day) ?? 0) + 1);
   }
@@ -96,6 +98,6 @@ export const lastfmPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Last.fm recent tracks → ${(e as Error).message}`);
     }
-    return { table: normalizeLastfm(tracks, ctx.from, ctx.to), meta: { pulledScrobbles: tracks.length } };
+    return { table: normalizeLastfm(tracks, ctx.from, ctx.to, recordTimeZone()), meta: { pulledScrobbles: tracks.length } };
   },
 };

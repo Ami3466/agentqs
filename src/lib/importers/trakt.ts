@@ -1,5 +1,7 @@
 import {
   getJson,
+  localDay,
+  recordTimeZone,
   pageAll,
   inWindow,
   splitCredential,
@@ -27,10 +29,10 @@ interface TraktPlay {
 const PER_PAGE = 100;
 const API = "https://api.trakt.tv/users/me/history";
 
-export function normalizeTrakt(plays: TraktPlay[], from: string, to: string): DailyTable {
+export function normalizeTrakt(plays: TraktPlay[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const count = new Map<string, number>();
   for (const p of plays) {
-    const day = (p.watched_at ?? "").slice(0, 10);
+    const day = p.watched_at ? localDay(p.watched_at, tz) : "";
     if (!day || !inWindow(day, from, to)) continue;
     count.set(day, (count.get(day) ?? 0) + 1);
   }
@@ -100,6 +102,6 @@ export const traktPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Trakt history → ${(e as Error).message}`);
     }
-    return { table: normalizeTrakt(plays, ctx.from, ctx.to), meta: { pulledPlays: plays.length } };
+    return { table: normalizeTrakt(plays, ctx.from, ctx.to, recordTimeZone()), meta: { pulledPlays: plays.length } };
   },
 };

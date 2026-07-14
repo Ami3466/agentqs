@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import type { DailyTable } from "../plugin";
+import { localDay, recordTimeZone, type DailyTable } from "../plugin";
 import type { FileImporter, FileImportContext, FileImportResult } from "../file-plugin";
 
 /**
@@ -50,13 +50,23 @@ interface UnixVisitRow {
 /** Roll raw (timestamp, url) rows up into the wide per-day daily table.
  *  Shared by every browser-history importer (Chrome, Safari) — same columns,
  *  each supplies its own epoch converter. */
-export function normalizeVisits(rows: Array<{ t: number; url: string }>, from: string, to: string, toUnixMs: (t: number) => number): DailyTable {
+export function normalizeVisits(
+  rows: Array<{ t: number; url: string }>,
+  from: string,
+  to: string,
+  toUnixMs: (t: number) => number,
+  tz: string = recordTimeZone(),
+): DailyTable {
   const header = ["date", "visits", "pages", "domains"];
   const fromDay = from;
   const toDay = to;
   const perDay = new Map<string, { visits: number; pages: Set<string>; domains: Set<string> }>();
   for (const r of rows) {
-    const day = new Date(toUnixMs(r.t)).toISOString().slice(0, 10);
+    // THE DAY YOU BROWSED, not the day UTC was having. A New Yorker browsing 8-11pm is
+    // 00:00-04:00 UTC the NEXT day, so a third of their browsing was credited to
+    // tomorrow — and "does late-night browsing hurt my next-day recovery?" was
+    // comparing a day against itself. Nothing is more local than a browser history.
+    const day = localDay(toUnixMs(r.t), tz);
     if (day < fromDay || day > toDay) continue;
     const bucket =
       perDay.get(day) ?? { visits: 0, pages: new Set<string>(), domains: new Set<string>() };

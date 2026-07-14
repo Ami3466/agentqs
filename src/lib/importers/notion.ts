@@ -1,5 +1,7 @@
 import {
   inWindow,
+  localDay,
+  recordTimeZone,
   pageAll,
   postJson,
   type DailyTable,
@@ -33,10 +35,10 @@ interface NotionResp {
 const API = "https://api.notion.com/v1/search";
 const VERSION = "2022-06-28";
 
-export function normalizeNotion(results: NotionResult[], from: string, to: string): DailyTable {
+export function normalizeNotion(results: NotionResult[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const edits = new Map<string, number>();
   for (const r of results) {
-    const day = (r.last_edited_time ?? "").slice(0, 10);
+    const day = r.last_edited_time ? localDay(r.last_edited_time, tz) : "";
     if (!day || !inWindow(day, from, to)) continue;
     edits.set(day, (edits.get(day) ?? 0) + 1);
   }
@@ -100,6 +102,6 @@ export const notionPlugin: ImporterPlugin = {
     } catch (e) {
       throw new Error(`Notion search → ${(e as Error).message}`);
     }
-    return { table: normalizeNotion(results, ctx.from, ctx.to), meta: { pulledPages: results.length } };
+    return { table: normalizeNotion(results, ctx.from, ctx.to, recordTimeZone()), meta: { pulledPages: results.length } };
   },
 };
