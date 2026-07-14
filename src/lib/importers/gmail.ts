@@ -168,6 +168,27 @@ export const gmailPlugin: ImporterPlugin = {
     tokenAuth: "body",
     extraAuthParams: { access_type: "offline", prompt: "consent" },
   },
+  /**
+   * Does this window hold ANY mail? One search over the WHOLE window (not per day),
+   * asking for a single id. Gmail is the reason `probe` exists: fetching a year costs
+   * 730 requests, so walking a 26-year history to check for gaps would be 19,000. This
+   * makes it 26.
+   */
+  async hasAnyData(ctx: ImporterContext): Promise<boolean> {
+    const fetchImpl = ctx.fetchImpl ?? fetch;
+    const parts = gmailParts(readConfig());
+    const q = parts.inbox ? Q_RECEIVED : Q_SENT;
+    const url = new URL(API);
+    url.searchParams.set("q", `${q} after:${epochDay(ctx.from)} before:${epochDay(ctx.to) + 86_400}`);
+    url.searchParams.set("maxResults", "1");
+    url.searchParams.set("fields", "messages/id");
+    const raw = (await getJson(
+      url.toString(),
+      { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
+      fetchImpl,
+    )) as { messages?: { id: string }[] };
+    return (raw?.messages?.length ?? 0) > 0;
+  },
   envKey: "GMAIL_TOKEN",
   primaryMetric: "emails_received",
   unit: "emails",

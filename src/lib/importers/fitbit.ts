@@ -27,6 +27,22 @@ interface FitbitResp {
 
 const BASE = "https://api.fitbit.com/1/user/-/activities/steps/date";
 
+/**
+ * Fitbit's time series is DENSE and ZERO-FILLED: ask for a range and it answers with a
+ * row for every day in it, `0` for the days it knows nothing about — including every
+ * day before the account existed.
+ *
+ * We wrote those zeros. Two things followed. The record asserted you walked 0 steps a
+ * day in 2003, which is not a measurement, it is an absence wearing a number, and it
+ * dragged every all-time average toward zero. And the backfill walk judges "this year
+ * held nothing" by whether a chunk landed rows — so a wall of invented zeros looked
+ * like data forever, the walk never terminated, and it ground all the way to the floor
+ * writing fiction the whole way down.
+ *
+ * A zero-step day is not a thing Fitbit ever observed. It is Fitbit saying "no". So a
+ * day with no steps lands no row. (Gmail says the same thing about a day with no mail,
+ * and for the same two reasons.)
+ */
 export function normalizeFitbit(days: FitbitDay[], from: string, to: string): DailyTable {
   const header = ["date", "steps"];
   const rows: string[][] = [];
@@ -34,7 +50,8 @@ export function normalizeFitbit(days: FitbitDay[], from: string, to: string): Da
     const date = (d.dateTime ?? "").slice(0, 10);
     if (!date || !inWindow(date, from, to)) continue;
     const steps = Number(d.value);
-    rows.push([date, Number.isFinite(steps) ? String(Math.round(steps)) : ""]);
+    if (!Number.isFinite(steps) || steps <= 0) continue; // a zero-fill is not a measurement
+    rows.push([date, String(Math.round(steps))]);
   }
   rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   return { header, rows };

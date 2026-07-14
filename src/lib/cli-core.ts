@@ -53,7 +53,6 @@ import {
 } from "./importers/whoop";
 import {
   BACKFILL_CHUNK_DAYS,
-  BACKFILL_EMPTY_CHUNKS,
   BACKFILL_FLOOR,
   importPlugin,
   resolveCredential,
@@ -619,12 +618,26 @@ export function syncWindow(
 /**
  * THE FIRST IMPORT: ask the source where its history begins, never assume.
  *
- * Walks backwards a year at a time and stops once BACKFILL_EMPTY_CHUNKS in a row
- * come back with nothing (or the floor is reached). No constant decides how far back
- * your life goes — the data does. A fixed default cannot: five years gave one
- * calendar 1,077 days, ten gave it 1,824, and its history actually began at 1,891.
- * Whatever number you pick, it is a guess about a stranger, and the days it clips are
- * days they never find out they are missing.
+ * Walks backwards a year at a time TO THE FLOOR. No constant decides how far back your
+ * life goes — the data does. A fixed default cannot: five years gave one calendar 1,077
+ * days, ten gave it 1,824, and its history actually began at 1,891. Whatever number you
+ * pick, it is a guess about a stranger, and the days it clips are days they never find
+ * out they are missing.
+ *
+ * IT USED TO STOP AFTER TWO EMPTY YEARS, and that was the same mistake wearing a
+ * different hat. An empty chunk was read as "the source has run dry", but a life is not
+ * a tidy run of activity ending in silence — it has GAPS. Two quiet years is a job
+ * change, a broken strap, a phone you stopped carrying, an app you came back to. The
+ * walk hit the gap, concluded the history had ended there, and never asked about
+ * anything older. Everything before the gap was silently unreachable, by any command,
+ * forever — and the sync reported ok. (Proved with Gmail: mail in 2026 and mail in
+ * 2019, three quiet years between, and the walk never asked Gmail about anything before
+ * 2023. It landed 2 days and said "ok".)
+ *
+ * You cannot tell a gap from an ending by looking at the gap. So we don't try: every
+ * year between today and the floor gets asked about. `plugin.hasAnyData` makes that cheap
+ * for a source where FETCHING a year is expensive — Gmail counts a day at a time, so a
+ * quiet decade costs it ten questions instead of seven thousand.
  *
  * Each chunk merges as it lands, so a long walk is resumable — an interrupted
  * backfill leaves real days in the record, and the next sync picks up from there.
@@ -638,7 +651,6 @@ async function backfillPlugin(
   progress: (phase: string, pct: number) => void,
 ): Promise<PluginImportSummary> {
   let cursor = to;
-  let empty = 0;
   let chunks = 0;
   let earliest = to;
   // The last chunk that HELD data seeds the summary; the rest is accumulated onto it,
@@ -646,15 +658,29 @@ async function backfillPlugin(
   let merged: PluginImportSummary | null = null;
   let daysWithData = 0;
   let cells = 0;
+  let skipped = 0;
   const metrics = new Set<string>();
 
-  while (cursor > BACKFILL_FLOOR && empty < BACKFILL_EMPTY_CHUNKS) {
+  // ALL THE WAY DOWN. There is no early exit any more — see the doc above. Every year
+  // between today and the floor is asked about, so a silence in the middle of a life
+  // cannot be mistaken for the end of one.
+  while (cursor > BACKFILL_FLOOR) {
     const from = maxIso(shiftIso(cursor, -(BACKFILL_CHUNK_DAYS - 1)), BACKFILL_FLOOR);
     chunks++;
-    progress(`fetching your ${plugin.name} history — ${from.slice(0, 4)}`, Math.min(70, 15 + chunks * 4));
+    progress(`fetching your ${plugin.name} history — ${from.slice(0, 4)}`, Math.min(70, 15 + chunks * 2));
+
+    // A source that is expensive to FETCH (Gmail counts a day at a time — 730 requests
+    // a year) can say cheaply whether a year holds anything at all. Ask that first, and
+    // a quiet decade costs one request a year instead of seven thousand. A source with
+    // no probe just fetches: for those the fetch IS the probe, and it is one request.
+    if (plugin.hasAnyData && !(await plugin.hasAnyData({ ...ctx, from, to: cursor }))) {
+      skipped++;
+      cursor = shiftIso(from, -1);
+      continue;
+    }
+
     const s = await importPlugin(plugin, { ...ctx, from, to: cursor }, rDir, instanceId);
     if (s.daysWithData > 0) {
-      empty = 0;
       earliest = from;
       daysWithData += s.daysWithData;
       cells += s.cells;
@@ -662,14 +688,20 @@ async function backfillPlugin(
       merged = merged
         ? { ...s, appendedEvents: [...merged.appendedEvents, ...s.appendedEvents] }
         : s;
-    } else {
-      empty++;
     }
     cursor = shiftIso(from, -1);
   }
   // Nothing anywhere: report the empty window honestly rather than inventing one.
   if (!merged) return await importPlugin(plugin, { ...ctx, from: earliest, to }, rDir, instanceId);
-  return { ...merged, from: earliest, to, daysWithData, cells, metrics: [...metrics] };
+  return {
+    ...merged,
+    from: earliest,
+    to,
+    daysWithData,
+    cells,
+    metrics: [...metrics],
+    meta: { ...merged.meta, chunks, quietYearsSkipped: skipped },
+  };
 }
 
 /** The later of two ISO dates. */
@@ -679,8 +711,8 @@ function maxIso(a: string, b: string): string {
 
 /**
  * WHERE A SOURCE'S HISTORY BEGINS — asked, never assumed. Walks back a year at a time
- * calling `hasData(from, to)` until BACKFILL_EMPTY_CHUNKS in a row say no, and returns
- * the earliest date that HAD something.
+ * calling `hasData(from, to)` all the way to the floor, and returns the earliest date
+ * that HAD something. It never stops at a quiet stretch — a gap is not an ending.
  *
  * This is the shared spine of every first import (backfillPlugin uses the same
  * constants; WHOOP walks its own cycles the same way). A source that hardcodes a
@@ -693,19 +725,17 @@ async function discoverStart(
   progress: (phase: string, pct: number) => void,
 ): Promise<string> {
   let cursor = to;
-  let empty = 0;
   let chunks = 0;
   let earliest = to;
-  while (cursor > BACKFILL_FLOOR && empty < BACKFILL_EMPTY_CHUNKS) {
+  // To the floor, with no early exit — a gap is not an ending. See backfillPlugin.
+  // `hasData` is one cheap question per year, so asking every year costs nothing worth
+  // saving, and stopping early cost people the half of their history that sat behind a
+  // quiet spell.
+  while (cursor > BACKFILL_FLOOR) {
     const from = maxIso(shiftIso(cursor, -(BACKFILL_CHUNK_DAYS - 1)), BACKFILL_FLOOR);
     chunks++;
-    progress(`fetching your {name} history — ${from.slice(0, 4)}`, Math.min(55, 15 + chunks * 4));
-    if (await hasData(from, cursor)) {
-      empty = 0;
-      earliest = from;
-    } else {
-      empty++;
-    }
+    progress(`fetching your {name} history — ${from.slice(0, 4)}`, Math.min(55, 15 + chunks * 2));
+    if (await hasData(from, cursor)) earliest = from;
     cursor = shiftIso(from, -1);
   }
   return earliest;
@@ -1139,8 +1169,12 @@ async function syncFileSourceInner(opts: {
   // throws away years that were sitting right there. (This used to apply only to
   // "lifetime exports"; a local Chrome/Safari history DB got the 90-day window and
   // silently truncated.) `--days N` still narrows it deliberately.
-  const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
-  const from = opts.days && opts.days > 0 ? win.from : "0001-01-01";
+  // The 90 that used to sit here was only ever read for its `to` (today) — but a
+  // trailing constant in a sync path is exactly the shape of the bug that shipped four
+  // times, and the next person to touch this would not have known it was inert.
+  const narrowed = opts.days && opts.days > 0 ? opts.days : 0;
+  const win = windowDays(narrowed || 1);
+  const from = narrowed ? win.from : "0001-01-01";
   const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
   applySavedMerges(rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;

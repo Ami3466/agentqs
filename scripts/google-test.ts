@@ -68,14 +68,27 @@ function fakeGmail(perDay: Record<string, { received: number; sent: number }>) {
     const u = new URL(String(url));
     const q = u.searchParams.get("q") ?? "";
     asked.push(q);
-    if (u.searchParams.get("fields") !== "nextPageToken,messages/id") {
-      return new Response("importer asked for more than message IDs", { status: 500 });
+    // THE PRIVACY PROMISE: Gmail may only ever ask for message IDs — no bodies, no
+    // subjects, no senders, no snippets. Assert the SHAPE of the mask, not one exact
+    // string: the cheap hasAnyData probe asks for `messages/id` alone (it does not page),
+    // which is strictly less, and an over-literal fixture called that a violation.
+    const fields = u.searchParams.get("fields") ?? "";
+    const allowed = new Set(["nextPageToken", "messages/id"]);
+    if (!fields || fields.split(",").some((f) => !allowed.has(f.trim()))) {
+      return new Response(`importer asked for more than message IDs: ${fields}`, { status: 500 });
     }
     // Q_SENT starts with "in:sent"; Q_RECEIVED starts with "-in:sent".
     const sent = q.startsWith("in:sent");
+    // Gmail answers a RANGE, and both callers use one: the per-day counter asks about a
+    // single day, the cheap hasAnyData probe about a whole year. A fake that only
+    // understood one-day windows made every year look empty to the probe.
     const after = Number(/after:(\d+)/.exec(q)?.[1] ?? 0);
-    const day = new Date(after * 1000).toISOString().slice(0, 10);
-    const n = perDay[day]?.[sent ? "sent" : "received"] ?? 0;
+    const before = Number(/before:(\d+)/.exec(q)?.[1] ?? 0);
+    const from = new Date(after * 1000).toISOString().slice(0, 10);
+    const to = new Date((before - 1) * 1000).toISOString().slice(0, 10);
+    const n = Object.entries(perDay)
+      .filter(([day]) => day >= from && day <= to)
+      .reduce((sum, [, c]) => sum + c[sent ? "sent" : "received"], 0);
     return new Response(
       JSON.stringify({ messages: Array.from({ length: n }, (_, i) => ({ id: `m${i}` })) }),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -257,8 +270,10 @@ async function main() {
     JSON.stringify(dates) === JSON.stringify(Object.keys(lifetime)),
     JSON.stringify(dates),
   );
+  // It ASKS about every year back to the floor (a gap is not an ending — see
+  // truncation:test), but it REPORTS the window that actually held mail.
   check(
-    `the walk stops when the account runs dry, it does not grind to the floor (from=${synced?.from})`,
+    `the reported window starts at the account's first mail, not at the floor (from=${synced?.from})`,
     (synced?.from ?? "") > "2020-01-01",
   );
   // That was a REAL sync: it stamped the ledger AND wrote record/daily/gmail.csv,
