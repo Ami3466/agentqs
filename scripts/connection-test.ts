@@ -22,6 +22,7 @@ import { pluginById } from "../src/lib/importers/registry";
 import { connectionState, type FetchLike } from "../src/lib/importers/plugin";
 import { resolveSyncCredentialFresh } from "../src/lib/oauth";
 import { onboardingGuide, type OnboardingStep } from "../src/lib/onboarding";
+import { googleState } from "../src/lib/google-connect";
 import { google, syncSource } from "../src/lib/cli-core";
 
 let failures = 0;
@@ -146,6 +147,43 @@ async function main() {
     "…and ticking it back on lets it through to the API",
     !/switched off/i.test(allowed),
     allowed.slice(0, 60),
+  );
+
+  // ---- 4. THE APP KEY IS READ FROM WHERE IT LIVES ----------------------------
+  // `clientIdSet` means "the app credentials are saved but the dance never finished".
+  // It read the GRANT (`g.clientId`), but the modern key is saved per PROVIDER at
+  // `config.oauthApps` — so for anyone who is not a legacy user it could never be true:
+  // save the Google key, don't sign in, and the card reported no key at all. Same class
+  // as the Trakt bug that read client creds off the grant and produced "undefined:<token>".
+  console.log("\nthe app key is read from where it actually lives:");
+  writeConfig({ ...base, oauthApps: { google: { clientId: "cid", clientSecret: "csec" } } } as unknown as AppConfig);
+  const saved = googleState();
+  check(
+    "a saved Google app key is SEEN, even before anyone signs in",
+    saved.clientIdSet === true && saved.connected === false,
+    `clientIdSet=${saved.clientIdSet} connected=${saved.connected}`,
+  );
+
+  // ---- 5. A TOKEN WE CANNOT PROVE IS FRESH GETS REFRESHED ---------------------
+  // A provider that omits `expires_in` leaves `expiresAt` unset — and that was read as
+  // "never expires". So the stored access token was used until it died and the sync
+  // 401'd, on a connection that only needed one refresh call.
+  console.log("\na token we cannot prove is fresh is refreshed, not gambled on:");
+  writeConfig({
+    ...base,
+    oauthApps: { spotify: { clientId: "cid", clientSecret: "csec" } },
+    sourceOAuth: { spotify: { accessToken: "stale-but-undated", refreshToken: "rt" } }, // NO expiresAt
+  } as unknown as AppConfig);
+  let refreshed = false;
+  const tokenEndpoint: FetchLike = (async () => {
+    refreshed = true;
+    return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
+  }) as unknown as FetchLike;
+  const tok = await resolveSyncCredentialFresh(spotify, undefined, readConfig(), "spotify", tokenEndpoint);
+  check(
+    "an undated access token is refreshed rather than used until it 401s",
+    refreshed && tok === "fresh",
+    `refreshed=${refreshed} token=${tok}`,
   );
 
   if (failures) {

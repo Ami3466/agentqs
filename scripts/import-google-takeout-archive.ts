@@ -132,9 +132,21 @@ function importMyActivityHtml(zip: string, member: string): void {
     const text = stripHtml(card);
     const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
     const dateLine = [...lines].reverse().find((l) => /\b\d{4},\s+\d{1,2}:\d{2}:\d{2}\b/.test(l) || /\b[A-Z][a-z]{2,9}\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}\b/.test(l));
-    if (!dateLine) continue;
+    // A card we cannot date is a card we THROW AWAY. It used to happen in total silence:
+    // a non-English Google account renders its dates localized, so every card failed
+    // this test, and the script cheerfully printed `raw_items=0` and exited 0 — an
+    // archive fully imported, containing nothing.
+    if (!dateLine) {
+      droppedCards++;
+      if (droppedSamples.length < 3) droppedSamples.push(lines.slice(-1)[0] ?? "(no lines)");
+      continue;
+    }
     const d = parseDate(dateLine);
-    if (!d) continue;
+    if (!d) {
+      droppedCards++;
+      if (droppedSamples.length < 3) droppedSamples.push(dateLine);
+      continue;
+    }
     const product = lines[0] || productFromPath;
     const action = lines.find((l) => /^(Searched for|Visited|Watched|Viewed|Used|Listened to|Directions to|Played|Opened|Read|Purchased|Installed|Updated)\b/i.test(l)) ?? "";
     const date = isoDate(d);
@@ -199,6 +211,13 @@ function fitAgg(): FitAgg {
 const fitDaily = new Map<string, FitAgg>();
 let fitFiles = 0;
 let fitPoints = 0;
+/** Cards we could not date, and so did not import. NEVER silent — see importMyActivityHtml. */
+let droppedCards = 0;
+const droppedSamples: string[] = [];
+/** Zip members no importer here claims. import-tree hands us the WHOLE archive and marks
+ *  it "accounted for", so anything we ignore in silence escapes the one guarantee the
+ *  folder import makes: every file lands in exactly one bucket. */
+const unclaimed: string[] = [];
 
 interface CalendarAgg {
   events: number;
@@ -298,10 +317,39 @@ function fitValue(point: { fitValue?: Array<{ value?: Record<string, unknown> }>
   return null;
 }
 
-function addFit(date: string, update: (agg: FitAgg) => void): void {
-  const agg = fitDaily.get(date) ?? fitAgg();
+/**
+ * Google Fit ships SEVERAL derived streams for the same steps — `…gms_estimated_steps`,
+ * `…merge_step_deltas`, one per device — and the member pattern claims them all. Summing
+ * across them double- or triple-counted a phone-plus-watch user's day: 8,000 real steps
+ * landing as 20,000, silently, in a file that reported success.
+ *
+ * The same trap Apple Health's device dedup exists to prevent, and the same answer: keep
+ * the day's BEST stream, never the sum. A cumulative total from one source is a complete
+ * day; two sources are two views of the same day, not two days.
+ */
+const fitByStream = new Map<string, Map<string, FitAgg>>(); // stream → date → totals
+
+function addFit(stream: string, date: string, update: (agg: FitAgg) => void): void {
+  const byDate = fitByStream.get(stream) ?? new Map<string, FitAgg>();
+  const agg = byDate.get(date) ?? fitAgg();
   update(agg);
-  fitDaily.set(date, agg);
+  byDate.set(date, agg);
+  fitByStream.set(stream, byDate);
+}
+
+/** Fold the streams down: each metric takes the LARGEST any single stream saw that day. */
+function foldFitStreams(): void {
+  for (const byDate of fitByStream.values()) {
+    for (const [date, agg] of byDate) {
+      const best = fitDaily.get(date) ?? fitAgg();
+      best.steps = Math.max(best.steps, agg.steps);
+      best.distanceMeters = Math.max(best.distanceMeters, agg.distanceMeters);
+      best.calories = Math.max(best.calories, agg.calories);
+      best.activeMinutes = Math.max(best.activeMinutes, agg.activeMinutes);
+      best.heartMinutes = Math.max(best.heartMinutes, agg.heartMinutes);
+      fitDaily.set(date, best);
+    }
+  }
 }
 
 function importFitJson(zip: string, member: string): void {
@@ -317,7 +365,7 @@ function importFitJson(zip: string, member: string): void {
     if (!date) continue;
     const value = fitValue(point as { fitValue?: Array<{ value?: Record<string, unknown> }> });
     fitPoints++;
-    addFit(date, (agg) => {
+    addFit(member, date, (agg) => {
       if (type === "com.google.step_count.delta" && value != null) agg.steps += value;
       if (type === "com.google.distance.delta" && value != null) agg.distanceMeters += value;
       if (type === "com.google.calories.expended" && value != null) agg.calories += value;
@@ -473,13 +521,18 @@ function importMapsPlacesJson(zip: string, member: string): void {
 for (const zip of zips) {
   const members = unzipList(zip);
   for (const member of members) {
-    if (/^Takeout\/My Activity\/.+\/My ?Activity\.html$/i.test(member)) importMyActivityHtml(zip, member);
-    if (/^Takeout\/Location History \(Timeline\)\/Semantic Location History\/.+\.json$/i.test(member)) importSemanticTimeline(zip, member);
-    if (/^Takeout\/Fit\/All data\/derived_com\.google\..+\.json$/i.test(member)) importFitJson(zip, member);
-    if (/^Takeout\/Calendar\/.+\.ics$/i.test(member)) importCalendarIcs(zip, member);
-    if (/^Takeout\/Maps \(your places\)\/(Saved Places|Reviews)\.json$/i.test(member)) importMapsPlacesJson(zip, member);
+    let claimed = false;
+    if (/^Takeout\/My Activity\/.+\/My ?Activity\.html$/i.test(member)) { importMyActivityHtml(zip, member); claimed = true; }
+    if (/^Takeout\/Location History \(Timeline\)\/Semantic Location History\/.+\.json$/i.test(member)) { importSemanticTimeline(zip, member); claimed = true; }
+    if (/^Takeout\/Fit\/All data\/derived_com\.google\..+\.json$/i.test(member)) { importFitJson(zip, member); claimed = true; }
+    if (/^Takeout\/Calendar\/.+\.ics$/i.test(member)) { importCalendarIcs(zip, member); claimed = true; }
+    if (/^Takeout\/Maps \(your places\)\/(Saved Places|Reviews)\.json$/i.test(member)) { importMapsPlacesJson(zip, member); claimed = true; }
+    // Directories, archive metadata and the READMEs Google ships are not data.
+    const noise = member.endsWith("/") || /(^|\/)(archive_browser\.html|README|.*\.txt)$/i.test(member);
+    if (!claimed && !noise) unclaimed.push(member);
   }
 }
+foldFitStreams(); // several derived step streams are ONE day, not several
 
 const activityRows = [...activityDaily.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, a]) => [
   date,
@@ -630,8 +683,43 @@ if (calendarSkippedMembers.length) {
   );
 }
 
+// EVERY DROP IS DATA THAT DID NOT LAND, and import-tree marks this whole archive
+// "accounted for", so a silent drop here escapes the folder import's one guarantee:
+// that every file ends in exactly one bucket. Persist them the same way skipped calendar
+// files are persisted — a pending notification, never a console line that scrolls away.
+if (droppedCards || unclaimed.length) {
+  const parts: string[] = [];
+  if (droppedCards) {
+    parts.push(
+      `${droppedCards} My Activity card(s) had no date this importer could read, so they are NOT in the record. ` +
+        `Google renders dates in the ACCOUNT'S OWN LANGUAGE — if yours is not English, that is why. ` +
+        `Examples: ${droppedSamples.map((x) => `"${x}"`).join(", ")}`,
+    );
+  }
+  if (unclaimed.length) {
+    parts.push(
+      `${unclaimed.length} archive member(s) no importer here claims, so they are NOT in the record:\n` +
+        unclaimed.slice(0, 20).map((m) => `  ${m}`).join("\n") +
+        (unclaimed.length > 20 ? `\n  … and ${unclaimed.length - 20} more` : ""),
+    );
+  }
+  const dropId = crypto.createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+  appendInboxItems(
+    [{
+      id: `takeout-drop-${dropId}`,
+      text: `Takeout import did NOT fully land:\n${parts.join("\n\n")}`,
+      source: "import",
+      kind: "notification",
+      meta: { kind: "import-loss", droppedCards, unclaimed: unclaimed.slice(0, 40) },
+    }],
+    { recordDir: recordDir() },
+  );
+}
+
 const rebuilt = rebuild();
 console.log(`archives=${zips.length}`);
+if (droppedCards) console.log(`⚠ DROPPED ${droppedCards} undated My Activity card(s) — see the inbox notification`);
+if (unclaimed.length) console.log(`⚠ ${unclaimed.length} archive member(s) nothing claimed — see the inbox notification`);
 console.log(`myactivity_files=${activityFiles} raw_items=${activityRaw.length} days=${activityRows.length} merged_cells=${myActivityMerge.cells}`);
 console.log(`timeline_files=${timelineFiles} segments=${timelineSegments} days=${timelineRows.length} merged_cells=${timelineMerge.cells}`);
 console.log(`fit_files=${fitFiles} points=${fitPoints} days=${fitRows.length} merged_cells=${fitMerge.cells}`);
