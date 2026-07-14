@@ -84,7 +84,68 @@ CREATE VIRTUAL TABLE search USING fts5(
 );
 `;
 
+/**
+ * Indexes, kept OUT of SCHEMA_SQL's table DDL on purpose: an index is the one
+ * schema change an EXISTING cache can absorb in place (seconds), so it must not
+ * ride SCHEMA_VERSION and force a full rebuild (which re-reads the whole record —
+ * minutes, and it blocks the server while it runs).
+ *
+ * `(source, date)` on both fact tables is what "what landed, per source?" needs —
+ * the question every Pipeline row asks (`coverageBySource`). With only
+ * `events(source)`, SQLite walked the index but still had to fetch all 1.5M rows
+ * from the table to read `date` for MIN/MAX — on a real record that is a 1.3GB
+ * random-read scan (2.3s warm on an SSD, far worse on a cold container disk), and
+ * because better-sqlite3 is SYNCHRONOUS it froze the whole Node thread while it
+ * ran. Covering both columns answers the query from the index alone: ~0.15s.
+ */
+export const INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS daily_source_date  ON daily(source, date);
+CREATE INDEX IF NOT EXISTS events_source_date ON events(source, date);
+`;
+
 export type DB = Database.Database;
+
+const INDEX_NAMES = ["daily_source_date", "events_source_date"];
+
+/** Bring an existing cache's indexes up to date — the migration for everyone whose
+ *  DB was built by an older version, so nobody needs a full rebuild to get a
+ *  responsive app back.
+ *
+ *  It asks the file itself (sqlite_master) rather than remembering what it did:
+ *  the cache is a FILE THAT GETS REPLACED (rebuild, `backup restore --into-store`,
+ *  `migrate-store`), so a "already done it" flag in a long-lived server process
+ *  goes stale and silently stops healing. The check is a sub-millisecond read; only
+ *  a genuinely missing index costs a write. A write that CAN'T happen (read-only
+ *  volume, another process holding the lock) is non-fatal and remembered, so a
+ *  hosted replica doesn't retry it on every request — the queries stay correct,
+ *  just slower. */
+const unfixable = new Set<string>();
+export function ensureIndexes(file: string): void {
+  if (unfixable.has(file) || !fs.existsSync(file)) return;
+  try {
+    const ro = new Database(file, { readonly: true, fileMustExist: true });
+    let missing: boolean;
+    try {
+      const have = new Set(
+        (ro.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map(
+          (r) => r.name,
+        ),
+      );
+      missing = INDEX_NAMES.some((n) => !have.has(n));
+    } finally {
+      ro.close();
+    }
+    if (!missing) return;
+    const db = new Database(file);
+    try {
+      db.exec(INDEX_SQL);
+    } finally {
+      db.close();
+    }
+  } catch {
+    unfixable.add(file); // can't write here — queryable, just unindexed
+  }
+}
 
 /** Open (or create) a database at a path with sane pragmas for a local cache. */
 export function open(path: string): DB {
@@ -135,5 +196,6 @@ export function createEmpty(atPath?: string): DB {
   }
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
   db.exec(SCHEMA_SQL);
+  db.exec(INDEX_SQL); // a fresh cache is born indexed; ensureIndexes heals older ones
   return db;
 }

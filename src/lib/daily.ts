@@ -1,5 +1,5 @@
 import fs from "fs";
-import { openReadonly, type DB } from "./db";
+import { ensureIndexes, openReadonly, type DB } from "./db";
 import { dbPath } from "./paths";
 import type { SourceCoverage } from "./sources";
 
@@ -43,6 +43,9 @@ const EMPTY: DailySummary = { totalRows: 0, sources: [], recent: [] };
 export function coverageBySource(file: string = dbPath()): Map<string, SourceCoverage> {
   const out = new Map<string, SourceCoverage>();
   if (!fs.existsSync(file)) return out;
+  // Both GROUP BYs below are covered by (source, date). Without those indexes this
+  // is a full scan of every event — the query that made the Pipeline tab time out.
+  ensureIndexes(file);
   try {
     const db = openReadonly(file);
     try {
