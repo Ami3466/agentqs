@@ -31,6 +31,7 @@
     "files:test": "tsx scripts/import-files-test.ts",
     "tree:test": "tsx scripts/import-tree-test.ts",
     "truncation:test": "tsx scripts/truncation-test.ts",
+    "connection:test": "tsx scripts/connection-test.ts",
     "audit:test": "tsx scripts/audit-test.ts",
     "scan:test": "tsx scripts/column-scan-test.ts",
     "paths:test": "tsx scripts/paths-test.ts",

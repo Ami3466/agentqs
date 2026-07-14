@@ -3,6 +3,7 @@ import { readConfig, writeConfig, type AppConfig, type OAuthApp, type OAuthGrant
 import { pluginInstanceById, pluginInstanceName } from "./importers/registry";
 import {
   oauthGrantKey,
+  resolveCredentialWithoutGrant,
   resolveSyncCredential,
   type FetchLike,
   type ImporterPlugin,
@@ -343,7 +344,19 @@ export async function resolveSyncCredentialFresh(
   if (explicit && explicit.trim()) return explicit.trim();
   const { grant } = readGrant(cfg, instanceId);
   if (grant?.accessToken || grant?.refreshToken) {
-    const token = await freshOAuthToken(instanceId, cfg, fetchImpl);
+    let token: string | undefined;
+    try {
+      token = await freshOAuthToken(instanceId, cfg, fetchImpl);
+    } catch (e) {
+      // The grant is DEAD (the user revoked the app, or the refresh token expired).
+      // The connect form's own answer to that is "paste a short-lived access token" —
+      // and it could never work, because this resolver checked the grant first and threw
+      // before ever reaching it. A pasted key now rescues a revoked grant, which is what
+      // the form always promised.
+      const pasted = resolveCredentialWithoutGrant(plugin, cfg, instanceId);
+      if (pasted) return pasted;
+      throw e;
+    }
     if (token && plugin.oauth?.grantCredential === "clientId:token") {
       // The client id comes from the APP KEY now, not the grant — reading it off the
       // grant here would silently produce "undefined:<token>" for anyone whose key

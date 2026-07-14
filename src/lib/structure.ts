@@ -38,6 +38,12 @@ export interface Structured {
    * instead of being flattened on the way in.
    */
   duplicateDates: number;
+  /** Which way round the slashed dates were read, and whether that was a GUESS. An
+   *  ambiguous column (every value ≤ 12/12) cannot be settled from the data, so the
+   *  answer is US — and saying so out loud is the difference between a decision the
+   *  user can check and one that silently misfiles half their year. */
+  dateOrder: DateOrder;
+  ambiguousDateOrder: boolean;
 }
 
 // Header names that unambiguously mark the date column.
@@ -57,21 +63,74 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
+/** A real calendar slot. `2026-31-01` is not a date, and it used to merge anyway. */
+function validYmd(y: number, mo: number, d: number): boolean {
+  return mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y >= 1000 && y <= 9999;
+}
+
+/**
+ * Which way round a `05/07/2026` is. THE ONE THING A SINGLE CELL CANNOT TELL YOU.
+ *
+ * We assumed US, always. So a European bank/gym/health export lost half its rows to a
+ * silent misfiling — `05/07/2026` is 5 July, and it landed on 7 May — while the other
+ * half (`31/01/2026`, day > 12) became `2026-31-01`, an impossible date that merged
+ * into the record regardless and sorted into the future of the journal. The import
+ * reported "structured N cells", skippedRows: 0. Nothing anywhere said a word.
+ *
+ * A cell can't be read alone, but a COLUMN gives itself away: one value with a first
+ * component over 12 proves day-first; one with a second component over 12 proves
+ * month-first. structureCsv reads the whole column and hands the verdict down here.
+ * When a column is genuinely ambiguous (every value ≤ 12/12) we keep the US reading —
+ * and SAY SO, so it is a question rather than a silent decision.
+ */
+export type DateOrder = "mdy" | "dmy";
+
 /** Coerce a cell to ISO `YYYY-MM-DD`, or null when it isn't a recognizable date. */
-export function normalizeDate(raw: string): string | null {
+export function normalizeDate(raw: string, order: DateOrder = "mdy"): string | null {
   const s = raw.trim();
   if (!s) return null;
   let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s); // ISO (optionally with time)
-  if (m) return `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}`;
+  if (m) return validYmd(+m[1], +m[2], +m[3]) ? `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}` : null;
   m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(s); // YYYY/MM/DD
-  if (m) return `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}`;
-  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s); // US M/D/YYYY
-  if (m) return `${m[3]}-${pad2(+m[1])}-${pad2(+m[2])}`;
+  if (m) return validYmd(+m[1], +m[2], +m[3]) ? `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}` : null;
+  m = /^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/.exec(s); // M/D/YYYY or D/M/YYYY
+  if (m) {
+    const [a, b] = [+m[1], +m[2]];
+    const [mo, d] = order === "dmy" ? [b, a] : [a, b];
+    return validYmd(+m[3], mo, d) ? `${m[3]}-${pad2(mo)}-${pad2(d)}` : null;
+  }
   return null;
 }
 
-export function isDateish(s: string): boolean {
-  return normalizeDate(s) !== null;
+/**
+ * Read a whole column and decide which way round its slashed dates are. Proof beats
+ * assumption: a single `13/…` or `31/…` settles it. Ambiguous → US, and `ambiguous`
+ * says the answer was a guess.
+ */
+export function detectDateOrder(values: string[]): { order: DateOrder; ambiguous: boolean } {
+  let slashed = false;
+  let dayFirst = false;
+  let monthFirst = false;
+  for (const v of values) {
+    const m = /^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/.exec(v.trim());
+    if (!m) continue;
+    slashed = true;
+    if (+m[1] > 12) dayFirst = true; // 31/01 — can only be a day
+    if (+m[2] > 12) monthFirst = true; // 01/31 — can only be a day, second
+  }
+  // An ISO column (or any column with no slashed dates at all) is not ambiguous — there
+  // is nothing here to be ambiguous ABOUT, and warning about it would cry wolf on the
+  // overwhelming majority of files, which is how a real warning stops being read.
+  if (!slashed) return { order: "mdy", ambiguous: false };
+  if (dayFirst && !monthFirst) return { order: "dmy", ambiguous: false };
+  if (monthFirst && !dayFirst) return { order: "mdy", ambiguous: false };
+  // Both (a contradictory file) or neither (every value ≤ 12/12): undecidable from the
+  // data. Keep the US reading, and say out loud that it was a guess.
+  return { order: "mdy", ambiguous: true };
+}
+
+export function isDateish(s: string, order: DateOrder = "mdy"): boolean {
+  return normalizeDate(s, order) !== null;
 }
 
 /** Pick the delimiter that splits the header line into the most fields. */
@@ -127,7 +186,8 @@ export function structureCsv(text: string): Structured | null {
         const v = (r[c] ?? "").trim();
         if (v === "") continue;
         seen++;
-        if (isDateish(v)) hit++;
+        // Either reading counts here — this only asks "is this column dates at all?".
+        if (isDateish(v) || isDateish(v, "dmy")) hit++;
       }
       if (seen > 0 && hit / seen >= 0.6) {
         dateCol = c;
@@ -157,6 +217,10 @@ export function structureCsv(text: string): Structured | null {
     if (rows.some((r) => (r[i] ?? "").trim() !== "")) droppedColumns++;
   }
 
+  // Which way round the slashed dates are — read off the WHOLE column, never guessed
+  // from one cell. See detectDateOrder.
+  const { order, ambiguous } = detectDateOrder(rows.map((r) => r[dateCol] ?? ""));
+
   const outRows: string[][] = [];
   const dateSet = new Set<string>();
   const skippedSamples: string[] = [];
@@ -165,7 +229,7 @@ export function structureCsv(text: string): Structured | null {
   let cells = 0;
   for (const r of rows) {
     const raw = (r[dateCol] ?? "").trim();
-    const date = normalizeDate(raw);
+    const date = normalizeDate(raw, order);
     if (!date) {
       // A row without a parseable date carries data only if any metric cell
       // is non-empty — a blank spacer line is not a loss.
@@ -197,6 +261,8 @@ export function structureCsv(text: string): Structured | null {
     skippedSamples,
     droppedColumns,
     duplicateDates,
+    dateOrder: order,
+    ambiguousDateOrder: ambiguous,
   };
 }
 

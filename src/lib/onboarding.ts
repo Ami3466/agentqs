@@ -51,9 +51,20 @@ export function onboardingGuide(): OnboardingGuide {
   // pipeline brings it in. Asking the plugin beats listing ids by hand: the next
   // backup target inherits the rule instead of silently ticking this step.
   const isBackupCred = (key: string) => Boolean(pluginInstanceById(key)?.plugin.backupTarget);
+  // A GRANT ONLY COUNTS IF IT HOLDS A TOKEN. `Object.keys(sourceOAuth)` counted an entry
+  // that holds nothing but a clientId + clientSecret — the APP KEY, saved once, before
+  // anyone ever signed in. (That is the exact state of the author's own Spotify: key
+  // saved, never authorized, zero rows.) So the checklist ticked "connect a source" as
+  // DONE and `nextStep` walked straight past it, for someone who had connected nothing
+  // at all. THE APP KEY AND THE LOGIN ARE TWO DIFFERENT THINGS — the rest of the
+  // codebase knows that; this line did not. `connectionState` gets it right, so ask it.
+  const hasToken = (key: string) => {
+    const grant = cfg?.sourceOAuth?.[key];
+    return Boolean(grant?.accessToken || grant?.refreshToken);
+  };
   const dataSourceConnected = [
     ...Object.keys(cfg?.sourceCreds ?? {}),
-    ...Object.keys(cfg?.sourceOAuth ?? {}),
+    ...Object.keys(cfg?.sourceOAuth ?? {}).filter(hasToken),
   ].some((key) => !isBackupCred(key));
   // One definition of "Drive is connected", shared with backupStatus() — the
   // checklist and Settings → Data must never disagree about the same switch.

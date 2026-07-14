@@ -286,6 +286,26 @@ export function resolveCredentialWithOrigin(
 }
 
 /**
+ * The credential a user pasted, ignoring any OAuth grant.
+ *
+ * Precedence normally puts the grant first, which is right — until the grant DIES. Then
+ * it was a trap: revoke the app at Spotify, the sync fails "reconnect", the connect form
+ * offers "or paste a short-lived access token", you paste one, `source test` passes, the
+ * form says connected… and every sync still fails, because the sync resolver checked the
+ * dead grant first and never reached the token you had just saved. Every surface said
+ * connected while the source was permanently broken. This is the rescue path.
+ */
+export function resolveCredentialWithoutGrant(
+  plugin: ImporterPlugin,
+  cfg: AppConfig | null,
+  credKey: string = plugin.id,
+): string | undefined {
+  const isBase = credKey === plugin.id;
+  if (isBase && plugin.envKey && process.env[plugin.envKey]) return process.env[plugin.envKey];
+  return cfg?.sourceCreds?.[credKey]?.trim() || undefined;
+}
+
+/**
  * The connection model — the one hard rule: CONNECTED ⇔ A STORED CREDENTIAL
  * (user-saved or env). Nothing else can flip it — not landed data, not a
  * discoverable desktop-app login, not any CLI/MCP/API call without a key.
