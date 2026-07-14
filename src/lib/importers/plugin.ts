@@ -191,8 +191,17 @@ export interface ImporterPlugin {
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }
 
-/** A first import reaches ~5 years back unless the plugin says the API won't. */
-export const DEFAULT_BACKFILL_DAYS = 1825;
+/**
+ * A first import reaches ~10 years back unless the plugin says the API won't.
+ *
+ * Deliberately generous: this is a personal RECORD, and the cost of asking too far
+ * is one wasted request against an API that answers "nothing there" — the cost of
+ * asking too little is history you never learn you are missing. (Google Calendar at
+ * 5 years gave 1,077 days; at 10 it gave 1,824. The extra 747 days were always
+ * there, just never requested.) Plugins that fetch per-day, or whose API refuses to
+ * go back, cap themselves with `backfillDays` + `historyNote`.
+ */
+export const DEFAULT_BACKFILL_DAYS = 3650;
 
 /** Credential precedence: explicit arg → env var → saved config (sourceCreds[key])
  *  → the source's own desktop app, if it exposes one (`discoverCredential`).
