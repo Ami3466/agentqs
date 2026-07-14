@@ -170,14 +170,14 @@ export interface ImporterPlugin {
    *  never runs that side effect. Returns the human detail line. */
   probe?(ctx: ImporterContext): Promise<string>;
   /**
-   * How far back a FIRST import reaches, in days. A trailing "last 90 days" is not
-   * an import — it lands a sliver of a lifetime and never goes back for the rest,
-   * because every later sync asks for the same 90 days again. So the first sync of
-   * an empty source pulls `backfillDays` (default DEFAULT_BACKFILL_DAYS ≈ 5 years)
-   * and later syncs resume from the last day already recorded.
+   * A HARD CAP on how far one run may reach back, in days — set ONLY when the API
+   * itself cannot do better (Gmail counts a day at a time, so a run is bounded).
    *
-   * Lower it only where the API itself refuses to go back (asking for more is just
-   * wasted calls), and say why in `historyNote`.
+   * Leave it UNSET and the first import DISCOVERS where your history begins: it
+   * walks backwards until the source runs dry (`backfillPlugin` in cli-core). Any
+   * fixed number here is a guess about someone else's life — a 10-year default
+   * would have quietly clipped 67 days off a calendar that started 2015-09-18, and
+   * nobody would ever have known what was missing. Don't guess. Ask the source.
    */
   backfillDays?: number;
   /**
@@ -191,17 +191,15 @@ export interface ImporterPlugin {
   fetch(ctx: ImporterContext): Promise<ImporterResult>;
 }
 
-/**
- * A first import reaches ~10 years back unless the plugin says the API won't.
- *
- * Deliberately generous: this is a personal RECORD, and the cost of asking too far
- * is one wasted request against an API that answers "nothing there" — the cost of
- * asking too little is history you never learn you are missing. (Google Calendar at
- * 5 years gave 1,077 days; at 10 it gave 1,824. The extra 747 days were always
- * there, just never requested.) Plugins that fetch per-day, or whose API refuses to
- * go back, cap themselves with `backfillDays` + `historyNote`.
- */
-export const DEFAULT_BACKFILL_DAYS = 3650;
+/** A backfill walks back a year at a time, and gives up after this many in a row
+ *  come back empty — long enough to stride over a fallow year, short enough not to
+ *  grind to the floor for an account opened last spring. */
+export const BACKFILL_CHUNK_DAYS = 365;
+export const BACKFILL_EMPTY_CHUNKS = 2;
+/** The walk's absolute stop. Not a guess about any person's history — simply older
+ *  than the services themselves (Gmail 2004, Google Calendar 2006, Spotify 2008),
+ *  so no real account can begin before it. */
+export const BACKFILL_FLOOR = "2000-01-01";
 
 /** Credential precedence: explicit arg → env var → saved config (sourceCreds[key])
  *  → the source's own desktop app, if it exposes one (`discoverCredential`).
