@@ -38,7 +38,7 @@ interface Status {
   credentialLabel: string;
   credentialPlaceholder: string;
   credentialHelp: { url: string; steps: string[] } | null;
-  oauth: { supported: boolean; authorized: boolean; clientId: string } | null;
+  oauth: { supported: boolean; authorized: boolean; appSaved: boolean; clientId: string } | null;
   primaryMetric: string;
   unit: string;
   syncedAt: string | null;
@@ -130,6 +130,8 @@ export function SourceConnect({
   // OAuth connect (expiring-token sources): the user's provider app + the dance.
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  // "Use a different app key" — the only reason to ever show that form again.
+  const [replaceKey, setReplaceKey] = useState(false);
   const [copied, copy] = useCopy();
   const handledReturn = useRef(false);
   // Cadence chosen AS PART OF connecting — defaults to Daily so a newly connected
@@ -169,7 +171,35 @@ export function SourceConnect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, id]);
 
-  /** Save the provider app creds, then send the browser to the authorize page. */
+  /** Register the app key — once, for the provider. NOT a login: it starts no dance,
+   *  it just means we never ask for the Client ID + Secret again. */
+  async function saveKey() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/oauth/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientId, clientSecret, saveOnly: true }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setBusy(false);
+      if (!res.ok) {
+        setError(data.error || `Could not save the app key (HTTP ${res.status}).`);
+        return;
+      }
+      setClientId("");
+      setClientSecret("");
+      setReplaceKey(false);
+      await loadStatus(); // → the form becomes a Sign-in button
+    } catch (e) {
+      setBusy(false);
+      setError((e as Error).message || "Could not reach the app.");
+    }
+  }
+
+  /** Send the browser to the provider's consent page. The app key is already saved —
+   *  passing it again here would be re-doing paperwork that never expired. */
   async function authorize() {
     setBusy(true);
     setError("");
@@ -177,7 +207,7 @@ export function SourceConnect({
       const res = await fetch(`/api/oauth/${id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ clientId, clientSecret, origin: window.location.origin }),
+        body: JSON.stringify({ origin: window.location.origin }),
       });
       const data = (await res.json().catch(() => ({}))) as { authorizeUrl?: string; error?: string };
       if (!res.ok || !data.authorizeUrl) {
@@ -340,47 +370,92 @@ export function SourceConnect({
 
           {status?.oauth ? (
             <>
-              {/* The exact redirect URI the provider app must register — the one
-                  thing every OAuth setup trips on, so it's front and copyable. */}
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 text-xs text-muted-fg">Redirect URI</span>
-                <code className="min-w-0 flex-1 truncate rounded border border-border bg-muted px-2 py-1 font-mono text-xs text-fg" title={redirectUri}>
-                  {redirectUri}
-                </code>
-                <Button size="sm" variant="ghost" onClick={() => copy(redirectUri)} title="Copy the redirect URI to paste into the provider app">
-                  {copied ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
-                  Copy
-                </Button>
-              </div>
-              <div className="flex items-center gap-2">
-                <Input
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  placeholder="Client ID"
-                  autoComplete="off"
-                  className="flex-1 font-mono"
-                />
-                <Input
-                  type="password"
-                  value={clientSecret}
-                  onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder="Client Secret"
-                  autoComplete="off"
-                  className="flex-1 font-mono"
-                />
-                <Button
-                  size="md"
-                  variant="primary"
-                  onClick={authorize}
-                  disabled={working || !clientId.trim() || !clientSecret.trim()}
-                  title={`Opens ${status.name}'s consent page; tokens are stored and refreshed automatically`}
-                >
-                  {busy ? <Spinner width={16} height={16} /> : null}
-                  {busy ? "Starting…" : "Authorize"}
-                </Button>
-              </div>
+              {/* THE APP KEY IS SAVED, THE LOGIN IS NOT THE SAME ACT.
+                  Registering an app with the provider happens ONCE; signing in — again,
+                  or as another account — must never re-ask for the Client ID + Secret.
+                  With a key on file this is a Sign-in button and nothing else. */}
+              {status.oauth.appSaved && !replaceKey ? (
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs text-fg">
+                      <span className="font-medium">App key saved</span>{" "}
+                      <span className="font-mono text-muted-fg" title={status.oauth.clientId}>
+                        {status.oauth.clientId.slice(0, 24)}…
+                      </span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setReplaceKey(true)}
+                      className="text-xs text-muted-fg underline-offset-2 hover:text-fg hover:underline"
+                    >
+                      Use a different app key
+                    </button>
+                  </div>
+                  <Button
+                    size="md"
+                    variant="primary"
+                    onClick={authorize}
+                    disabled={working}
+                    title={`Opens ${status.name}'s consent page. The saved app key is reused — sign in as many accounts as you like.`}
+                  >
+                    {busy ? <Spinner width={16} height={16} /> : null}
+                    {busy ? "Starting…" : `Sign in with ${status.name}`}
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  {/* The exact redirect URI the provider app must register — the one
+                      thing every OAuth setup trips on, so it's front and copyable. */}
+                  <div className="flex items-center gap-2">
+                    <span className="shrink-0 text-xs text-muted-fg">Redirect URI</span>
+                    <code className="min-w-0 flex-1 truncate rounded border border-border bg-muted px-2 py-1 font-mono text-xs text-fg" title={redirectUri}>
+                      {redirectUri}
+                    </code>
+                    <Button size="sm" variant="ghost" onClick={() => copy(redirectUri)} title="Copy the redirect URI to paste into the provider app">
+                      {copied ? <Check width={13} height={13} className="text-accent" /> : <Copy width={13} height={13} />}
+                      Copy
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                      placeholder="Client ID"
+                      autoComplete="off"
+                      className="flex-1 font-mono"
+                    />
+                    <Input
+                      type="password"
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      placeholder="Client Secret"
+                      autoComplete="off"
+                      className="flex-1 font-mono"
+                    />
+                    <Button
+                      size="md"
+                      variant="primary"
+                      onClick={saveKey}
+                      disabled={working || !clientId.trim() || !clientSecret.trim()}
+                      title="Saved once for this provider — every account you add afterwards reuses it, and you are never asked for it again."
+                    >
+                      {busy ? <Spinner width={16} height={16} /> : null}
+                      {busy ? "Saving…" : "Save key"}
+                    </Button>
+                  </div>
+                  {replaceKey ? (
+                    <button
+                      type="button"
+                      onClick={() => setReplaceKey(false)}
+                      className="text-xs text-muted-fg underline-offset-2 hover:text-fg hover:underline"
+                    >
+                      Keep the saved key
+                    </button>
+                  ) : null}
+                </>
+              )}
               <p className="text-xs text-muted-fg" title="A pasted access token expires within hours — the authorize flow stores a refresh token, so scheduled syncs keep working.">
-                Or paste a short-lived access token below (expires — authorize is the durable way).
+                Or paste a short-lived access token below (expires — signing in is the durable way).
               </p>
             </>
           ) : null}

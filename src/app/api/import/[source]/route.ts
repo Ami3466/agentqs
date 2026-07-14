@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
 import { pluginInstanceById, pluginInstanceName, type PluginInstance } from "@/lib/importers/registry";
+import { readOAuthApp } from "@/lib/oauth";
 import { connectionState, resolveSyncCredential } from "@/lib/importers/plugin";
 import { readSyncRuns } from "@/lib/sync-runs";
 import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
@@ -54,7 +55,10 @@ function status({ plugin, instanceId }: PluginInstance) {
           authorized: Boolean(
             cfg?.sourceOAuth?.[instanceId]?.refreshToken || cfg?.sourceOAuth?.[instanceId]?.accessToken,
           ),
-          clientId: cfg?.sourceOAuth?.[instanceId]?.clientId ?? "",
+          // The registered APP — saved once per provider and reused by every account.
+          // With a key on file the form is a Sign-in button, not a paperwork re-run.
+          appSaved: Boolean(readOAuthApp(cfg, instanceId)),
+          clientId: readOAuthApp(cfg, instanceId)?.clientId ?? "",
         }
       : null,
     primaryMetric: plugin.primaryMetric ?? "",
