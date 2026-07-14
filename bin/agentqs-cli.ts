@@ -488,7 +488,7 @@ source
 
 source
   .command("file <id>")
-  .description("import a Tier-2 local file source: chrome | safari | iphone | health_daily (Apple Health export)")
+  .description("import a Tier-2 local file source: chrome | safari | iphone | health_daily (Apple Health export) | spotify (account export — your listening history)")
   .option("-p, --path <file>", "explicit file/backup/export path")
   .option("-d, --days <n>", "trailing window; lifetime exports (Takeout JSON, Apple Health) default to all", (v) => parseInt(v, 10))
   .action(async (id: string, opts: { path?: string; days?: number }) => {

@@ -112,14 +112,19 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   queue as inbox notifications (kind `notification`, shown in Pipeline -> Data
   quality); structuring one applies the fix - merges keep the auto-synced
   column and save a rule so future imports stay merged. MCP tool: `scan`.
-- `agentqs source file chrome|safari|iphone|health_daily` - local file
+- `agentqs source file chrome|safari|iphone|health_daily|spotify` - local file
   importers. `health_daily` streams the iPhone Health app's export
   (export.zip / export.xml; Health -> profile -> Export All Health Data) and
   backfills the existing health_daily table - lifetime by default, device-
-  deduped (iPhone + Watch never double-count). `safari` reads
+  deduped (iPhone + Watch never double-count). `spotify` reads the Spotify
+  account export (my_spotify_data.zip / the folder / a Streaming_History_*.json,
+  both the extended and account-data shapes) and backfills the SAME `spotify`
+  source the API sync keeps fresh - the API serves ~50 plays, so this is the only
+  place your listening history exists. `safari` reads
   ~/Library/Safari/History.db (needs Full Disk Access). CLI/MCP/daemon only,
   deliberately no API route: these read files on YOUR disk, which the web
-  server can't reach; the web face for files is the dropzone.
+  server can't reach; the web face for files is the dropzone (a dropped Spotify
+  export or Health zip routes to its importer, named in the receipt).
 - `agentqs source guide <id>` - HOW to connect a source: where its credential
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form
@@ -230,19 +235,40 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   time until the source runs dry (2 empty chunks), floor 2000-01-01. NEVER pick a
   constant: 5 years of a calendar gave 1,077 days, 10 gave 1,824, and its history
   actually began at 1,891 - every number clips days the user never learns are
-  missing. `plugin.backfillDays` is a HARD CAP for an API that cannot walk (Gmail
-  counts a day at a time, 400/run), not a default;
+  missing;
   record has rows -> resume from the last recorded day minus a week of overlap.
   Every source used to send a flat trailing `windowDays(90)`, which is wrong twice
   over: it lands a sliver of a lifetime, and because every LATER sync re-asks for
   that same 90 days, the years before it are never fetched even once - a source is
-  capped forever at whatever its first sync happened to catch. Lower `backfillDays`
-  ONLY where the API itself refuses to go further (Gmail counts a day at a time,
-  max 400/run) and say why in `historyNote`. A source whose API ignores dates
-  (Spotify returns your last 50 plays, no date range) must keep a WIDE window: it
-  is a client-side filter, so narrowing it DISCARDS those plays whenever you have
-  not listened recently. `historyNote` is where an API's hard ceiling is explained,
-  so it never reads as a broken importer.
+  capped forever at whatever its first sync happened to catch.
+  `plugin.backfillDays` exists for an API with a REAL hard ceiling - and NO SHIPPED
+  PLUGIN SETS IT (`sync:test` fails if one does). SLOW IS NOT A CEILING. Gmail set
+  it to 400 because it counts one day at a time (two searches per day), and that
+  number was a lie told forever: the first import took the last 400 days, every
+  later sync resumed from the NEWEST recorded day, and `--days 3000` was sliced
+  straight back to the same recent 400 - there was no command that could reach
+  2019, so the record simply reported that your mail began the year you connected
+  it. The cost was never Google's limit (its quota allows ~50 list calls/sec), it
+  was our patience: the walk was SERIAL. Gmail now fans its days out (`mapPool`,
+  8 in flight) and takes the same backward walk as everything else, warning in
+  `historyNote` that a first import runs for minutes. Reach for `backfillDays`
+  only when the API itself refuses to go further - never to save yourself work.
+  A source whose API ignores dates (Spotify returns your last ~50 plays, no date
+  range) must keep a WIDE window: it is a client-side filter, so narrowing it
+  DISCARDS those plays whenever you have not listened recently. `historyNote` is
+  where an API's hard ceiling is explained, so it never reads as a broken importer.
+- WHERE AN API HAS NO HISTORY TO GIVE, THE EXPORT IS THE HISTORY. Spotify's
+  `recently-played` serves ~50 plays and takes no date range, so `spotify` can only
+  ever show a few DAYS - no window fixes that, because the endpoint has no answer.
+  The account export does (Privacy Settings -> Extended streaming history), and its
+  importer lands in the SAME `spotify` daily source with the SAME `tracks`/`minutes`
+  columns (`source file spotify`), exactly as Apple Health backfills `health_daily`.
+  So ONE Spotify row shows the lifetime and the API sync keeps its recent end fresh.
+  A file importer whose id matches a plugin id BACKFILLS that plugin and gets no row
+  of its own (`buildSources`) - a second row would split one Spotify in half and ask
+  for a credential the source already has. Landing that history under a different
+  name (`spotify_history`) is the bug this replaces: the real source still read
+  "3 days" while the years sat beside it under a stranger's name.
 - A source sync PATCHES the cache (`refreshSyncCache`), never rebuilds it: a full
   rebuild re-reads the whole record (events.jsonl alone can be hundreds of MB)
   and rewrites the DB synchronously, which blocks every other request for

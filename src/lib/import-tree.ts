@@ -14,6 +14,7 @@ import { structureCsv, sourceName } from "./structure";
 import { notifyCsvLoss } from "./structure-run";
 import { columnGuard } from "./column-scan";
 import { wipeDemoOnImport } from "./demo";
+import { isStreamingHistoryFile } from "./importers/files/spotify-export";
 
 /**
  * Folder import with a FULL ACCOUNTING: every file under the root ends in
@@ -248,6 +249,9 @@ export function importTree(root: string): ImportTreeReport {
           )
         ) {
           push("importer", `agentqs source file health_daily --path ${shq(file)}`, bytes);
+        } else if (members.some((m) => isStreamingHistoryFile(m))) {
+          // Spotify's account export — the only place a listening history exists.
+          push("importer", `agentqs source file spotify --path ${shq(file)}`, bytes);
         } else {
           push("residue", "archive — unpack it or add an importer", bytes);
         }
@@ -268,6 +272,13 @@ export function importTree(root: string): ImportTreeReport {
       // A bare Apple Health export.xml is a lifetime dataset, not a memo.
       if (/^export\.xml$/i.test(name) && head.toString("utf8").includes("HealthData")) {
         push("importer", `agentqs source file health_daily --path ${shq(file)}`, bytes);
+        continue;
+      }
+      // An unzipped Streaming_History_*.json is years of listening, not a memo —
+      // and it is routinely bigger than MAX_INBOX_BYTES, so left unclaimed it would
+      // land as residue: the one file that holds the history, thrown away.
+      if (isStreamingHistoryFile(name)) {
+        push("importer", `agentqs source file spotify --path ${shq(path.dirname(file))}`, bytes);
         continue;
       }
       // Its export_cda.xml sibling is the clinical CDA rendering (starts
