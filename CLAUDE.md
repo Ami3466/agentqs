@@ -229,13 +229,63 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   `sync:test` scenario 6 FAILS if one reappears. A file gets read WHOLE (it is finite
   and already on disk - clipping your own Chrome history to 90 days throws away years
   that were sitting right there).
+- ⛔ NOTHING MAY BE SILENTLY PARTIAL. The bug class that ate this codebase, four
+  ways at once. It never errors, never looks empty, and every test stays green -
+  the record just quietly holds a fraction of a life. `npm run truncation:test` is
+  the ships-when for the CLASS; a new source that truncates fails THERE instead of
+  being found by the user opening the app. The four:
+    - PAGE TO THE END. 13 of 18 importers read one page and treated it as the whole
+      answer (Last.fm: 200 of a year's ~10,000 scrobbles; Strava: the newest 200 per
+      year, so Jan-Aug of every year did not exist; Calendar stopped mid-year).
+      Every source uses `pageAll` (plugin.ts) - a short page or a missing cursor ends
+      the walk, and running out of PAGES THROWS rather than landing a partial history
+      as if it were whole. `windowChunks` is its sibling for an API that refuses a
+      long RANGE (Todoist, Toggl: ~3 months). WHY IT SURVIVED EVERY TEST: every
+      fixture was a single-page blob, so a plugin that COULDN'T page passed exactly
+      like one that could. `scripts/paging-fixtures.ts` serves TWO pages in each
+      API's own protocol - a plugin that ignores the cursor can only see page one.
+    - AN API CEILING IS SPLIT, NOT BELIEVED. GitHub's Search API serves 1,000
+      results per query; we asked for 12 years, took the oldest 1,000, and
+      `densify()` zero-filled the rest of the window STRAIGHT OVER the real history
+      (`date,0` across nine years, reported ok). A window the API cannot answer whole
+      is halved and asked again.
+    - A PARTIAL VIEW NEVER LOWERS A FULLER ONE. `plugin.mergePolicy: "max"` for a
+      source that recomputes a day from a RECENCY BUFFER it can only ever see part of
+      (spotify, deezer, swarm, mastodon, notion - last ~50 plays, no date range).
+      Replacing meant every day DECAYED as the buffer slid past it, and an imported
+      lifetime export was eaten by the first sync that touched one of its days.
+      Counts only - a gauge (weight, recovery) still replaces.
+    - A ZERO IS NOT A MEASUREMENT. Fitbit's API zero-fills every day in a range,
+      including years before the account existed. Writing those made the record
+      assert you walked 0 steps a day in 2003, AND made the walk immortal (invented
+      zeros look like data). A day the source says nothing about lands NO ROW (Gmail
+      does the same).
 - THE SYNC WINDOW COMES FROM THE RECORD, never from a constant (`syncWindow` in
   cli-core - the one rule, every source): `--days N` -> exactly that; record EMPTY
   -> the FIRST import DISCOVERS its range: `backfillPlugin` walks back a year at a
-  time until the source runs dry (2 empty chunks), floor 2000-01-01. NEVER pick a
-  constant: 5 years of a calendar gave 1,077 days, 10 gave 1,824, and its history
-  actually began at 1,891 - every number clips days the user never learns are
-  missing;
+  time, floor 2000-01-01. NEVER pick a constant: 5 years of a calendar gave 1,077
+  days, 10 gave 1,824, and its history actually began at 1,891 - every number clips
+  days the user never learns are missing;
+- ⛔ A GAP IN A LIFE IS NOT THE END OF ONE. The walk USED to stop after 2 empty
+  chunks, reading an empty year as "the source ran dry". But a life is not a tidy
+  run of activity ending in silence - it has GAPS. Two quiet years is a job change,
+  a broken strap, a phone you stopped carrying. The walk hit the gap, decided the
+  history ended there, and never asked about anything older: everything before it was
+  unreachable by ANY command, forever, and the sync said ok. (Gmail: mail in 2026 and
+  in 2019, three quiet years between -> it never asked about anything before 2023.)
+  So the walk now goes ALL THE WAY TO THE FLOOR, with no early exit - in
+  `backfillPlugin`, `discoverStart` AND WHOOP's own walk, which gave up after ONE
+  quiet year while its comment called that "long enough to stride over a break from
+  the strap" (an injury is longer). `plugin.hasAnyData` keeps it cheap: ONE question
+  per year for a source where FETCHING a year is expensive (Gmail counts a day at a
+  time - walking 26 years to check for gaps would be 19,000 requests; now it is 26).
+  Do not re-add an empty-chunk counter. Any number there is the same bug waiting for
+  a longer gap.
+- A FIRST IMPORT THAT LANDS NOTHING THROWS. A revoked Calendar scope answers
+  `200 {items:[]}`, so every sync landed zero rows, the ledger went green, the row
+  said "synced 2 minutes ago", and the calendar quietly stopped recording for months.
+  A LATER sync landing zero days is fine (a quiet week); an EMPTY record that just
+  walked its whole history and came home with nothing is not.
   record has rows -> resume from the last recorded day minus a week of overlap.
   Every source used to send a flat trailing `windowDays(90)`, which is wrong twice
   over: it lands a sliver of a lifetime, and because every LATER sync re-asks for
@@ -294,6 +344,30 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   `<dataDir>/sync-jobs.json`): POST `/api/import/<id>` returns 202 + the job;
   GET reports its live phase/pct — refreshing the page never kills an import.
   A job whose heartbeat goes silent reads back as an interrupted error.
+- ⛔ A CONNECTION NEVER LIES (`npm run connection:test`). The second bug class:
+  not missing data, data that LOOKS fine.
+    - AN APP KEY IS NOT A LOGIN. A `sourceOAuth` entry holding only a clientId +
+      secret is the APP KEY, saved before anyone signed in - it is NOT a connection.
+      Onboarding counted it with `Object.keys(sourceOAuth)` and ticked "connect a
+      source: done" for someone who had connected nothing. A grant counts only if it
+      holds `accessToken || refreshToken` (which `connectionState` already knew).
+    - TEST THE CREDENTIAL A SYNC WOULD ACTUALLY USE. `source test` gated on the RAW
+      instance slot instead of `oauthGrantKey`, so Google never matched (its grant is
+      at `sourceOAuth.google`) and it tested a stale token: every Google test more
+      than an hour after connecting failed on a healthy connection.
+    - A PASTED TOKEN RESCUES A REVOKED GRANT. Precedence is grant -> env ->
+      sourceCreds, so once a grant existed the pasted token the connect form OFFERS
+      was unreachable: it tested green, saved fine, and every sync still died on the
+      dead grant. A failed refresh now falls back to what the user pasted.
+    - AN UNTICKED PRODUCT REFUSES TO SYNC ON EVERY DOOR. The tick was enforced only
+      in the `due` flag, so the cron obeyed it and `agentqs sync` / POST
+      `/api/import/gcal` pulled an unticked Calendar anyway. The guard belongs in
+      `syncSource`, where every face goes through.
+- A DATE IS NOT ASSUMED. Slashed dates were ALL read as US M/D, so a European export
+  silently misfiled half its rows (05/07/2026 is 5 July; it landed on 7 May) and the
+  other half became impossible dates (`2026-31-01`) that merged anyway. A cell cannot
+  be read alone; a COLUMN gives itself away (`detectDateOrder` - one value over 12
+  settles it). Genuinely undecidable -> keep the US reading and SAY it was a guess.
 - THE connection rule: connected ⇔ a stored credential (user-saved or env).
   Data in the record NEVER implies connected. A detected desktop-app login
   (Granola) is a hint only — it never syncs; the Pipeline tab's "Connect (use
