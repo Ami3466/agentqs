@@ -430,13 +430,40 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   ledger) and landed coverage. Answer "is X actually connected/working?" from
   here, never from row presence. MCP tool: `pipeline`; API: GET `/api/pipeline`.
   The Pipeline TAB shows the same facts per row and is the user's way in: every
-  row carries a Connected badge, its `account` (which login it is authorized as -
-  two WHOOP athletes are otherwise twins), its `coverage` (days/events/range,
-  counted from the cache by `coverageBySource` in `src/lib/daily.ts` - the ONE
-  query both the tab and this report read) and its last sync. A row with data IS
-  the link to that data: clicking it opens `/journal?source=<id>` filtered to that
-  source. So `coverage`/`account` ride `SourceView` from `buildSources` - anything
-  adding a row supplies them, or the row silently claims "no data yet".
+  row carries a Connected badge, its `coverage` (days/events/range, counted from
+  the cache by `coverageBySource` in `src/lib/daily.ts` - the ONE query both the
+  tab and this report read) and its last sync. A row with data IS the link to that
+  data: clicking it opens `/journal?source=<id>` filtered to that source. So
+  `coverage` rides `SourceView` from `buildSources` - anything adding a row
+  supplies it, or the row silently claims "no data yet".
+  `account` (WHICH login a row is authorized as) is on `SourceView` but is only
+  populated by WHOOP, which knows its login email (`source-registry.ts`). Every
+  other row leaves it null, so TWO SPOTIFY LOGINS ARE STILL TWINS - a second
+  account of the same service is indistinguishable in the list. Filling it needs a
+  per-provider identity fetch (Spotify `/v1/me`, Strava `/athlete`, …) at connect
+  time, cached on the grant; it is unbuilt, not broken. Do not read this paragraph
+  as a shipped feature.
+- `agentqs source reset <id>` - WIPE WHAT A SOURCE LANDED, KEEP ITS CONNECTION:
+  drops `record/daily/<id>.csv`, the events it wrote and (for WHOOP) its per-minute
+  HR, clears only its last-sync stamp, rebuilds the cache - and KEEPS the
+  credential, the OAuth grant, the schedule, the automation recipe and every saved
+  graph pointing at it. The next `sync <id>` then sees an empty record for it
+  (`syncWindow` reads the RECORD, so an empty file IS a first import) and re-walks
+  its whole history into a clean file.
+  ⛔ THIS IS THE ONLY WAY TO UNDO AN IMPORTER BUG, because fixing the importer does
+  NOT fix the record. A sync MERGES into the daily file: it can raise a value, but
+  it can never delete a row the corrected importer no longer writes AT ALL. So what
+  survives a re-walk is exactly the INVENTED rows - GitHub's `densify()` zeros on
+  days that had no commits, a UTC-bucketed row filed on a day the user did not
+  live, a count decayed by a recency buffer. Only starting the file empty clears
+  them. `disconnectSource` starts it empty too but also FORGETS THE CREDENTIAL, so
+  cleaning a poisoned Google or Strava used to mean re-running the whole OAuth
+  dance just to drop bad rows; reset is the same wipe with the key left in. The
+  repair loop is two commands: `agentqs source reset <id>` then `agentqs sync <id>`
+  (add `--all-time` where the source takes it). MCP tool: `reset_source`; API: POST
+  `/api/sources` `{"id":"<id>","action":"reset"}`. `npm run reset:test` proves both
+  halves: that a re-walk alone leaves the poison, and that reset clears it without
+  costing the key.
 - `agentqs rebuild` - rebuild the SQLite cache from the record (deterministic).
 - `agentqs journal | sources | automation | photos | skill | config` - see `--help`.
 

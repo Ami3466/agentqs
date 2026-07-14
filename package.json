@@ -45,6 +45,7 @@
     "integrations:test": "tsx scripts/integrations-test.ts",
     "extension:test": "tsx scripts/google-activity-extension-test.ts",
     "pipeline:test": "tsx scripts/pipeline-test.ts",
+    "reset:test": "tsx scripts/source-reset-test.ts",
     "syncdue:test": "tsx scripts/sync-due-test.ts",
     "jobs:test": "tsx scripts/sync-jobs-test.ts",
     "voice:test": "tsx scripts/voice-memo.ts",

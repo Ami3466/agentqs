@@ -487,6 +487,21 @@ source
   });
 
 source
+  .command("reset <id>")
+  .description("wipe a source's landed data but KEEP its connection, so the next sync re-walks its whole history into a clean file")
+  .action((id: string) => {
+    try {
+      out(
+        core.resetSource(id),
+        (d) =>
+          `Reset ${d.sources.join(", ")} → ${d.dailyRows} daily rows left. Credential + schedule kept; run \`agentqs sync ${d.id}\` to re-walk its history.`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+source
   .command("file <id>")
   .description("import a Tier-2 local file source: chrome | safari | iphone | health_daily (Apple Health export) | spotify (account export — your listening history)")
   .option("-p, --path <file>", "explicit file/backup/export path")
