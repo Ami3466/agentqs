@@ -136,6 +136,36 @@ export function googleProductOn(cfg: AppConfig | null, id: string): boolean {
   return GOOGLE_PRODUCTS.some((p) => p.parent === id && on.includes(p.id));
 }
 
+/** The leaves a click lands on: a leaf is itself, a branch (Gmail) is all its
+ *  children — one click, no half-ticked Gmail. */
+export function googleLeavesOf(id: string): string[] {
+  if (GOOGLE_LEAVES.includes(id)) return [id];
+  return GOOGLE_PRODUCTS.filter((p) => p.parent === id).map((p) => p.id);
+}
+
+/**
+ * WHAT SHOULD BE TICKED after clicking `ids` on/off, given what is ticked now.
+ *
+ * The card sends THIS — the whole set, never a delta. A delta (`enable`/`disable`) is
+ * applied to whatever the server happens to hold the moment it arrives, so two clicks
+ * in flight could land in either order: ticking Gmail (which turns on BOTH leaves) and
+ * then unticking Inbox would put Inbox back ON if the enable arrived last. The user
+ * asked for Sent, got Inbox too, and nothing they clicked afterwards seemed to save.
+ *
+ * A full set cannot be re-ordered into a different answer: it says what the checkboxes
+ * ARE. The delta API stays for the CLI, where the calls are sequential by definition.
+ */
+export function nextGoogleSelection(enabled: string[], ids: string[], on: boolean): string[] {
+  const next = new Set(enabled.filter(isGoogleProduct));
+  for (const id of ids) {
+    for (const leaf of googleLeavesOf(id)) {
+      if (on) next.add(leaf);
+      else next.delete(leaf);
+    }
+  }
+  return [...next].sort();
+}
+
 /**
  * May this Google plugin sync at all?
  *

@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Google, Spinner } from "@/components/icons";
 import { SourceConnect } from "@/components/source-connect";
 import { cn } from "@/components/ui";
+import { nextGoogleSelection } from "@/lib/google";
 import type { GoogleProductState, GoogleState } from "@/lib/google-connect";
 import type { Interval, SourceView } from "@/lib/sources";
 
@@ -50,56 +51,95 @@ export function GoogleCard({
   const [state, setState] = useState<GoogleState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  /** What the checkboxes read RIGHT NOW — including clicks not yet acknowledged.
+   *  React state lags a click by a render, and two clicks in one tick would both
+   *  compute their next set from the same stale snapshot. */
+  const current = useRef<GoogleState | null>(null);
+  /** Writes go out ONE AT A TIME. Two ticks in flight can arrive at the server in
+   *  either order, and whichever lands last wins — which is how unticking Inbox
+   *  right after ticking Gmail could put Inbox back on. */
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  /** Bumped by every write. A GET that was already in the air when the user ticked
+   *  something answers with the state from BEFORE the tick — applying it would drag
+   *  the checkbox back off. Anything stamped with an older generation is dropped. */
+  const gen = useRef(0);
+
+  const apply = useCallback((next: GoogleState | null) => {
+    current.current = next;
+    setState(next);
+  }, []);
 
   const load = useCallback(async () => {
+    const g = gen.current;
     try {
       const res = await fetch("/api/google", { cache: "no-store" });
-      if (res.ok) setState((await res.json()) as GoogleState);
+      if (!res.ok) return;
+      const data = (await res.json()) as GoogleState;
+      if (gen.current === g) apply(data); // a tick happened while we asked → it wins
     } catch {
       /* a failed probe must never blank a card the user is working in */
     }
-  }, []);
+  }, [apply]);
 
   useEffect(() => {
     void load();
   }, [load, version]);
 
-  /** Tick/untick. Optimistic — the checkbox answers instantly, the server confirms. */
   /**
    * Tick/untick — OPTIMISTIC, and it has to be. The checkbox is a controlled input,
    * so if it only moved once the server answered, the browser's own tick would be
    * yanked back off on the next render and the box would sit there looking broken
    * until the round-trip landed. It moves now; the server's answer reconciles it,
-   * and a failure puts it back and says why.
+   * and a failure re-reads the truth and says why.
    *
    * `ids` is a list because a branch (Gmail) moves all its leaves at once — one
    * click, one request, no half-ticked Gmail.
+   *
+   * WE SEND THE WHOLE TICKED SET, never a delta, and one request at a time.
+   *
+   * It used to POST `{enable}` / `{disable}`, which the server applies to whatever it
+   * reads at that moment. So the natural way to get "Gmail, sent only" — tick Gmail
+   * (which turns on BOTH leaves), then untick Inbox — was two deltas racing each
+   * other: if `disable: [inbox]` reached the server before `enable: [inbox, sent]`,
+   * the enable won and Inbox came back ON. The user ticked Sent and got both, and
+   * nothing they clicked afterwards looked like it saved.
+   *
+   * A full set has no such ambiguity: it says what the checkboxes ARE, so the last
+   * one to land is the answer, and it is the same list the user is looking at.
    */
-  async function setProducts(ids: string[], on: boolean) {
-    const before = state;
+  function setProducts(ids: string[], on: boolean) {
+    const before = current.current;
+    if (!before) return;
+    const wanted = nextGoogleSelection(tickedLeaves(before), ids, on);
+    apply(applyLocally(before, wanted));
     setBusy(ids[0]);
     setError("");
-    setState((prev) => (prev ? applyLocally(prev, ids, on) : prev));
-    try {
-      const res = await fetch("/api/google", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(on ? { enable: ids } : { disable: ids }),
-      });
-      const data = (await res.json()) as GoogleState & { error?: string };
-      if (!res.ok) {
-        setState(before); // the tick never happened — don't leave a lie on screen
-        setError(data.error || "Could not update Google.");
-        return;
+    const g = ++gen.current;
+    queue.current = queue.current.then(async () => {
+      try {
+        const res = await fetch("/api/google", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ products: wanted }),
+        });
+        const data = (await res.json()) as GoogleState & { error?: string };
+        // A newer click is already on its way — it, not us, is the truth.
+        if (gen.current !== g) return;
+        if (!res.ok) {
+          setError(data.error || "Could not update Google.");
+          await load(); // don't guess what survived — ask
+          return;
+        }
+        apply(data);
+        onChanged(); // the row list re-reads: an enabled product becomes syncable
+      } catch (e) {
+        if (gen.current !== g) return;
+        setError((e as Error).message);
+        await load();
+      } finally {
+        if (gen.current === g) setBusy(null);
       }
-      setState(data);
-      onChanged(); // the row list re-reads: an enabled product becomes syncable
-    } catch (e) {
-      setState(before);
-      setError((e as Error).message);
-    } finally {
-      setBusy(null);
-    }
+    });
   }
 
   const products = state?.products ?? [];
@@ -183,9 +223,8 @@ export function GoogleCard({
                 busy={busy === top.id}
                 // A branch (Gmail) is ticked BY its children — ticking it turns them
                 // all on, unticking turns them all off. One click, no orphan branch.
-                onToggle={(on) =>
-                  void setProducts(kids.length ? kids.map((k) => k.id) : [top.id], on)
-                }
+                // `nextGoogleSelection` expands the branch, so the card never has to.
+                onToggle={(on) => setProducts([top.id], on)}
               />
               {kids.length ? (
                 <div className="ml-6 border-l border-border pl-3">
@@ -194,7 +233,7 @@ export function GoogleCard({
                       key={kid.id}
                       product={kid}
                       busy={busy === kid.id}
-                      onToggle={(on) => void setProducts([kid.id], on)}
+                      onToggle={(on) => setProducts([kid.id], on)}
                     />
                   ))}
                 </div>
@@ -250,11 +289,13 @@ export function GoogleCard({
  * `needsAuthorize` is deliberately NOT guessed here; the server owns it and its
  * answer lands a moment later.
  */
-function applyLocally(state: GoogleState, ids: string[], on: boolean): GoogleState {
-  const touched = new Set(ids);
-  const leaves = state.products.map((p) =>
-    p.leaf && touched.has(p.id) ? { ...p, enabled: on } : p,
-  );
+function tickedLeaves(state: GoogleState): string[] {
+  return state.products.filter((p) => p.leaf && p.enabled).map((p) => p.id);
+}
+
+function applyLocally(state: GoogleState, wanted: string[]): GoogleState {
+  const on = new Set(wanted);
+  const leaves = state.products.map((p) => (p.leaf ? { ...p, enabled: on.has(p.id) } : p));
   return {
     ...state,
     products: leaves.map((p) =>
@@ -297,10 +338,13 @@ function ProductCheck({
       className="flex cursor-pointer items-center gap-2 py-1.5"
       title={metrics ? `Lands: ${metrics}` : product.detail}
     >
+      {/* NEVER disabled while a write is in flight. Ticking the Gmail branch marked
+          its first leaf busy, which disabled the INBOX box — so the very next click,
+          "actually, not Inbox", landed on a dead input and vanished. Clicks compose
+          now: the optimistic state moves, and the queued write carries the latest set. */}
       <input
         type="checkbox"
         checked={product.enabled}
-        disabled={busy}
         onChange={(e) => onToggle(e.target.checked)}
         className="h-3.5 w-3.5 shrink-0 rounded border-border accent-accent"
       />
