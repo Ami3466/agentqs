@@ -23,7 +23,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-integrations-"));
 process.env.AGENTQS_DATA_DIR = dataDir;
 
 import { originOf, requestOrigin } from "../src/lib/request-origin";
-import { netFetch, type FetchLike } from "../src/lib/importers/plugin";
+import { getJson, netFetch, type FetchLike } from "../src/lib/importers/plugin";
 import { granolaPlugin } from "../src/lib/importers/granola";
 
 let failures = 0;
@@ -108,6 +108,22 @@ async function main() {
     !granolaPlugin.credentialPlaceholder.includes("auto-detected"), granolaPlugin.credentialPlaceholder);
 
   fs.rmSync(dataDir, { recursive: true, force: true });
+  // 4. A 200 WITH AN EMPTY BODY IS AN EMPTY RESULT, NOT A CRASH. Gmail answers a day
+  // with no mail — while a `fields` mask is set — with 200 and nothing at all.
+  // res.json() threw "Unexpected end of JSON input" and took the ENTIRE sync down on
+  // the first quiet day it hit, which reads as "Gmail is broken" rather than "you got
+  // no mail on a Tuesday".
+  console.log("\nempty replies:");
+  const emptyBody: FetchLike = (async () =>
+    new Response("", { status: 200, headers: { "Content-Type": "application/json" } })) as unknown as FetchLike;
+  const empty = await getJson("https://gmail.test/messages", {}, emptyBody).catch((e) => `THREW: ${(e as Error).message}`);
+  check("a 200 with an empty body reads as an empty result", JSON.stringify(empty) === "{}", JSON.stringify(empty));
+
+  // Junk that is not JSON still fails — loudly, and it names what came back.
+  const junk: FetchLike = (async () => new Response("<html>502</html>", { status: 200 })) as unknown as FetchLike;
+  const junkErr = await getJson("https://gmail.test/messages", {}, junk).catch((e) => (e as Error).message);
+  check("a non-JSON body still fails, and names what came back", /not JSON/.test(String(junkErr)), String(junkErr));
+
   if (failures) {
     console.log(`\n✗ ${failures} check(s) failed.\n`);
     process.exit(1);
