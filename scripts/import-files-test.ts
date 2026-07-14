@@ -21,6 +21,7 @@ import path from "path";
 import Database from "better-sqlite3";
 import { unixMsToWebkit } from "../src/lib/importers/files/chrome";
 import { unixMsToMacAbsolute } from "../src/lib/importers/files/safari";
+import { buildSources } from "../src/lib/source-registry";
 
 const REPO = process.cwd();
 const TSX = path.join(REPO, "node_modules/.bin/tsx");
@@ -373,6 +374,75 @@ function main(): void {
     .get() as { n: number } | undefined;
   check("workout dedup: Watch+Strava same run counts once (2 workouts, not 3)", workouts?.n === 2, `workouts=${workouts?.n}`);
   db3.close();
+
+  // ---- Spotify export ------------------------------------------------------
+  // The API serves ~50 plays and takes no date range, so `spotify` could only ever
+  // show a few days — the record said a lifetime of listening began last Tuesday.
+  // The export is where the history actually is, and it lands in the SAME source, so
+  // one Spotify row covers years and the sync keeps its recent end fresh.
+  console.log("\nSpotify export → the `spotify` source the API sync keeps fresh");
+  const spotifyDir = path.join(root, "my_spotify_data");
+  fs.mkdirSync(spotifyDir, { recursive: true });
+  // Extended export: ISO `ts`, ms_played — with a podcast episode and a 0ms skip
+  // mixed in, exactly as Spotify ships them.
+  fs.writeFileSync(
+    path.join(spotifyDir, "Streaming_History_Audio_2019-2020_0.json"),
+    JSON.stringify([
+      { ts: "2019-04-02T08:00:00Z", ms_played: 180_000, master_metadata_track_name: "A", spotify_track_uri: "spotify:track:a" },
+      { ts: "2019-04-02T08:05:00Z", ms_played: 240_000, master_metadata_track_name: "B", spotify_track_uri: "spotify:track:b" },
+      { ts: "2019-04-02T09:00:00Z", ms_played: 0, master_metadata_track_name: "C", spotify_track_uri: "spotify:track:c" },
+      { ts: "2019-04-02T10:00:00Z", ms_played: 900_000, episode_name: "Pod", spotify_episode_uri: "spotify:episode:z" },
+      { ts: "2020-11-30T21:00:00Z", ms_played: 300_000, master_metadata_track_name: "D", spotify_track_uri: "spotify:track:d" },
+    ]),
+  );
+  // Account-data export: the older shape, local "endTime" + msPlayed. Both parse.
+  fs.writeFileSync(
+    path.join(spotifyDir, "StreamingHistory0.json"),
+    JSON.stringify([{ endTime: "2024-02-09 23:12", artistName: "X", trackName: "E", msPlayed: 120_000 }]),
+  );
+  const spOut = runCli("import-file.ts", [
+    "--source", "spotify",
+    "--path", spotifyDir,
+    "--record", recordDir,
+    "--data", root,
+    "--rebuild",
+    "--json",
+  ]);
+  const spRes = JSON.parse(spOut) as { daysWithData: number; metrics: string[]; meta?: { plays?: number; files?: number } };
+  check("both export shapes parse (extended + account data)", spRes.meta?.files === 2, `${spRes.meta?.files} files`);
+  check("3 days landed across 5 years", spRes.daysWithData === 3, `${spRes.daysWithData} days`);
+  check(
+    "it writes the API sync's own columns, so they are ONE history",
+    JSON.stringify(spRes.metrics.sort()) === JSON.stringify(["minutes", "tracks"]),
+    spRes.metrics.join(", "),
+  );
+  const spCsv = fs.readFileSync(path.join(recordDir, "daily", "spotify.csv"), "utf8");
+  check(
+    "it lands in daily/spotify.csv — not a stranger called spotify_history",
+    spCsv.split("\n")[1]?.startsWith("2019-04-02"),
+    spCsv.split("\n")[1],
+  );
+  const db4 = new Database(dbFile, { readonly: true });
+  const spTracks = db4
+    .prepare("SELECT value_num AS n FROM daily WHERE source='spotify' AND date='2019-04-02' AND metric='tracks'")
+    .get() as { n: number } | undefined;
+  // 2 real plays. The podcast episode is not a track, and a 0ms skip is not listening.
+  check("podcast episodes and 0ms skips are not tracks", spTracks?.n === 2, `tracks=${spTracks?.n}`);
+  const spMins = db4
+    .prepare("SELECT value_num AS n FROM daily WHERE source='spotify' AND date='2019-04-02' AND metric='minutes'")
+    .get() as { n: number } | undefined;
+  check("minutes come from ms_played (180s + 240s = 7)", spMins?.n === 7, `minutes=${spMins?.n}`);
+  db4.close();
+  // The whole point: ONE Spotify, showing the lifetime — not a live source with 3
+  // days sitting next to a file source with the years. Point the store at the temp
+  // dir first: coverage is read from the cache, and this must never touch the real one.
+  process.env.AGENTQS_DATA_DIR = root;
+  const spotifyRows = buildSources(null, recordDir).filter((s) => s.id === "spotify");
+  check("the export does NOT add a second Spotify row", spotifyRows.length === 1, `${spotifyRows.length} rows`);
+  check(
+    `the live Spotify row now covers the lifetime (${spotifyRows[0]?.coverage?.from} → ${spotifyRows[0]?.coverage?.to})`,
+    spotifyRows[0]?.coverage?.from === "2019-04-02" && spotifyRows[0]?.coverage?.days === 3,
+  );
 
   // ---- daemon sync: git is the sync layer ---------------------------------
   console.log("\ndaemon sync → commit the record repo (git = the sync layer)");

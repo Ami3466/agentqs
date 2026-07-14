@@ -542,10 +542,18 @@ export function buildSources(
   // Tier-2 file importers (Chrome, iPhone) are local-only and off the API roster —
   // surface one only once it actually holds data, so the Connections catalog stays
   // the API roster while imported file data is still manageable under Automated.
+  //
+  // A file importer may BACKFILL a live source rather than be one (the Spotify export
+  // fills the same `spotify` the API sync keeps fresh — the export is the history, the
+  // API is the last few days). It has already been given a row by the plugin loop, and
+  // that row's coverage is read from the daily file both of them write, so it shows the
+  // whole lifetime. A second row here would split one Spotify in half and re-ask for a
+  // credential the source already has.
   for (const importer of FILE_IMPORTERS) {
     const row = fileSourceRow(cfg, dir, importer);
+    const backfillsAPlugin = PLUGINS.some((p) => p.id === importer.id);
     owned.add(importer.id);
-    if (row.hasData) out.push(row); // surfaces once it holds rows (it is never "connected")
+    if (row.hasData && !backfillsAPlugin) out.push(row); // surfaces once it holds rows (never "connected")
   }
 
   for (const recipe of listAutomations(cfg)) {
