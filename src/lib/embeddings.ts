@@ -91,6 +91,27 @@ const DAILY_TEXT_MIN_CHARS = 20;
 const CHUNK_CHARS = 900;
 const CHUNK_OVERLAP = 150; // carries a sentence across a cut so a fact split in two still matches
 
+const URL_RE = /https?:\/\/\S+/g;
+
+/**
+ * Is this cell LANGUAGE, or a machine string wearing text's clothes? An imported
+ * column is only free text by SHAPE — `notion_journal.files_media` is 872 cells of
+ * nothing but 1KB Google attachment URLs, and other columns hold bare links, bundle
+ * ids and opaque base64 handles. None of it is writing, and the model cannot tell one
+ * such blob from another: they all embed to roughly the same nowhere, then float at
+ * ~0.83 against EVERY query (E5 packs its scores into a narrow high band) and push the
+ * real answer down the page. Ten of the top twenty-five hits for "the dream I had
+ * after the first mentor session" were these.
+ *
+ * A cell earns a vector by containing words: strip the URLs and what remains must
+ * still be long enough to say something AND have a space in it — one unbroken 60-char
+ * token is an identifier, not a sentence.
+ */
+function isLanguage(text: string): boolean {
+  const words = text.replace(URL_RE, " ").trim();
+  return words.length >= DAILY_TEXT_MIN_CHARS && /\s/.test(words);
+}
+
 /** Split long text into overlapping windows, preferring a paragraph/sentence break
  *  near the cut so a chunk doesn't start mid-word. Short text returns as-is. */
 export function chunkText(text: string, size = CHUNK_CHARS, overlap = CHUNK_OVERLAP): string[] {
@@ -204,6 +225,9 @@ export function collectItems(recordDir: string): IndexItem[] {
   for (const d of readDailyFromRecord(recordDir)) {
     const text = d.valueText.trim();
     if (d.valueNum != null || text.length < DAILY_TEXT_MIN_CHARS) continue;
+    // The semantic index holds LANGUAGE. A column of attachment URLs or opaque ids is
+    // free text by shape only, and embedding it buries the writing it competes with.
+    if (!isLanguage(text)) continue;
     const refKey = `${d.date}:${d.source}:${d.metric}`;
     const ref = `daily:${(fnv1a(refKey) >>> 0).toString(16).padStart(8, "0")}`;
     pushChunked(out, { ref, kind: "daily_text", date: d.date }, `${d.source}.${d.metric}: ${text}`);

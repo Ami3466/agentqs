@@ -128,7 +128,24 @@ const LONG: [string, string][] = [
 // Raw or structured, never both.
 const STRUCTURED_DATE = "2026-06-11";
 
+/** Daily text cells: one column of real writing, one of the attachment-URL sludge that
+ *  an import lands as "free text" (notion_journal.files_media is 872 cells of exactly
+ *  this). Only the writing belongs in a semantic index — a column of links embeds to
+ *  nowhere and then floats near the top of EVERY query. */
+function seedDailyText(recordDir: string) {
+  const dir = path.join(recordDir, "daily");
+  fs.mkdirSync(dir, { recursive: true });
+  const url = "https://lh3.googleusercontent.com/lr/" + "ANt8axlxkEVq7Z".repeat(6);
+  fs.writeFileSync(
+    path.join(dir, "notion_journal.csv"),
+    "date,note,files_media\n" +
+      `2026-06-12,"Long walk by the river and it finally felt quiet in my head.","${url}"\n` +
+      `2026-06-13,"Argued with myself all morning about the same decision again.","${url}"\n`,
+  );
+}
+
 function seedRecord(recordDir: string) {
+  seedDailyText(recordDir);
   const all: [string, string][] = [
     ...DAYS,
     ...LONG,
@@ -170,8 +187,11 @@ async function main() {
   // ---- 1. The pure local index (sqlite-vec + the local model), keyless. ----
   console.log("\nThe local semantic index — sqlite-vec + the local embedding model (no key)…\n");
   const built = await buildIndex({ recordDir: rDir, vecFile });
-  // A long PROSE memo becomes several chunks; a 400-row CSV stays ONE vector.
-  const expected = DAYS.length + LONG.reduce((n, [, t]) => n + chunkText(t).length, 0) + 1;
+  // A long PROSE memo becomes several chunks; a 400-row CSV stays ONE vector; the two
+  // daily prose cells are embedded and their attachment-URL siblings are not.
+  const DAILY_PROSE_CELLS = 2;
+  const expected =
+    DAYS.length + LONG.reduce((n, [, t]) => n + chunkText(t).length, 0) + 1 + DAILY_PROSE_CELLS;
   check("the index built with the sqlite-vec backend", built.backend === "sqlite-vec", built.backend);
   check("every dated memo was embedded", built.count === expected, `${built.count} entries`);
   check(
@@ -184,11 +204,22 @@ async function main() {
   // the same 400-row table are seeded — one pending, one already structured via csv —
   // so this counts BOTH: the pending one is worth a single vector, the structured one
   // is worth NONE (its rows are daily cells now, and those are embedded on their own).
-  const tableItems = collectItems(rDir).filter((it) => it.text.startsWith("date,steps,resting_hr"));
+  const collected = collectItems(rDir);
+  const tableItems = collected.filter((it) => it.text.startsWith("date,steps,resting_hr"));
   check(
     "a structured CSV leaves the index entirely; a pending one is ONE vector, never rows of digits",
     tableItems.length === 1,
     `${tableItems.length} entries for two 400-row tables`,
+  );
+  // The index holds LANGUAGE: the prose column is embedded, the attachment-URL column
+  // is not. A cell of links is text by shape only, and it floats near the top of every
+  // query because the model has nothing to tell one link from another.
+  const daily = collected.filter((it) => it.kind === "daily_text");
+  check(
+    "a daily column of prose is indexed; a column of attachment URLs is not",
+    daily.some((it) => it.text.includes("felt quiet in my head")) &&
+      !daily.some((it) => it.text.includes("googleusercontent")),
+    `${daily.length} daily_text entries`,
   );
 
   // Feeling-queries that share NO words with the memo they should match — the real
