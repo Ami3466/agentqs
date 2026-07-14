@@ -124,6 +124,20 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   comes from, step by step, with the start URL. Relay these steps when the user
   asks how to connect something. MCP tool: `source_guide`; the web connect form
   shows the same guide (it lives once, on the plugin's `credentialHelp`).
+- THE APP KEY AND THE LOGIN ARE TWO DIFFERENT THINGS. Registering an app with a
+  provider (client id + secret) happens ONCE and is saved per PROVIDER in
+  `config.oauthApps[<provider>]` (`saveOAuthApp`/`readOAuthApp`, src/lib/oauth.ts);
+  the GRANT the dance mints is per ACCOUNT, in `config.sourceOAuth[<instance>]`.
+  They have different lifetimes, so they are different buttons: "Save key" (once) ->
+  "Sign in with X" (as often as you like, for as many accounts as you like).
+  `beginOAuth` therefore does NOT require the client id/secret - pass them only to
+  REPLACE the saved key ("use a different app key"). The key used to be stored INSIDE
+  the grant, which meant re-pasting the client id + secret to add a second account or
+  simply to log back in after a revoke - paperwork that had never expired. Legacy
+  grants that still carry `clientId`/`clientSecret` are read as a fallback and
+  migrated on the next save, so nobody re-enters anything. Anything reading client
+  creds MUST go through `readOAuthApp` (Trakt's `clientId:token` credential silently
+  became `undefined:<token>` when it read the grant instead).
 - OAuth sources (spotify, gcal, fitbit, strava, whoop-api, withings, trakt -
   expiring/rotating tokens; plus `gdrive_backup`, which is a BACKUP TARGET, not
   a source: same dance, but its face is Settings -> Data / `agentqs backup`):

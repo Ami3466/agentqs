@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { readConfig, writeConfig, type AppConfig, type OAuthGrant } from "./config";
+import { readConfig, writeConfig, type AppConfig, type OAuthApp, type OAuthGrant } from "./config";
 import { pluginInstanceById, pluginInstanceName } from "./importers/registry";
 import {
   oauthGrantKey,
@@ -44,6 +44,66 @@ function readGrant(cfg: AppConfig | null, instanceId: string): { grant?: OAuthGr
   return { grant: cfg?.sourceOAuth?.[key] ?? cfg?.sourceOAuth?.[instanceId], key };
 }
 
+/**
+ * WHERE THE APP KEY LIVES — the provider, not the account. Registering an app with
+ * Google and signing in to a Google account are two different acts: the key is
+ * registered once and every account you ever add rides it. Keying it per account
+ * (which is what storing it on the grant did) forced the user to re-paste the client
+ * id + secret to add a second account or to simply log back in after a revoke. The
+ * key never changed. It is the same key.
+ */
+export function appKeyOf(instanceId: string): string {
+  const inst = pluginInstanceById(instanceId);
+  if (!inst) return instanceId;
+  // Extra accounts ("spotify-2") share the BASE provider's app — that is the whole
+  // point of an app key. `oauthGrantKey` deliberately splits them, because the
+  // GRANT is per account; the app is not.
+  return inst.plugin.oauth?.providerKey ?? inst.plugin.id;
+}
+
+/**
+ * The registered app for this source. Reads the modern per-provider slot first, then
+ * falls back to any app creds stored inside an existing grant (where they used to
+ * live) — so a user who connected before this split never re-enters anything, and
+ * their next save migrates the key to the shared slot.
+ */
+export function readOAuthApp(cfg: AppConfig | null, instanceId: string): OAuthApp | undefined {
+  const app = cfg?.oauthApps?.[appKeyOf(instanceId)];
+  if (app?.clientId && app?.clientSecret) return app;
+  // Legacy: the key on the grant — this instance's, then the provider's base.
+  for (const g of [cfg?.sourceOAuth?.[grantKeyOf(instanceId)], cfg?.sourceOAuth?.[appKeyOf(instanceId)]]) {
+    if (g?.clientId && g?.clientSecret) return { clientId: g.clientId, clientSecret: g.clientSecret };
+  }
+  return undefined;
+}
+
+/** Save the app key for a provider WITHOUT starting a dance. "Save the key" and
+ *  "sign in" are separate buttons because they are separate acts. */
+export function saveOAuthApp(instanceId: string, clientId: string, clientSecret: string): { provider: string } {
+  oauthPlugin(instanceId); // must be an OAuth source
+  if (!clientId?.trim() || !clientSecret?.trim()) {
+    throw new Error("Both the Client ID and the Client Secret are required.");
+  }
+  const cfg = readConfig();
+  if (!cfg) throw new Error("Run setup first.");
+  const provider = appKeyOf(instanceId);
+  cfg.oauthApps = {
+    ...(cfg.oauthApps ?? {}),
+    [provider]: { clientId: clientId.trim(), clientSecret: clientSecret.trim() },
+  };
+  writeConfig(cfg);
+  return { provider };
+}
+
+/** Forget the app key for a provider ("use another key"). The grants it minted are
+ *  left alone — they die on their own when the provider revokes them. */
+export function forgetOAuthApp(instanceId: string): void {
+  const cfg = readConfig();
+  if (!cfg?.oauthApps) return;
+  delete cfg.oauthApps[appKeyOf(instanceId)];
+  writeConfig(cfg);
+}
+
 /** The scope to ask for. Static for most providers; for Google it is the union over
  *  the products the user actually TICKED, so unchecking Gmail stops us asking for
  *  mail access on the next authorize. */
@@ -70,27 +130,28 @@ export function beginOAuth(
   origin: string,
 ): { authorizeUrl: string; redirectUri: string } {
   const { o } = oauthPlugin(instanceId);
-  if (!clientId?.trim() || !clientSecret?.trim()) {
-    throw new Error("Both the Client ID and the Client Secret are required.");
+  // Signing in does NOT require the app key again. It was saved when the app was
+  // registered; pass it only to REPLACE it ("use another key"). Re-demanding it to
+  // add a second account, or just to log back in, is asking the user to re-do
+  // paperwork that never expired.
+  if (clientId?.trim() || clientSecret?.trim()) {
+    saveOAuthApp(instanceId, clientId, clientSecret);
   }
   const cfg = readConfig();
   if (!cfg) throw new Error("Run setup first.");
+  const app = readOAuthApp(cfg, instanceId);
+  if (!app) {
+    throw new Error(
+      `No ${pluginInstanceName(pluginInstanceById(instanceId)!)} app key saved yet — add the Client ID + Secret once, then sign in.`,
+    );
+  }
   const state = crypto.randomBytes(16).toString("hex");
   const redirectUri = oauthRedirectUri(origin);
-  const { grant, key } = readGrant(cfg, instanceId);
-  cfg.sourceOAuth = {
-    ...(cfg.sourceOAuth ?? {}),
-    [key]: {
-      ...(grant ?? {}),
-      clientId: clientId.trim(),
-      clientSecret: clientSecret.trim(),
-    },
-  };
   cfg.oauthPending = { state, instanceId, redirectUri, createdAt: new Date().toISOString() };
   writeConfig(cfg);
   const url = new URL(o.authUrl);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", clientId.trim());
+  url.searchParams.set("client_id", app.clientId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("scope", scopeToRequest(o, cfg));
   url.searchParams.set("state", state);
@@ -120,17 +181,17 @@ interface WithingsEnvelope {
  *  demand it (Trakt); client creds per the provider's style. */
 async function tokenRequest(
   o: OAuthProviderConfig,
-  grant: OAuthGrant,
+  app: OAuthApp,
   params: Record<string, string>,
   fetchImpl: FetchLike,
 ): Promise<TokenReply> {
   const all: Record<string, string> = { ...params, ...(o.tokenExtraParams ?? {}) };
   const headers: Record<string, string> = { Accept: "application/json" };
   if (o.tokenAuth === "basic") {
-    headers.Authorization = `Basic ${Buffer.from(`${grant.clientId}:${grant.clientSecret}`).toString("base64")}`;
+    headers.Authorization = `Basic ${Buffer.from(`${app.clientId}:${app.clientSecret}`).toString("base64")}`;
   } else {
-    all.client_id = grant.clientId;
-    all.client_secret = grant.clientSecret;
+    all.client_id = app.clientId;
+    all.client_secret = app.clientSecret;
   }
   let body: string;
   if (o.tokenBody === "json") {
@@ -188,21 +249,27 @@ export async function completeOAuth(
   }
   const inst = pluginInstanceById(pending.instanceId);
   const { grant, key } = readGrant(cfg, pending.instanceId);
-  if (!inst?.plugin.oauth || !grant) {
-    throw new Error("The pending authorization lost its app credentials — start the connect again.");
+  // The code is exchanged with the PROVIDER'S app key, which is saved independently
+  // of any grant — so this works for the very first login (no grant yet) and for a
+  // second account just the same.
+  const app = readOAuthApp(cfg, pending.instanceId);
+  if (!inst?.plugin.oauth || !app) {
+    throw new Error("The pending authorization lost its app key — start the connect again.");
   }
   const tok = await tokenRequest(
     inst.plugin.oauth,
-    grant,
+    app,
     { grant_type: "authorization_code", code, redirect_uri: pending.redirectUri },
     fetchImpl,
   );
   saveGrant(
     key,
     {
-      ...grant,
+      // No grant yet on a FIRST login (the app key alone got us here) — that is the
+      // normal path now, not an error.
+      ...(grant ?? {}),
       accessToken: tok.access_token,
-      refreshToken: tok.refresh_token ?? grant.refreshToken,
+      refreshToken: tok.refresh_token ?? grant?.refreshToken,
       expiresAt: expiryISO(tok.expires_in),
       // What we GOT, not what we asked for — the consent screen lets the user drop a
       // scope, and a Google card that then claims Gmail is on would be lying.
@@ -237,9 +304,13 @@ export async function freshOAuthToken(
   if (!grant.refreshToken) {
     throw new Error(`${plugin.name} access token expired and no refresh token is stored — reconnect in Pipeline.`);
   }
+  const app = readOAuthApp(cfg, instanceId);
+  if (!app) {
+    throw new Error(`${plugin.name} has no app key saved — add the Client ID + Secret in Pipeline, then sign in.`);
+  }
   let tok: TokenReply;
   try {
-    tok = await tokenRequest(o, grant, { grant_type: "refresh_token", refresh_token: grant.refreshToken }, fetchImpl);
+    tok = await tokenRequest(o, app, { grant_type: "refresh_token", refresh_token: grant.refreshToken }, fetchImpl);
   } catch (e) {
     throw new Error(`${plugin.name} token refresh failed (${(e as Error).message}) — reconnect in Pipeline.`);
   }
@@ -274,7 +345,12 @@ export async function resolveSyncCredentialFresh(
   if (grant?.accessToken || grant?.refreshToken) {
     const token = await freshOAuthToken(instanceId, cfg, fetchImpl);
     if (token && plugin.oauth?.grantCredential === "clientId:token") {
-      return `${grant.clientId}:${token}`;
+      // The client id comes from the APP KEY now, not the grant — reading it off the
+      // grant here would silently produce "undefined:<token>" for anyone whose key
+      // lives in the shared slot.
+      const app = readOAuthApp(cfg, instanceId);
+      if (!app) throw new Error(`${plugin.name} has no app key saved — add the Client ID + Secret in Pipeline.`);
+      return `${app.clientId}:${token}`;
     }
     return token;
   }

@@ -71,9 +71,19 @@ export interface ChannelsConfig {
 /** An OAuth2 app the user registered with a provider (client id + secret) plus
  *  the tokens the authorize dance minted. A refresh/access token here is a
  *  STORED CREDENTIAL — it makes the source connected, and disconnect deletes it. */
-export interface OAuthGrant {
+/** The user's registered OAuth application for a provider. Saved ONCE and reused by
+ *  every account: registering the app and signing in are separate acts. */
+export interface OAuthApp {
   clientId: string;
   clientSecret: string;
+}
+
+export interface OAuthGrant {
+  /** Legacy: the app creds used to live on the grant. Still READ (so a grant minted
+   *  before `oauthApps` keeps working), never required — new keys are written to
+   *  `config.oauthApps[provider]`. */
+  clientId?: string;
+  clientSecret?: string;
   accessToken?: string;
   refreshToken?: string;
   expiresAt?: string; // ISO — syncs refresh before use once past
@@ -151,7 +161,17 @@ export interface AppConfig {
   savedGraphs?: SavedGraph[]; // saved correlation / timeline graph cards
   sourceIntervals?: Record<string, Interval>; // per-source sync cadence (Pipeline tab)
   sourceCreds?: Record<string, string>; // per-source API key / OAuth token (Tier-1 plugins)
-  sourceOAuth?: Record<string, OAuthGrant>; // per-source OAuth app + tokens (the authorize dance)
+  sourceOAuth?: Record<string, OAuthGrant>; // per-ACCOUNT OAuth grant (the tokens the dance minted)
+  /**
+   * The user's OAuth APP credentials, per PROVIDER ("google", "spotify") — NOT per
+   * account. The app key and the login are two different things with two different
+   * lifetimes: you register the app once, then sign in as many times and as many
+   * accounts as you like. Keeping the key inside each grant meant re-pasting the
+   * client id + secret to add a second account or to simply log back in, which is
+   * absurd — the key never changed. Saved once here, every account of that provider
+   * rides it.
+   */
+  oauthApps?: Record<string, OAuthApp>;
   oauthPending?: OAuthPending; // authorize dance in flight (cleared by the callback)
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins

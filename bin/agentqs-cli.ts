@@ -449,13 +449,13 @@ source
 
 source
   .command("authorize <id>")
-  .description("start the OAuth dance from the CLI: prints the URL to approve; the RUNNING app's callback stores the grant")
-  .requiredOption("--client-id <id>", "the provider app's client id")
-  .requiredOption("--client-secret <secret>", "the provider app's client secret")
+  .description("sign in to an OAuth source. The app key is saved ONCE (--client-id/--client-secret); after that just `authorize <id>` — second accounts and re-logins reuse it")
+  .option("--client-id <id>", "the provider app's client id — only needed the first time, or to replace a saved key")
+  .option("--client-secret <secret>", "the provider app's client secret — same")
   .option("--origin <url>", "where the app is running (default http://127.0.0.1:3000) — the callback lands there")
-  .action((id: string, opts: { clientId: string; clientSecret: string; origin?: string }) => {
+  .action((id: string, opts: { clientId?: string; clientSecret?: string; origin?: string }) => {
     try {
-      out(core.sourceAuthorize(id, opts.clientId, opts.clientSecret, opts.origin), (d) =>
+      out(core.sourceAuthorize(id, opts.clientId ?? "", opts.clientSecret ?? "", opts.origin), (d) =>
         `Redirect URI the provider app must have registered: ${d.redirectUri}\nOpen to approve:\n  ${d.authorizeUrl}\n${d.note}`,
       );
     } catch (e) {

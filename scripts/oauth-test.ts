@@ -28,7 +28,9 @@ import {
   completeOAuth,
   freshOAuthToken,
   oauthRedirectUri,
+  readOAuthApp,
   resolveSyncCredentialFresh,
+  saveOAuthApp,
 } from "../src/lib/oauth";
 import { disconnectSource, sourceGuide } from "../src/lib/cli-core";
 
@@ -87,7 +89,9 @@ async function main() {
   check("redirect uri is the app callback", u.searchParams.get("redirect_uri") === `${origin}/api/oauth/callback` && redirectUri === oauthRedirectUri(origin));
   const state = u.searchParams.get("state") ?? "";
   check("state stashed in config", Boolean(state) && readConfig()?.oauthPending?.state === state);
-  check("app creds stored", readConfig()?.sourceOAuth?.spotify?.clientId === "cid");
+  // The APP KEY is saved per PROVIDER, not inside the grant — registering an app and
+  // signing in are separate acts with separate lifetimes.
+  check("app key saved under the provider", readConfig()?.oauthApps?.spotify?.clientId === "cid");
 
   // --- 3. callback: state must match; the exchange stores the grant.
   console.log("complete:");
@@ -188,6 +192,47 @@ async function main() {
   // key `google`, not `gcal` (see google.ts). Disconnecting an unrelated source
   // must not touch it. Removing a Google product itself is covered by google:test.
   check("Google's grant untouched", Boolean(readConfig()?.sourceOAuth?.google));
+
+  // --- THE APP KEY OUTLIVES THE LOGIN. You register an app with a provider ONCE;
+  // after that you sign in — again, or as a second account — without ever seeing the
+  // Client ID / Secret form again. It used to be demanded on every authorize, because
+  // the key was stored inside the grant, so adding a second account or simply logging
+  // back in meant re-pasting paperwork that had never expired.
+  console.log("\napp key vs login:");
+  const clean = readConfig()!;
+  delete clean.oauthPending; // an earlier dance in this script left one behind
+  writeConfig(clean);
+  saveOAuthApp("fitbit", "fit-id", "fit-secret"); // register the app, do NOT sign in
+  check("saving the app key does NOT start a dance", !readConfig()?.oauthPending);
+  check("no grant yet — a saved key is not a connection", !readConfig()?.sourceOAuth?.fitbit);
+  check("the key is readable back", readOAuthApp(readConfig(), "fitbit")?.clientId === "fit-id");
+
+  // Sign in with NO credentials passed — the saved key carries it.
+  const relogin = beginOAuth("fitbit", "", "", origin);
+  check(
+    "signing in needs no key re-entry",
+    new URL(relogin.authorizeUrl).searchParams.get("client_id") === "fit-id",
+  );
+
+  // A SECOND ACCOUNT rides the same app key — this is the case that was impossible.
+  const second = beginOAuth("fitbit-2", "", "", origin);
+  check(
+    "a 2nd account reuses the same app key",
+    new URL(second.authorizeUrl).searchParams.get("client_id") === "fit-id",
+  );
+
+  // Replacing the key ("use another app key") is still possible, explicitly.
+  beginOAuth("fitbit", "new-id", "new-secret", origin);
+  check("passing a new key replaces it", readConfig()?.oauthApps?.fitbit?.clientId === "new-id");
+
+  // A source with no key saved says so, instead of minting a broken authorize URL.
+  let noKey = "";
+  try {
+    beginOAuth("strava", "", "", origin);
+  } catch (e) {
+    noKey = (e as Error).message;
+  }
+  check("no key saved → a clear error, not a broken URL", /app key/i.test(noKey), noKey);
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed.");
   process.exit(failures ? 1 : 0);
