@@ -1,6 +1,4 @@
-<img src="public/logo.svg" alt="agentqs" width="160" />
-
-**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
+<img src="public/logo.svg" alt="agentqs" width="160" />**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
@@ -22,25 +20,12 @@ npm run dev               # → http://localhost:3000
 
 The agent can import and structure the data already on your machine, connect your accounts and set up syncs.
 
-If you want to interact with agentqs through external channels like Slack or Telegram, or build integrations on top of it, deploy it on the cloud.
+Better on the cloud: needs to be live for Slack and telegram integration. and needed a public url for auth apps
 
-[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
+![Deploy on FlowEngine](https://flowengine.cloud/button.svg)## Features
 
-## Features
-
-<table>
-  <tr>
-    <td width="25%"><a href="docs/images/pipeline.png"><img src="docs/images/pipeline.png" alt="Data" /></a></td>
-    <td width="25%"><a href="docs/images/journal.png"><img src="docs/images/journal.png" alt="Journal" /></a></td>
-    <td width="25%"><a href="docs/images/graphs.png"><img src="docs/images/graphs.png" alt="Graphs" /></a></td>
-    <td width="25%"><a href="docs/images/chat.png"><img src="docs/images/chat.png" alt="Chat" /></a></td>
-  </tr>
-  <tr>
-    <td align="center" valign="top"><a href="#data"><b>Data</b></a><br/><sub>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</sub></td>
-    <td align="center" valign="top"><a href="#journal"><b>Journal</b></a><br/><sub>View your structured data. Edit and organize.</sub></td>
-    <td align="center" valign="top"><a href="#graphs"><b>Graphs</b></a><br/><sub>Lines and correlations across any data points. Save the views.</sub></td>
-    <td align="center" valign="top"><a href="#chat"><b>Chat</b></a><br/><sub>Add skills, chat with AI, or have a voice session.</sub></td>
-  </tr>
+<table style="min-width: 100px;">
+<colgroup><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"></colgroup><tbody><tr><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/pipeline.png" alt="Data"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/journal.png" alt="Journal"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/graphs.png" alt="Graphs"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/example/Desktop/agentqs/docs/images/chat.png" alt="Chat"></td></tr><tr><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#data"><strong>Data</strong></a><br>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#journal"><strong>Journal</strong></a><br>View your structured data. Edit and organize.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#graphs"><strong>Graphs</strong></a><br>Lines and correlations across any data points. Save the views.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#chat"><strong>Chat</strong></a><br>Add skills, chat with AI, or have a voice session.</p></td></tr></tbody>
 </table>
 
 ### Journal
@@ -81,7 +66,7 @@ OAuth sources (Google, Spotify, Fitbit, Strava, Whoop, Withings, Trakt) connect 
 
 **Every source is read to the end.** Each importer follows its API's pagination to the last page rather than taking the first one and stopping, asks about every year back to 2000 (a quiet stretch in your life is not the end of it), and refuses to write a partial answer as if it were the whole one. A source that lands nothing on its first import fails loudly instead of reporting success.
 
-**Connecting a source imports its history, not the last 90 days.** The first sync of a source takes everything the API will give (years, not a window); every sync after it resumes from the last day you already have, so nothing is re-fetched and nothing is left behind. Slow is not a ceiling: Gmail is counted one day at a time, so its first import walks your whole account year by year and can run for minutes - it runs in the background and saves each year as it lands. Where an API has a hard ceiling the row says so instead of looking broken - Spotify only ever returns your last ~50 plays, so a sync covers a few days and your listening history comes from their account export. Drop that export in (or `agentqs source file spotify --path my_spotify_data.zip`) and it fills the same Spotify source, so one row shows the lifetime while the sync keeps the last few days fresh.
+**Connecting a source imports its history, not the last 90 days.** The first sync of a source takes everything the API will give (years, not a window); every sync after it resumes from the last day you already have, so nothing is re-fetched and nothing is left behind. Slow is not a ceiling: Gmail is counted one day at a time, so its first import walks your whole account year by year and can run for minutes - it runs in the background and saves each year as it lands. Where an API has a hard ceiling the row says so instead of looking broken - Spotify only ever returns your last \~50 plays, so a sync covers a few days and your listening history comes from their account export. Drop that export in (or `agentqs source file spotify --path my_spotify_data.zip`) and it fills the same Spotify source, so one row shows the lifetime while the sync keeps the last few days fresh.
 
 **Every connection shows its receipts, and clicking one opens its data.** A connected row carries a Connected badge, *which* account it is authorized as (so two Whoop athletes are never twins), what actually landed (days, events, date range) and when it last synced - all counted from the record, so a connected-but-empty source reads "no data yet" instead of passing for a healthy one. Click the row and the Journal opens filtered to that source alone: "what did this give me?" is one click, never a guess.
 
@@ -95,7 +80,7 @@ OAuth sources (Google, Spotify, Fitbit, Strava, Whoop, Withings, Trakt) connect 
 
 **Import files** - drop anything: Google Takeout archives (calendar event titles land searchable) · Apple Health export.zip (steps, sleep, HR, workouts - lifetime, device-deduped) · Chrome and Safari browser history · Google Timeline · iPhone backups · Notion exports · Spotify data export · photos · any CSV, TSV, Markdown or text file. Point `agentqs import` at a whole folder and every file is accounted for - structured, landed raw, routed to its importer, or reported as residue in a saved receipt; nothing is silently skipped
 
-Semantic search runs on local embeddings - no API key needed. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
+Semantic search runs on local embeddings - no API key needed, and the model is multilingual, so a journal written in any language is searchable from a question asked in any other. Long documents are chunked, so a memo is found by any passage in it, not just its opening; a structured CSV is left to its daily cells rather than indexed twice. Chat and structuring use whatever provider you add: Anthropic, OpenAI, Gemini or any compatible endpoint.
 
 ## How your data is stored
 
@@ -103,7 +88,7 @@ Everything lives in one data directory you own, in three layers:
 
 - **The record - plain text, the source of truth.** `record/daily/*.csv` holds one row per day per source, numbers first - that's what Graphs and the Journal read. `record/events.jsonl` holds items - a meeting, a page visit, a track - one line each with title, text and link. Memos in `inbox.jsonl`, AI sessions in `sessions.jsonl`. Per-minute streams (WHOOP heart rate) are one small CSV per day, rolled up into daily columns.
 - **Derived indexes - rebuildable, never committed.** A SQLite cache for SQL, a full-text index, on-device embeddings for semantic search, and a photo index. `agentqs rebuild` recreates all of them from the record, byte-identical.
-- **The detail store (`detail.db`) - every point behind the rollups.** Streams too dense for one row per day - per-minute heart rate, every browser visit - live in a local SQLite as normal numeric tables, so chat and `agentqs query` correlate at full grain (`detail.heart_rate`). `daily` keeps one value per day; `detail` keeps them all.
+- **The detail store (**`detail.db`**) - every point behind the rollups.** Streams too dense for one row per day - per-minute heart rate, every browser visit - live in a local SQLite as normal numeric tables, so chat and `agentqs query` correlate at full grain (`detail.heart_rate`). `daily` keeps one value per day; `detail` keeps them all.
 
 Every new source follows the same rule: numbers go to daily columns; items with text (meetings, emails, messages) go to events, searchable by keyword and meaning; dense streams go to per-day files in the record and are indexed into `detail`, with a daily rollup; photos are indexed on-device. The same explainer lives in the app, behind the **?** next to the Journal, Graphs and Pipeline titles.
 
@@ -162,9 +147,7 @@ While the app is running it schedules its own syncs - set a source's interval an
 
 [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`, syncs run around the clock.
 
-[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
-
-Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
+![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 
 ## Good to know
 
