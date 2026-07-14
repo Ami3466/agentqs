@@ -1,6 +1,12 @@
-<img src="public/logo.svg" alt="agentqs" width="160" />**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
+<div align="center">
+
+<img src="public/logo.svg" alt="agentqs" width="160" />
+
+**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
+
+</div>
 
 ---
 
@@ -22,10 +28,27 @@ The agent can import and structure the data already on your machine, connect you
 
 Better on the cloud: it needs to be live for the Slack and Telegram integrations, and OAuth apps need a public, stable callback URL. Either way you can back your data up, encrypted, to your own Google Drive - on the schedule you set.
 
-![Deploy on FlowEngine](https://flowengine.cloud/button.svg)## Features
+<div align="center">
 
-<table style="min-width: 100px;">
-<colgroup><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"></colgroup><tbody><tr><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/amit/Desktop/agentqs/docs/images/pipeline.png" alt="Data"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/amit/Desktop/agentqs/docs/images/journal.png" alt="Journal"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/amit/Desktop/agentqs/docs/images/graphs.png" alt="Graphs"></td><td colspan="1" rowspan="1"><img src="https://file+.vscode-resource.vscode-cdn.net/Users/amit/Desktop/agentqs/docs/images/chat.png" alt="Chat"></td></tr><tr><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#data"><strong>Data</strong></a><br>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#journal"><strong>Journal</strong></a><br>View your structured data. Edit and organize.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#graphs"><strong>Graphs</strong></a><br>Lines and correlations across any data points. Save the views.</p></td><td colspan="1" rowspan="1"><p><a target="_blank" rel="noopener noreferrer nofollow" href="#chat"><strong>Chat</strong></a><br>Add skills, chat with AI, or have a voice session.</p></td></tr></tbody>
+[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
+
+</div>
+
+## Features
+
+<table>
+  <tr>
+    <td width="25%"><a href="docs/images/pipeline.png"><img src="docs/images/pipeline.png" alt="Data" /></a></td>
+    <td width="25%"><a href="docs/images/journal.png"><img src="docs/images/journal.png" alt="Journal" /></a></td>
+    <td width="25%"><a href="docs/images/graphs.png"><img src="docs/images/graphs.png" alt="Graphs" /></a></td>
+    <td width="25%"><a href="docs/images/chat.png"><img src="docs/images/chat.png" alt="Chat" /></a></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><a href="#data"><b>Data</b></a><br/><sub>Pipelines: integrations, auto scraping, manual import, and Chrome extension for Google data.</sub></td>
+    <td align="center" valign="top"><a href="#journal"><b>Journal</b></a><br/><sub>View your structured data. Edit and organize.</sub></td>
+    <td align="center" valign="top"><a href="#graphs"><b>Graphs</b></a><br/><sub>Lines and correlations across any data points. Save the views.</sub></td>
+    <td align="center" valign="top"><a href="#chat"><b>Chat</b></a><br/><sub>Add skills, chat with AI, or have a voice session.</sub></td>
+  </tr>
 </table>
 
 ### Journal
@@ -147,7 +170,9 @@ While the app is running it schedules its own syncs - set a source's interval an
 
 [**Deploy on FlowEngine**](https://flowengine.cloud/deploy/agentqs) - up 24/7, persistent storage at `/data`, syncs run around the clock.
 
-![Deploy on FlowEngine](https://flowengine.cloud/button.svg)Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
+[![Deploy on FlowEngine](https://flowengine.cloud/button.svg)](https://flowengine.cloud/deploy/agentqs)
+
+Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a stable `SESSION_SECRET`. Cloud can't read your laptop - for browser history, iPhone backups or photos, run the CLI on the machine that has the files.
 
 ## Good to know
 
