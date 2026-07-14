@@ -216,6 +216,14 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   `/api/import/whoop?instance=whoop-2`. The base account keeps id "whoop". Do not
   confuse with `whoop-api` (the OFFICIAL OAuth plugin) - `/^whoop-\d+$/` is the
   unofficial-instance test, so `whoop-api` is never treated as one.
+- ⛔ NO SOURCE MAY HARDCODE A WINDOW. This bug shipped FOUR times - WHOOP, every
+  plugin, GitHub, and the local file importers each carried their own trailing "last
+  90 days", and each one silently truncated a lifetime. There is now ONE rule, in ONE
+  place (`syncWindow` -> `discoverStart`/`backfillPlugin`, cli-core), and
+  `syncSourceInner` holds no trailing default for a new source to reach for.
+  `sync:test` scenario 6 FAILS if one reappears. A file gets read WHOLE (it is finite
+  and already on disk - clipping your own Chrome history to 90 days throws away years
+  that were sitting right there).
 - THE SYNC WINDOW COMES FROM THE RECORD, never from a constant (`syncWindow` in
   cli-core - the one rule, every source): `--days N` -> exactly that; record EMPTY
   -> the FIRST import DISCOVERS its range: `backfillPlugin` walks back a year at a

@@ -151,6 +151,25 @@ const explicit = syncWindow(wRoot, "gcal", { days: 30, today });
 check(`--days N is honoured verbatim (${explicit.from})`, explicit.from === "2026-06-14");
 fs.rmSync(wRoot, { recursive: true, force: true });
 
+// --- NO SOURCE MAY HARDCODE A WINDOW. This is the guard that stops the bug coming
+// back a fourth time: WHOOP, then every plugin, then GitHub each shipped their own
+// trailing "last 90 days", and each one silently truncated a lifetime. The rule now
+// lives in ONE place (syncWindow → discoverStart/backfillPlugin); a new source that
+// reaches for a constant instead fails right here.
+console.log("\nScenario 6 — no sync path may reach for a trailing default");
+const core = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "cli-core.ts"), "utf8");
+const syncBody = core.slice(core.indexOf("async function syncSourceInner"), core.indexOf("export async function syncAll"));
+const strayWindow = syncBody.match(/windowDays\([^)]*\)/g)?.join(", ") ?? "none";
+check(
+  `syncSourceInner holds no trailing-window constant (found: ${strayWindow})`,
+  !/windowDays\(\s*(opts\.days[^)]*?:\s*)?\d+\s*\)/.test(syncBody),
+);
+const viaSyncWindow = (syncBody.match(/syncWindow\(/g) ?? []).length;
+check(
+  `every sync branch goes through syncWindow (${viaSyncWindow} calls: github, whoop, plugins)`,
+  viaSyncWindow >= 3,
+);
+
 if (failures) {
   console.log(`\n✗ ${failures} check(s) failed.\n`);
   process.exit(1);

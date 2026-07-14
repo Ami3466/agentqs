@@ -67,7 +67,7 @@ import {
 import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
-import { importFile, resolveFilePath, wantsFullHistory } from "./importers/file-plugin";
+import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
 import { recordSyncRun } from "./sync-runs";
@@ -677,6 +677,40 @@ function maxIso(a: string, b: string): string {
   return a > b ? a : b;
 }
 
+/**
+ * WHERE A SOURCE'S HISTORY BEGINS — asked, never assumed. Walks back a year at a time
+ * calling `hasData(from, to)` until BACKFILL_EMPTY_CHUNKS in a row say no, and returns
+ * the earliest date that HAD something.
+ *
+ * This is the shared spine of every first import (backfillPlugin uses the same
+ * constants; WHOOP walks its own cycles the same way). A source that hardcodes a
+ * window instead is a source that silently truncates someone's life — GitHub did
+ * exactly that, on 90 days, forever.
+ */
+async function discoverStart(
+  hasData: (from: string, to: string) => Promise<boolean>,
+  to: string,
+  progress: (phase: string, pct: number) => void,
+): Promise<string> {
+  let cursor = to;
+  let empty = 0;
+  let chunks = 0;
+  let earliest = to;
+  while (cursor > BACKFILL_FLOOR && empty < BACKFILL_EMPTY_CHUNKS) {
+    const from = maxIso(shiftIso(cursor, -(BACKFILL_CHUNK_DAYS - 1)), BACKFILL_FLOOR);
+    chunks++;
+    progress(`fetching your {name} history — ${from.slice(0, 4)}`, Math.min(55, 15 + chunks * 4));
+    if (await hasData(from, cursor)) {
+      empty = 0;
+      earliest = from;
+    } else {
+      empty++;
+    }
+    cursor = shiftIso(from, -1);
+  }
+  return earliest;
+}
+
 function hasRecordBackedSource(rDir: string, id: string): boolean {
   try {
     const file = dailySourceFile(rDir, id);
@@ -878,7 +912,9 @@ export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
 
 async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
   const rDir = recordDir();
-  const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
+  // NO SHARED "LAST 90 DAYS" LIVES HERE ANY MORE. Every branch below asks syncWindow
+  // (first import → discover, otherwise → resume from the record), so a new source
+  // cannot reach for a trailing default by accident — there isn't one to reach for.
   const cfg = readConfig();
   const now = new Date().toISOString();
   const progress: JobProgress = opts.onProgress ?? (() => {});
@@ -889,15 +925,30 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     if (!token && !fetchImpl && !opts.login) {
       throw new Error("GitHub needs a token — pass --credential or set GITHUB_TOKEN.");
     }
-    progress("fetching commits from GitHub", 15);
-    const s = await importGithub({ token, login: opts.login, from: win.from, to: win.to, recordDir: rDir, fetchImpl });
+    // THE SAME RULE AS EVERY OTHER SOURCE: a first import discovers its range, a later
+    // one resumes. GitHub sat on a flat 90-day window, so years of commit history were
+    // never fetched even once — and never would be, because every later sync asked for
+    // the same 90 days again.
+    const gw = syncWindow(rDir, "github", { days: opts.days });
+    const gFrom = gw.firstImport
+      ? await discoverStart(
+          async (from, to) => {
+            const probe = await importGithub({ token, login: opts.login, from, to, recordDir: rDir, fetchImpl });
+            return probe.days.some((d) => d.commits > 0);
+          },
+          gw.to,
+          (phase, pct) => progress(phase.replace("{name}", "GitHub"), pct),
+        )
+      : gw.from;
+    progress("fetching commits from GitHub", 60);
+    const s = await importGithub({ token, login: opts.login, from: gFrom, to: gw.to, recordDir: rDir, fetchImpl });
     progress("merging into the record", 75);
     applySavedMerges(rDir); // keep accepted column merges merged on every sync
     progress("updating the cache", 88);
     const dailyRows = landSyncInCache(rDir, { sources: ["github"] });
     persistSync("github", opts.credential, now);
     return {
-      id: "github", name: "GitHub", from: win.from, to: win.to,
+      id: "github", name: "GitHub", from: gFrom, to: gw.to,
       days: s.days.filter((d) => d.commits > 0).length,
       metrics: ["commits"], cells: s.days.length, dailyRows, syncedAt: now,
     };
@@ -1083,11 +1134,13 @@ async function syncFileSourceInner(opts: {
     );
   }
   const rDir = recordDir();
-  // A one-shot lifetime export (Takeout JSON, Apple Health) defaults to ALL
-  // history — a rolling 90-day window would silently discard most of it.
-  const fullHistory = wantsFullHistory(importer, filePath);
+  // A FILE gets read WHOLE. It is finite, it is already on this disk, and there is no
+  // API to be polite to — clipping your own Chrome history to the last 90 days just
+  // throws away years that were sitting right there. (This used to apply only to
+  // "lifetime exports"; a local Chrome/Safari history DB got the 90-day window and
+  // silently truncated.) `--days N` still narrows it deliberately.
   const win = windowDays(opts.days && opts.days > 0 ? opts.days : 90);
-  const from = opts.days && opts.days > 0 ? win.from : fullHistory ? "0001-01-01" : win.from;
+  const from = opts.days && opts.days > 0 ? win.from : "0001-01-01";
   const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
   applySavedMerges(rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
