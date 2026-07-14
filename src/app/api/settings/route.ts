@@ -157,6 +157,26 @@ export async function POST(req: Request) {
     };
   }
 
+  // THE ZONE THE RECORD'S DAYS ARE COUNTED IN. Blank = follow this machine's clock,
+  // which on a hosted instance is the SERVER's — nothing to do with where the user
+  // lives, so their 9pm lands on tomorrow. See localDay in importers/plugin.ts.
+  if (typeof body.timezone === "string") {
+    const tz = body.timezone.trim();
+    if (!tz) {
+      delete cfg.timezone;
+    } else {
+      try {
+        new Intl.DateTimeFormat("en-CA", { timeZone: tz });
+      } catch {
+        return NextResponse.json(
+          { error: `Unknown timezone "${tz}". Use an IANA name, e.g. Asia/Jerusalem.` },
+          { status: 400 },
+        );
+      }
+      cfg.timezone = tz;
+    }
+  }
+
   // Appearance (persisted server-side too; client localStorage drives paint)
   if (body.theme === "light" || body.theme === "dark" || body.theme === "system") {
     cfg.theme = body.theme;

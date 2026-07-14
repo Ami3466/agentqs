@@ -1,5 +1,9 @@
 import fs from "fs";
-import { readConfig, type AppConfig } from "../config";
+import { readConfig, recordTimeZone, type AppConfig } from "../config";
+
+// The zone the record's days are counted in lives in config.ts (it IS a config value);
+// importers reach it from here, next to localDay, because that is where they use it.
+export { recordTimeZone };
 import {
   appendEvents,
   mergeDailyCsv,
@@ -464,13 +468,6 @@ export function iso(d: Date): string {
  * Sources that ship their own offset (Swarm's `timeZoneOffset`, Withings' `timezone`)
  * should use THAT — it is the truth about where the user actually was.
  */
-export function recordTimeZone(cfg: AppConfig | null = readConfig()): string {
-  try {
-    return cfg?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
 
 /** An instant → the calendar day it fell on, in `tz`. `en-CA` formats as YYYY-MM-DD. */
 export function localDay(instant: string | number | Date, tz: string = recordTimeZone()): string {
