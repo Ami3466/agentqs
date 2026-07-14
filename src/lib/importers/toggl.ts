@@ -1,5 +1,6 @@
 import {
   getJson,
+  windowChunks,
   inWindow,
   num,
   type DailyTable,
@@ -24,6 +25,8 @@ interface TogglEntry {
   duration?: number; // seconds; negative while running
 }
 
+/** Toggl will not answer a longer range in one request. */
+const MAX_RANGE_DAYS = 90;
 const API = "https://api.track.toggl.com/api/v9/me/time_entries";
 
 export function normalizeToggl(entries: TogglEntry[], from: string, to: string): DailyTable {
@@ -63,21 +66,28 @@ export const togglPlugin: ImporterPlugin = {
   unit: "hours",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = new URL(API);
-    url.searchParams.set("start_date", ctx.from);
-    url.searchParams.set("end_date", ctx.to);
+    // Toggl will not answer a range of many months in one request, and it does not
+    // paginate — it just returns what it feels like. Handing it a 365-day backfill
+    // chunk and counting whatever came back is how a year becomes a fortnight with no
+    // error anywhere. Ask in windows it will actually serve.
     const basic = Buffer.from(`${ctx.credential ?? ""}:api_token`).toString("base64");
-    let raw: unknown;
-    try {
-      raw = await getJson(
-        url.toString(),
-        { Authorization: `Basic ${basic}`, Accept: "application/json" },
-        fetchImpl,
-      );
-    } catch (e) {
-      throw new Error(`Toggl time entries → ${(e as Error).message}`);
+    const entries: TogglEntry[] = [];
+    for (const w of windowChunks(ctx.from, ctx.to, MAX_RANGE_DAYS)) {
+      const url = new URL(API);
+      url.searchParams.set("start_date", w.from);
+      url.searchParams.set("end_date", w.to);
+      let raw: unknown;
+      try {
+        raw = await getJson(
+          url.toString(),
+          { Authorization: `Basic ${basic}`, Accept: "application/json" },
+          fetchImpl,
+        );
+      } catch (e) {
+        throw new Error(`Toggl time entries (${w.from}..${w.to}) → ${(e as Error).message}`);
+      }
+      entries.push(...(Array.isArray(raw) ? (raw as TogglEntry[]) : []));
     }
-    const entries = Array.isArray(raw) ? (raw as TogglEntry[]) : [];
     return { table: normalizeToggl(entries, ctx.from, ctx.to), meta: { pulledEntries: entries.length } };
   },
 };

@@ -1,5 +1,7 @@
 import {
   getJson,
+  pageAll,
+  windowChunks,
   inWindow,
   type DailyTable,
   type ImporterContext,
@@ -15,7 +17,8 @@ import {
  *       ?since=<from>T00:00:00Z&until=<to>T23:59:59Z&limit=200
  *
  * Auth is an API token (bearer, from Settings → Integrations). Pages chain via
- * `next_cursor`; the window is capped by Todoist at ~3 months per request.
+ * `next_cursor`; Todoist caps a request at ~3 months, so a longer window is asked
+ * for in 90-day chunks rather than handed over whole and silently clamped.
  * Completed items are bucketed by their completion day into a per-day count.
  */
 
@@ -29,7 +32,8 @@ interface TodoistResp {
 
 const API = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date";
 const PAGE_LIMIT = 200;
-const MAX_PAGES = 25; // 5000 completions per window — a runaway guard
+/** Todoist will not answer a range longer than this in one request. */
+const MAX_RANGE_DAYS = 90;
 
 export function normalizeTodoist(items: TodoistItem[], from: string, to: string): DailyTable {
   const done = new Map<string, number>();
@@ -65,28 +69,32 @@ export const todoistPlugin: ImporterPlugin = {
   unit: "tasks",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
+    // Todoist REFUSES a range longer than ~3 months — this file said so in its own
+    // header and then handed the API a 365-day backfill chunk regardless, so a first
+    // import either 400'd outright or came back quietly clamped. Ask in mouthfuls it
+    // will accept, and follow every cursor within each.
     const items: TodoistItem[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const url = new URL(API);
-      url.searchParams.set("since", `${ctx.from}T00:00:00Z`);
-      url.searchParams.set("until", `${ctx.to}T23:59:59Z`);
-      url.searchParams.set("limit", String(PAGE_LIMIT));
-      if (cursor) url.searchParams.set("cursor", cursor);
-      let raw: unknown;
-      try {
-        raw = await getJson(
-          url.toString(),
-          { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
-          fetchImpl,
-        );
-      } catch (e) {
-        throw new Error(`Todoist completed → ${(e as Error).message}`);
-      }
-      const resp = raw as TodoistResp;
-      items.push(...(resp?.items ?? []));
-      if (!resp?.next_cursor) break;
-      cursor = resp.next_cursor;
+    for (const w of windowChunks(ctx.from, ctx.to, MAX_RANGE_DAYS)) {
+      const batch = await pageAll<TodoistItem>(`Todoist completed (${w.from}..${w.to})`, async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("since", `${w.from}T00:00:00Z`);
+        url.searchParams.set("until", `${w.to}T23:59:59Z`);
+        url.searchParams.set("limit", String(PAGE_LIMIT));
+        if (cursor) url.searchParams.set("cursor", String(cursor));
+        let raw: unknown;
+        try {
+          raw = await getJson(
+            url.toString(),
+            { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
+            fetchImpl,
+          );
+        } catch (e) {
+          throw new Error(`Todoist completed → ${(e as Error).message}`);
+        }
+        const resp = raw as TodoistResp;
+        return { items: resp?.items ?? [], next: resp?.next_cursor ?? null };
+      });
+      items.push(...batch);
     }
     return { table: normalizeTodoist(items, ctx.from, ctx.to), meta: { pulledItems: items.length } };
   },

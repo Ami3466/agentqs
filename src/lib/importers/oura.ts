@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   inWindow,
   num,
   type DailyTable,
@@ -27,6 +28,8 @@ interface OuraDay {
 }
 interface OuraResp {
   data?: OuraDay[];
+  /** The rest of the days. Never read, so a long window lost its tail. */
+  next_token?: string;
 }
 
 const API = "https://api.ouraring.com/v2/usercollection/daily_readiness";
@@ -67,20 +70,25 @@ export const ouraPlugin: ImporterPlugin = {
   unit: "readiness",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = new URL(API);
-    url.searchParams.set("start_date", ctx.from);
-    url.searchParams.set("end_date", ctx.to);
-    let raw: unknown;
+    // Oura pages with next_token. A 365-day chunk exceeds one page, and reading only
+    // the first landed a fraction of the year while the chunk still looked healthy.
+    let days: OuraDay[];
     try {
-      raw = await getJson(
-        url.toString(),
-        { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
-        fetchImpl,
-      );
+      days = await pageAll<OuraDay>("Oura daily readiness", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("start_date", ctx.from);
+        url.searchParams.set("end_date", ctx.to);
+        if (cursor) url.searchParams.set("next_token", String(cursor));
+        const raw = (await getJson(
+          url.toString(),
+          { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
+          fetchImpl,
+        )) as OuraResp;
+        return { items: raw?.data ?? [], next: raw?.next_token ?? null };
+      });
     } catch (e) {
       throw new Error(`Oura daily readiness → ${(e as Error).message}`);
     }
-    const days = (raw as OuraResp)?.data ?? [];
     return { table: normalizeOura(days, ctx.from, ctx.to), meta: { pulledDays: days.length } };
   },
 };

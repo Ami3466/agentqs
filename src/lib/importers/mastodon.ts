@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   inWindow,
   splitCredential,
   type DailyTable,
@@ -25,8 +26,12 @@ interface Account {
   id?: string;
 }
 interface Status {
+  /** The paging cursor (max_id). Never read, so we never asked for page 2. */
+  id?: string;
   created_at?: string;
 }
+
+const PER_PAGE = 40;
 
 export function normalizeMastodon(statuses: Status[], from: string, to: string): DailyTable {
   const posts = new Map<string, number>();
@@ -84,17 +89,26 @@ export const mastodonPlugin: ImporterPlugin = {
       throw new Error(`Mastodon verify_credentials → ${(e as Error).message}`);
     }
     if (!account?.id) throw new Error("Mastodon verify_credentials returned no account id.");
-    let statuses: Status[];
+    // Statuses are id-paged (max_id), 40 at a time, newest first. One page meant an
+    // active poster kept the last ~8 days, forever: every older chunk filtered to zero
+    // and the backfill walk gave up after two. Page back until we fall out of the
+    // window and the history is actually reachable.
+    let list: Status[];
     try {
-      statuses = (await getJson(
-        `https://${host}/api/v1/accounts/${account.id}/statuses?limit=40`,
-        auth,
-        fetchImpl,
-      )) as Status[];
+      list = await pageAll<Status>("Mastodon statuses", async (cursor) => {
+        const url = new URL(`https://${host}/api/v1/accounts/${account.id}/statuses`);
+        url.searchParams.set("limit", String(PER_PAGE));
+        if (cursor) url.searchParams.set("max_id", String(cursor));
+        const raw = (await getJson(url.toString(), auth, fetchImpl)) as Status[];
+        const batch = Array.isArray(raw) ? raw : [];
+        const last = batch.at(-1);
+        const past = (last?.created_at ?? "").slice(0, 10) < ctx.from;
+        const more = batch.length === PER_PAGE && !past && Boolean(last?.id);
+        return { items: batch, next: more ? String(last!.id) : null };
+      });
     } catch (e) {
       throw new Error(`Mastodon statuses → ${(e as Error).message}`);
     }
-    const list = Array.isArray(statuses) ? statuses : [];
     return { table: normalizeMastodon(list, ctx.from, ctx.to), meta: { pulled: list.length } };
   },
 };

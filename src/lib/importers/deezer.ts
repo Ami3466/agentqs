@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   inWindow,
   type DailyTable,
   type ImporterContext,
@@ -26,6 +27,7 @@ interface DeezerResp {
   error?: { type?: string; message?: string; code?: number };
 }
 
+const PER_PAGE = 200;
 const API = "https://api.deezer.com/user/me/history";
 
 export function normalizeDeezer(plays: DeezerPlay[], from: string, to: string): DailyTable {
@@ -69,22 +71,36 @@ export const deezerPlugin: ImporterPlugin = {
   unit: "plays",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = new URL(API);
-    url.searchParams.set("access_token", ctx.credential ?? "");
-    url.searchParams.set("limit", "200");
-    let raw: unknown;
+    // Deezer's history takes no date range but it DOES page (`index`), newest first.
+    // Reading one page meant the last ~200 plays were the only history that existed —
+    // every older backfill chunk filtered to zero and the walk gave up. Paging back
+    // until the plays fall out of the window makes the real history reachable.
+    let plays: DeezerPlay[];
     try {
-      raw = await getJson(url.toString(), { Accept: "application/json" }, fetchImpl);
+      plays = await pageAll<DeezerPlay>("Deezer history", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("access_token", ctx.credential ?? "");
+        url.searchParams.set("limit", String(PER_PAGE));
+        if (cursor) url.searchParams.set("index", String(cursor));
+        const raw = (await getJson(url.toString(), { Accept: "application/json" }, fetchImpl)) as DeezerResp;
+        // A bad token is HTTP 200 + {error} — without this check it would read as
+        // a successful sync with zero plays.
+        const err = raw?.error;
+        if (err) {
+          throw new Error(`${err.type ?? "error"} ${err.code ?? ""}: ${err.message ?? "request failed"}`);
+        }
+        const batch = raw?.data ?? [];
+        const index = Number(cursor ?? 0);
+        // Newest-first: once the page's OLDEST play predates the window, there is
+        // nothing left here for us.
+        const oldest = batch.at(-1)?.timestamp;
+        const past = typeof oldest === "number" && new Date(oldest * 1000).toISOString().slice(0, 10) < ctx.from;
+        const more = batch.length === PER_PAGE && !past;
+        return { items: batch, next: more ? index + PER_PAGE : null };
+      });
     } catch (e) {
       throw new Error(`Deezer history → ${(e as Error).message}`);
     }
-    // A bad token is HTTP 200 + {error} — without this check it would read as
-    // a successful sync with zero plays.
-    const err = (raw as DeezerResp)?.error;
-    if (err) {
-      throw new Error(`Deezer history → ${err.type ?? "error"} ${err.code ?? ""}: ${err.message ?? "request failed"}`);
-    }
-    const plays = (raw as DeezerResp)?.data ?? [];
     return { table: normalizeDeezer(plays, ctx.from, ctx.to), meta: { pulledPlays: plays.length } };
   },
 };

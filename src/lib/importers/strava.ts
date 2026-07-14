@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   inWindow,
   num,
   unixSec,
@@ -26,6 +27,7 @@ interface StravaActivity {
 }
 
 const API = "https://www.strava.com/api/v3/athlete/activities";
+const PER_PAGE = 200;
 
 export function normalizeStrava(items: StravaActivity[], from: string, to: string): DailyTable {
   const count = new Map<string, number>();
@@ -77,21 +79,31 @@ export const stravaPlugin: ImporterPlugin = {
   unit: "activities",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = new URL(API);
-    url.searchParams.set("after", String(unixSec(ctx.from)));
-    url.searchParams.set("before", String(unixSec(ctx.to, true)));
-    url.searchParams.set("per_page", "200");
-    let raw: unknown;
+    // Strava serves 200 activities a page, NEWEST FIRST. We used to read page 1 and
+    // stop, so an athlete training daily (~365 activities a year) lost the oldest ~165
+    // days of every single year — January through August simply did not exist, in a
+    // sync that reported ok.
+    let items: StravaActivity[];
     try {
-      raw = await getJson(
-        url.toString(),
-        { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
-        fetchImpl,
-      );
+      items = await pageAll<StravaActivity>("Strava activities", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("after", String(unixSec(ctx.from)));
+        url.searchParams.set("before", String(unixSec(ctx.to, true)));
+        url.searchParams.set("per_page", String(PER_PAGE));
+        url.searchParams.set("page", String(cursor ?? 1));
+        const raw = await getJson(
+          url.toString(),
+          { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
+          fetchImpl,
+        );
+        const batch = Array.isArray(raw) ? (raw as StravaActivity[]) : [];
+        // A short page is the end. Strava has no total, so the page itself says so.
+        const page = Number(cursor ?? 1);
+        return { items: batch, next: batch.length < PER_PAGE ? null : page + 1 };
+      });
     } catch (e) {
       throw new Error(`Strava activities → ${(e as Error).message}`);
     }
-    const items = Array.isArray(raw) ? (raw as StravaActivity[]) : [];
     return { table: normalizeStrava(items, ctx.from, ctx.to), meta: { pulledActivities: items.length } };
   },
 };

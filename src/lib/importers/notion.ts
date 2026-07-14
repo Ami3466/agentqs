@@ -1,5 +1,6 @@
 import {
   inWindow,
+  pageAll,
   postJson,
   type DailyTable,
   type ImporterContext,
@@ -24,6 +25,9 @@ interface NotionResult {
 }
 interface NotionResp {
   results?: NotionResult[];
+  /** The rest of the pages. Never read, so Notion history could never arrive. */
+  has_more?: boolean;
+  next_cursor?: string | null;
 }
 
 const API = "https://api.notion.com/v1/search";
@@ -69,18 +73,33 @@ export const notionPlugin: ImporterPlugin = {
   unit: "pages",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    let raw: unknown;
+    // Search pages with has_more/next_cursor. Reading the first 100 most-recently-
+    // edited pages made history unreachable BY CONSTRUCTION: every older backfill
+    // chunk got the same 100 pages, filtered them all out, and the walk stopped after
+    // two empty chunks. Following the cursor is the only way older edits ever arrive.
+    let results: NotionResult[];
     try {
-      raw = await postJson(
-        API,
-        { Authorization: `Bearer ${ctx.credential ?? ""}`, "Notion-Version": VERSION },
-        { sort: { direction: "descending", timestamp: "last_edited_time" }, page_size: 100 },
-        fetchImpl,
-      );
+      results = await pageAll<NotionResult>("Notion search", async (cursor) => {
+        const raw = (await postJson(
+          API,
+          { Authorization: `Bearer ${ctx.credential ?? ""}`, "Notion-Version": VERSION },
+          {
+            sort: { direction: "descending", timestamp: "last_edited_time" },
+            page_size: 100,
+            ...(cursor ? { start_cursor: String(cursor) } : {}),
+          },
+          fetchImpl,
+        )) as NotionResp;
+        const batch = raw?.results ?? [];
+        // Descending by edit time: once a page's edits predate the window, so does
+        // everything after it.
+        const oldest = batch.at(-1)?.last_edited_time ?? "";
+        const past = Boolean(oldest) && oldest.slice(0, 10) < ctx.from;
+        return { items: batch, next: raw?.has_more && !past ? (raw?.next_cursor ?? null) : null };
+      });
     } catch (e) {
       throw new Error(`Notion search → ${(e as Error).message}`);
     }
-    const results = (raw as NotionResp)?.results ?? [];
     return { table: normalizeNotion(results, ctx.from, ctx.to), meta: { pulledPages: results.length } };
   },
 };
