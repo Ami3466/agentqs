@@ -152,6 +152,37 @@ function tabForHash(hash: string): string | null {
 
 /** One settings topic: icon chip + title + description over an always-open body.
  *  `action` renders on the right of the header (status pills, quick buttons). */
+/**
+ * Every IANA zone the runtime knows. `Intl.supportedValuesOf` is the browser's own list,
+ * so it stays right as the world's timezones change; the fallback is only for a runtime
+ * old enough not to have it, and still covers the zones people actually live in.
+ */
+const TIMEZONES: string[] = (() => {
+  try {
+    const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
+    if (supported) return supported("timeZone");
+  } catch {
+    /* fall through */
+  }
+  return [
+    "UTC",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Paris",
+    "Asia/Jerusalem",
+    "Asia/Dubai",
+    "Asia/Kolkata",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Sao_Paulo",
+  ];
+})();
+
 function Section({
   id,
   title,
@@ -214,6 +245,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   }
 
   const [username, setUsername] = useState(config.username);
+  // "" = follow this machine's clock. On a hosted instance that is the SERVER's clock,
+  // which is why this is worth showing rather than hiding behind a CLI flag.
+  const [timezone, setTimezone] = useState(config.timezone);
   const [password, setPassword] = useState("");
 
   // Providers LIST — add many; each is label + key + base over a known type.
@@ -693,6 +727,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
 
     const body: Record<string, unknown> = {
       username: username.trim(),
+      timezone: timezone.trim(),
       theme,
       providers: providers.map((p) => ({
         id: p.id,
@@ -790,7 +825,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       {tab === "general" ? (
       <>
       {/* Profile */}
-      <Section title="Profile" icon={User} desc="Login email and password.">
+      <Section title="Profile" icon={User} desc="Login email, password, and the timezone your days are counted in.">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Email" htmlFor="username">
             <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
@@ -804,6 +839,31 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               placeholder="••••••••"
               autoComplete="new-password"
             />
+          </Field>
+          {/*
+            A day in your record is a day in your LIFE, not a slice of UTC. Get this
+            wrong and your 9pm lands on tomorrow — and every correlation over those days
+            compares the wrong ones. It matters most exactly where it is least visible:
+            a hosted instance follows the SERVER's clock, which has nothing to do with
+            where you live.
+          */}
+          <Field
+            label="Timezone"
+            htmlFor="timezone"
+            hint={
+              timezone
+                ? "The day an evening play, check-in or meeting is filed under."
+                : `Following this machine — currently ${config.timezoneResolved}. On a hosted instance that is the server's clock, not yours.`
+            }
+          >
+            <Select id="timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+              <option value="">Automatic ({config.timezoneResolved})</option>
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </Select>
           </Field>
         </div>
       </Section>

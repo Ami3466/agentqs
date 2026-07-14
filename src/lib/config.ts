@@ -362,6 +362,11 @@ export interface PublicProvider {
 /** Safe projection for the client — no password hash, no raw keys. */
 export interface PublicConfig {
   username: string;
+  /** The zone the record's DAYS are counted in. Empty = follow this machine's clock. */
+  timezone: string;
+  /** What that resolves to right now — so the form can show what "automatic" means, and
+   *  a hosted user can SEE that their days are being counted in UTC. */
+  timezoneResolved: string;
   providers: PublicProvider[];
   selectedModel: ModelSelection | null;
   embedding: {
@@ -396,6 +401,22 @@ export interface PublicConfig {
   createdAt: string;
 }
 
+
+/**
+ * THE TIMEZONE THE RECORD'S DAYS ARE COUNTED IN — this machine's unless overridden.
+ *
+ * A day in the record is a day in someone's LIFE, not a slice of UTC. Set it on a hosted
+ * instance, whose server clock has nothing to do with where the user lives. See localDay
+ * in importers/plugin.ts.
+ */
+export function recordTimeZone(cfg: AppConfig | null = readConfig()): string {
+  try {
+    return cfg?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 export function publicConfig(cfg: AppConfig): PublicConfig {
   const providers = effectiveProviders(cfg).map((p) => ({
     id: p.id,
@@ -413,6 +434,8 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
     (cfg.llmProvider && cfg.model ? { providerId: cfg.llmProvider, model: cfg.model } : null);
   return {
     username: cfg.username,
+    timezone: cfg.timezone ?? "",
+    timezoneResolved: recordTimeZone(cfg),
     providers,
     selectedModel,
     embedding: {
