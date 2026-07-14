@@ -54,8 +54,18 @@ export function csvLossText(s: Structured): string {
  *  is rejected outright instead. */
 export function notifyCsvLoss(rDir: string, hint: string | undefined, s: Structured): number {
   const loss = csvLossText(s);
-  if (!loss) return 0;
-  const text = `CSV import${hint ? ` "${hint}"` : ""} did NOT fully land: ${loss}. The other rows merged; fix the file and re-import to recover these.`;
+  // An ambiguous date column is NOT a loss — every row landed. It is a GUESS, and the
+  // difference matters: "did not fully land, fix and re-import" would be a lie, and a
+  // warning that misdescribes itself is a warning nobody reads twice. But an unremarked
+  // guess silently misfiles half a European year (05/07 is 5 July, and it landed on 7
+  // May), so it still has to be said out loud — just truthfully.
+  const guess = s.ambiguousDateOrder
+    ? `its dates are written 05/07-style and the file never says whether that is D/M or M/D (no value is over 12), so they were read as US M/D — if this file is European, every date in it is wrong`
+    : "";
+  if (!loss && !guess) return 0;
+  const text = loss
+    ? `CSV import${hint ? ` "${hint}"` : ""} did NOT fully land: ${loss}. The other rows merged; fix the file and re-import to recover these.${guess ? ` Also: ${guess}.` : ""}`
+    : `CSV import${hint ? ` "${hint}"` : ""} landed in full, but ${guess}.`;
   const id = `csvloss-${crypto.createHash("sha256").update(hint ?? text).digest("hex").slice(0, 16)}`;
   const item = {
     text,

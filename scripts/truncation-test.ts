@@ -19,7 +19,7 @@ import os from "os";
 import path from "path";
 
 import { mergeDailyCsv } from "../src/lib/record";
-import { structureCsv } from "../src/lib/structure";
+import { normalizeDate, structureCsv } from "../src/lib/structure";
 import { fetchGithubCommits, type FetchLike } from "../src/lib/importers/github";
 import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
 import { PAGING, pagingFetch } from "./paging-fixtures";
@@ -261,6 +261,37 @@ async function main() {
     landed.includes("2026-06-01") && landed.includes("2026-07-10"),
   );
   fs.rmSync(gapDir, { recursive: true, force: true });
+
+  // ---- 5b. A DATE IS NOT SILENTLY REINTERPRETED -------------------------------
+  // Every slashed date was read as US M/D. So a European bank/gym/health export lost
+  // half its rows to a silent misfiling — 05/07/2026 is 5 July, and it landed on 7 May
+  // — while the other half (31/01/2026, day > 12) became "2026-31-01", an impossible
+  // date that merged into the record anyway and sorted into the future of the journal.
+  // The import reported "structured N cells", skippedRows: 0. Nothing said a word.
+  //
+  // A single cell cannot be read. A COLUMN gives itself away.
+  console.log("\na date column is read, not assumed:");
+  const euCsv = structureCsv("date,amount\n31/01/2026,10\n05/07/2026,25\n")!;
+  check(
+    `one value over 12 proves the column is day-first (${euCsv.dates.join(" ")})`,
+    euCsv.dateOrder === "dmy" && euCsv.dates.includes("2026-07-05"),
+    euCsv.dates.join(" "),
+  );
+  const usCsv = structureCsv("date,amount\n01/31/2026,10\n05/07/2026,25\n")!;
+  check(
+    `…and a US column still reads as US (${usCsv.dates.join(" ")})`,
+    usCsv.dateOrder === "mdy" && usCsv.dates.includes("2026-05-07"),
+    usCsv.dates.join(" "),
+  );
+  const ambCsv = structureCsv("date,amount\n05/07/2026,10\n03/04/2026,25\n")!;
+  check(
+    "a genuinely undecidable column SAYS it guessed, instead of deciding in silence",
+    ambCsv.ambiguousDateOrder === true,
+  );
+  check(
+    "an impossible date never lands (31/31/2026 used to merge as 2026-31-31)",
+    normalizeDate("31/31/2026") === null && normalizeDate("2026-13-01") === null,
+  );
 
   // ---- 6. NO FACE MAY REACH FOR A TRAILING WINDOW ----------------------------
   // The rule (CLAUDE.md): a file is finite and already on your disk, so it is read

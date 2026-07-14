@@ -64,6 +64,7 @@ import {
   type PluginImportSummary,
 } from "./importers/plugin";
 import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
+import { googlePluginOn } from "./google";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
 import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
@@ -365,11 +366,18 @@ export async function testSourceCredential(id: string, credential?: string): Pro
   // before the user opts in is fine — syncing with it still requires connect.
   // An OAuth grant tests with a freshly minted token, like a real sync would.
   const cfg = readConfig();
+  // TEST THE CREDENTIAL A SYNC WOULD ACTUALLY USE. This used to gate on
+  // `sourceOAuth[instanceId]` — the RAW instance slot, not `oauthGrantKey` — so Google
+  // never matched (its grant lives at `sourceOAuth.google`, shared by Calendar and
+  // Gmail). It took the stale branch, handed Google an access token that expires in an
+  // hour (or the refresh token itself, as a Bearer), and answered "401 Invalid
+  // Credentials". Every Google test more than an hour after connecting failed, on a
+  // connection that was perfectly healthy — and sent people back through the whole
+  // OAuth dance for nothing. `resolveSyncCredentialFresh` already falls back to
+  // env/sourceCreds when there is no grant, so it is the ONLY branch needed.
   const cred = credential?.trim()
     ? credential.trim()
-    : cfg?.sourceOAuth?.[instanceId]
-      ? await resolveSyncCredentialFresh(plugin, undefined, cfg, instanceId) // grant → plugin's own credential format
-      : resolveCredential(plugin, undefined, cfg, instanceId);
+    : await resolveSyncCredentialFresh(plugin, undefined, cfg, instanceId);
   if (plugin.requiresCredential && !cred) {
     throw new Error(`${plugin.name} needs a ${plugin.credentialLabel} to test.`);
   }
@@ -1056,6 +1064,19 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     throw new Error(`Unknown API source "${opts.id}". Try: github, whoop, ${SOURCE_PLUGINS.map((p) => p.id).join(", ")}`);
   }
   const { plugin, instanceId } = inst;
+  // AN UNTICKED PRODUCT REFUSES TO SYNC. The tick says what the one Google key is
+  // allowed to bring in, and the ONLY place it was enforced was the `due` flag — so
+  // the cron respected it and every other door ignored it. Untick Calendar and
+  // `agentqs sync` (no --source) or POST /api/import/gcal would go on pulling your
+  // calendar anyway. Gmail happened to refuse on its own ("nothing checked"); Calendar
+  // had no such guard, so the rule held for exactly one of the two products it governs.
+  // It belongs HERE, in the one place every face goes through.
+  if (!googlePluginOn(cfg, plugin.id)) {
+    throw new Error(
+      `${plugin.name} is switched off under Google on the Pipeline tab, so it will not sync. ` +
+        `Tick it there (CLI: agentqs google enable ${plugin.id === "gcal" ? "calendar" : "gmail.inbox"}).`,
+    );
+  }
   const fetchImpl = opts.fixture ? fixtureFetch(opts.fixture) : undefined;
   // Gated: a discovered desktop-app token only syncs after the user opted in.
   // An OAuth grant mints a FRESH access token here (refreshed + persisted), so
@@ -1082,6 +1103,20 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
           progress(pw.firstImport ? `fetching your ${plugin.name} history` : `fetching your ${plugin.name} data`, 15);
           return importPlugin(plugin, { credential, from: pw.from, to: pw.to, fetchImpl }, rDir, instanceId);
         })();
+  // A FIRST IMPORT THAT LANDS NOTHING IS NOT A SUCCESS. A later sync landing zero days
+  // is ordinary — nothing new since yesterday. But a source with an EMPTY record that
+  // just walked its whole history back to 2000 and came home with nothing has not found
+  // a quiet life; something is wrong. A revoked Calendar scope answers `200 {items:[]}`,
+  // so every sync landed zero rows, the ledger went green, the row said "synced 2
+  // minutes ago", and the calendar quietly stopped recording — for months. Only WHOOP
+  // ever threw here; every other source called it ok.
+  if (pw.firstImport && summary.daysWithData === 0) {
+    throw new Error(
+      `${plugin.name} is connected but returned NO data for any date between ${summary.from} and ${summary.to}. ` +
+        "That is not an empty history — a working source always has something. Check that the account is the right " +
+        "one and that the app still has permission (re-authorize from the Pipeline tab).",
+    );
+  }
   progress("merging into the record", 75);
   applySavedMerges(rDir);
   progress("updating the cache", 88);
