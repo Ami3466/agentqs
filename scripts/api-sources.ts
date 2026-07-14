@@ -41,6 +41,9 @@ async function main() {
     theme: "system",
     createdAt: new Date().toISOString(),
     backup: { passphrase: "fixture-pass" },
+    // Gmail only fetches what is TICKED (an unticked half must never land a column),
+    // so a fixture run that leaves it at the default would import nothing at all.
+    googleProducts: ["calendar", "gmail.inbox", "gmail.sent"],
   } as AppConfig);
 
   console.log(`\nAPI-first — driving ${SOURCE_PLUGINS.length} API sources through the real import path\n`);

@@ -47,6 +47,9 @@ async function main() {
     theme: "system",
     createdAt: new Date().toISOString(),
     backup: { passphrase: "fixture-pass" },
+    // Gmail only fetches what is TICKED, so a fixture run on the default (Calendar
+    // only, mail off) would refuse before it ever reached the API.
+    googleProducts: ["calendar", "gmail.inbox", "gmail.sent"],
   } as AppConfig);
 
   console.log("\nSeeding one daily record from 4 live sources + WHOOP (unofficial)…\n");

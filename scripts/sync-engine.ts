@@ -15,6 +15,8 @@ import path from "path";
 import { buildSources } from "../src/lib/source-registry";
 import { syncWindow } from "../src/lib/cli-core";
 import { isDue, isStale } from "../src/lib/sources";
+import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
+import { gmailPlugin } from "../src/lib/importers/gmail";
 import type { AppConfig } from "../src/lib/config";
 
 let failures = 0;
@@ -134,10 +136,28 @@ const first = syncWindow(wRoot, "gcal", { today });
 check(`an empty source is a first import — it discovers its range (${first.from} → ${first.to})`,
   first.firstImport === true && first.to === "2026-07-13");
 
-// A plugin bounded by its OWN API (Gmail counts one day at a time, max 400 per run)
-// asks for exactly what one run can carry, not five years it would silently trim.
-const spot = syncWindow(wRoot, "gmail", { backfillDays: 400, today });
-check(`an API-capped source asks only for what it can serve (${spot.from})`, spot.from === "2025-06-09");
+// `backfillDays` is the escape hatch for an API with a REAL hard ceiling: it asks for
+// exactly what one run can serve, instead of a window the API would silently trim.
+const capped = syncWindow(wRoot, "capped_api", { backfillDays: 400, today });
+check(`an API-capped source asks only for what it can serve (${capped.from})`, capped.from === "2025-06-09");
+
+// …and NO SHIPPED PLUGIN may reach for it to avoid work. Gmail did: counting one day
+// at a time is slow, so it declared a 400-day ceiling — and that ceiling was permanent.
+// The first import took the last 400 days, every later sync resumed from the NEWEST
+// recorded day, and `--days 3000` was sliced back to the same recent 400. The record
+// simply reported that your mail began the year you connected it. Slowness is a reason
+// to fan out and to warn, never a reason to decide where someone's history starts.
+for (const plugin of SOURCE_PLUGINS) {
+  check(
+    `${plugin.id} declares no backfill ceiling — it walks until the source runs dry`,
+    plugin.backfillDays === undefined,
+  );
+}
+const gmailFirst = syncWindow(wRoot, "gmail", { backfillDays: gmailPlugin.backfillDays, today });
+check(
+  "a first Gmail import is a discovering walk, not a 400-day slice",
+  gmailFirst.firstImport === true && gmailFirst.from > "2025-06-09",
+);
 
 // Once the record holds data, a sync RESUMES from it (with a week of overlap) — it
 // must never slide back to a trailing window and re-fetch the same 90 days forever.
