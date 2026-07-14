@@ -10,6 +10,7 @@ import {
   isGoogleProduct,
 } from "./google";
 import { pluginInstanceById } from "./importers/registry";
+import { readOAuthApp } from "./oauth";
 import { connectionState } from "./importers/plugin";
 import { recordDir } from "./paths";
 
@@ -90,7 +91,14 @@ export function googleState(
 
   return {
     connected,
-    clientIdSet: Boolean(g?.clientId),
+    // THE APP KEY LIVES ON THE PROVIDER, NOT THE GRANT. This read `g.clientId` — the
+    // grant — but the modern key is saved at `config.oauthApps.google` (readOAuthApp).
+    // So "the app credentials are saved but the dance never finished", which is exactly
+    // what this field is documented to mean, could NEVER be true for a non-legacy user:
+    // save the Google key, don't sign in, and the card reported no key at all. Same
+    // class as the Trakt bug that read client creds off the grant and silently produced
+    // "undefined:<token>".
+    clientIdSet: Boolean(readOAuthApp(cfg, "gcal")?.clientId || g?.clientId),
     products,
     missingProducts,
     needsAuthorize: connected && missingProducts.length > 0,

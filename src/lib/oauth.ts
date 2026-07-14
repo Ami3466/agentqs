@@ -299,7 +299,13 @@ export async function freshOAuthToken(
 ): Promise<string | undefined> {
   const { grant, key } = readGrant(cfg, instanceId);
   if (!grant?.accessToken && !grant?.refreshToken) return undefined;
-  const valid = grant.accessToken && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now());
+  // A GRANT WITH NO EXPIRY IS NOT VALID FOREVER. A provider that omits `expires_in` left
+  // `expiresAt` unset, and this treated that as "never expires" — so the stored access
+  // token was used until it died, and the sync 401'd instead of simply refreshing, on a
+  // connection that was perfectly healthy. If we cannot prove a token is still good and
+  // we hold a refresh token, refresh: it costs one request and it always works.
+  const provenFresh = Boolean(grant.expiresAt) && Date.parse(grant.expiresAt!) > Date.now();
+  const valid = grant.accessToken && (provenFresh || !grant.refreshToken);
   if (valid) return grant.accessToken;
   const { plugin, o } = oauthPlugin(instanceId);
   if (!grant.refreshToken) {

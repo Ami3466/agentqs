@@ -7,7 +7,7 @@ import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
 import { pluginInstanceById, pluginInstanceName, type PluginInstance } from "@/lib/importers/registry";
 import { readOAuthApp } from "@/lib/oauth";
-import { connectionState, resolveSyncCredential } from "@/lib/importers/plugin";
+import { connectionState, oauthGrantKey, resolveSyncCredential } from "@/lib/importers/plugin";
 import { readSyncRuns } from "@/lib/sync-runs";
 import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
 import { wipeDemoOnImport } from "@/lib/demo";
@@ -52,9 +52,17 @@ function status({ plugin, instanceId }: PluginInstance) {
     oauth: plugin.oauth
       ? {
           supported: true,
-          authorized: Boolean(
-            cfg?.sourceOAuth?.[instanceId]?.refreshToken || cfg?.sourceOAuth?.[instanceId]?.accessToken,
-          ),
+          // THE SHARED GRANT, not the raw instance slot. Google's grant lives at
+          // `sourceOAuth.google` (Calendar and Gmail are one key), so reading
+          // `sourceOAuth["gcal"]` found nothing and this answered `authorized: false`
+          // for a fully authorized Google — in the same JSON that said
+          // `connected: true`, because connectionState resolves it correctly. Two
+          // fields, one account, opposite answers.
+          authorized: (() => {
+            const key = oauthGrantKey(plugin, instanceId);
+            const g = cfg?.sourceOAuth?.[key] ?? cfg?.sourceOAuth?.[instanceId];
+            return Boolean(g?.refreshToken || g?.accessToken);
+          })(),
           // The registered APP — saved once per provider and reused by every account.
           // With a key on file the form is a Sign-in button, not a paperwork re-run.
           appSaved: Boolean(readOAuthApp(cfg, instanceId)),
