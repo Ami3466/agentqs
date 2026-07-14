@@ -293,6 +293,34 @@ async function main() {
     normalizeDate("31/31/2026") === null && normalizeDate("2026-13-01") === null,
   );
 
+  // ---- 5c. AN INTERRUPTED WALK IS NOT A FINISHED ONE --------------------------
+  // The walk merges each year as it lands, and "is this a first import?" meant "is the
+  // record empty?". So a twelve-year walk that died on chunk 2 left last year's rows
+  // behind — and the NEXT sync saw rows, concluded the history was already imported,
+  // topped up the last 7 days and reported ok. The other eleven years were never
+  // fetched again by ANY code path. An interrupted backfill looked exactly like a
+  // finished one.
+  console.log("\na walk that dies halfway is resumed, not abandoned:");
+  const rDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-resume-"));
+  process.env.AGENTQS_DATA_DIR = rDir2;
+  fs.mkdirSync(path.join(rDir2, "record", "daily"), { recursive: true });
+  const { readBackfillState, writeBackfillState } = await import("../src/lib/sync-runs");
+
+  check(
+    "a source that has never walked is not marked done",
+    readBackfillState("gcal").done !== true,
+  );
+  // A walk that got to 2019 and died leaves its cursor behind…
+  writeBackfillState("gcal", { cursor: "2019-03-01" });
+  check(
+    "…so the record knows exactly where to pick it up",
+    readBackfillState("gcal").cursor === "2019-03-01" && readBackfillState("gcal").done !== true,
+  );
+  // …and only reaching the floor marks it finished.
+  writeBackfillState("gcal", { cursor: undefined, done: true, at: "2026-07-14T00:00:00Z" });
+  check("only a walk that reaches the floor is done", readBackfillState("gcal").done === true);
+  fs.rmSync(rDir2, { recursive: true, force: true });
+
   // ---- 6. NO FACE MAY REACH FOR A TRAILING WINDOW ----------------------------
   // The rule (CLAUDE.md): a file is finite and already on your disk, so it is read
   // WHOLE. Clipping ten years of your own Chrome history to a trailing 90 days throws

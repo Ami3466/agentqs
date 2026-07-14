@@ -12,6 +12,8 @@ import {
   meetingTitle,
   transcriptToText,
   type GranolaDoc,
+  type GranolaPanel,
+  type GranolaTranscriptSegment,
 } from "../granola";
 import {
   inWindow,
@@ -124,6 +126,23 @@ export function granolaEvents(docs: Doc[]): ImporterEvent[] {
   }));
 }
 
+/**
+ * A meeting with no recording really has no panels and no transcript — Granola answers
+ * 404/empty and that is the truth. Anything else (500, a network blip, a rate limit) is
+ * NOT the truth, it is the absence of one, and treating it as "this meeting is empty"
+ * deletes a meeting that exists. Empty on a real absence; throw on everything else.
+ */
+function emptyOrThrow<T>(docId: string, what: string): (e: unknown) => T[] {
+  return (e: unknown) => {
+    const msg = (e as Error)?.message ?? String(e);
+    if (/\b404\b/.test(msg)) return []; // the document genuinely has none
+    throw new Error(
+      `Granola ${what} for document ${docId} → ${msg}. Refusing to treat a failed request as an empty meeting: ` +
+        "this source REPLACES its events on every sync, so that would delete the meeting and its transcript from your record.",
+    );
+  };
+}
+
 export const granolaPlugin: ImporterPlugin = {
   id: "granola",
   name: "Granola",
@@ -186,11 +205,23 @@ export const granolaPlugin: ImporterPlugin = {
 
     const resolved: Doc[] = [];
     for (const doc of windowed) {
-      // Notes and transcript are per-document endpoints; a missing one is normal
-      // (a note with no recording) and must not fail the whole sync.
+      // Notes and transcript are per-document endpoints; a missing one is NORMAL (a
+      // meeting you never recorded) and must not fail the whole sync.
+      //
+      // But "the endpoint says there is nothing" and "the request failed" are not the
+      // same fact, and swallowing both as `[]` made a blip DESTRUCTIVE. Granola is a
+      // `mutableEvents` source: a sync REPLACES its events across the window. So one
+      // 500 on get-document-panels meant the meeting resolved to nothing, was dropped
+      // from `resolved`, and its event — with the verbatim transcript in its meta —
+      // was DELETED from events.jsonl and never re-added. The daily table then wrote
+      // `meetings=1` over the `2` that was there. A dropped API call silently rewrote
+      // history downward, and the sync reported ok.
+      //
+      // A failed sync is recoverable. A deleted transcript is not. So a real failure
+      // now fails LOUDLY, and only a genuinely absent panel/transcript reads as empty.
       const [panels, segments] = await Promise.all([
-        getGranolaPanels(doc.id, token, fetchImpl).catch(() => []),
-        getGranolaTranscript(doc.id, token, fetchImpl).catch(() => []),
+        getGranolaPanels(doc.id, token, fetchImpl).catch(emptyOrThrow<GranolaPanel>(doc.id, "notes")),
+        getGranolaTranscript(doc.id, token, fetchImpl).catch(emptyOrThrow<GranolaTranscriptSegment>(doc.id, "transcript")),
       ]);
       const transcript = transcriptToText(segments);
       const notes = meetingNotes(doc, panels);
