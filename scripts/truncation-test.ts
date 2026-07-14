@@ -22,6 +22,7 @@ import { mergeDailyCsv } from "../src/lib/record";
 import { structureCsv } from "../src/lib/structure";
 import { fetchGithubCommits, type FetchLike } from "../src/lib/importers/github";
 import { SOURCE_PLUGINS } from "../src/lib/importers/registry";
+import { PAGING, pagingFetch } from "./paging-fixtures";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -120,6 +121,67 @@ async function main() {
 
   const daily = structureCsv("date,steps\n2026-07-01,900\n2026-07-02,1200\n")!;
   check("a genuine daily file reports none", daily.duplicateDates === 0);
+
+  // ---- 4. NO IMPORTER STOPS AT PAGE ONE --------------------------------------
+  // THE bug. Thirteen of eighteen importers read one page of a paginated API and
+  // treated it as the whole answer: Last.fm landed 200 of a year's ~10,000 scrobbles,
+  // Strava dropped January through August of every year, Calendar's meetings simply
+  // stopped partway through each year. Nothing errored. Every test was green — because
+  // every fixture was a single page, so a plugin that COULDN'T page passed exactly like
+  // one that could.
+  //
+  // Each fixture below serves TWO pages: day A, then day B. A plugin that ignores the
+  // cursor can only ever see day A.
+  console.log("\nno importer stops at page one:");
+  const DAY_A = "2026-06-10";
+  const DAY_B = "2026-06-11";
+  for (const [id, spec] of Object.entries(PAGING)) {
+    const plugin = SOURCE_PLUGINS.find((p) => p.id === id);
+    if (!plugin?.fetch) {
+      check(`${id}: plugin exists`, false);
+      continue;
+    }
+    const { fn, seen } = pagingFetch(spec, DAY_A, DAY_B);
+    let days: string[] = [];
+    let err = "";
+    try {
+      const res = await plugin.fetch({
+        credential: spec.credential ?? "token",
+        from: "2026-06-01",
+        to: "2026-06-30",
+        fetchImpl: fn,
+      });
+      days = res.table.rows.map((r) => r[0]);
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    check(
+      `${id}: follows the cursor to page 2 (${seen.length} request(s), days: ${days.join(" ") || "none"})`,
+      !err && days.includes(DAY_A) && days.includes(DAY_B),
+      err || (days.includes(DAY_B) ? "" : "PAGE 2 NEVER FETCHED — this source is silently truncating"),
+    );
+  }
+
+  // Toggl doesn't paginate — it refuses a long RANGE instead, so a 365-day chunk must
+  // be asked for in mouthfuls rather than handed over whole and silently clamped.
+  const toggl = SOURCE_PLUGINS.find((p) => p.id === "toggl")!;
+  const ranges: string[] = [];
+  const togglFetch = (async (url: unknown) => {
+    const u = new URL(String(url));
+    ranges.push(`${u.searchParams.get("start_date")}..${u.searchParams.get("end_date")}`);
+    return new Response(JSON.stringify([]), { status: 200 });
+  }) as unknown as typeof fetch;
+  await toggl.fetch!({ credential: "t", from: "2025-01-01", to: "2025-12-31", fetchImpl: togglFetch });
+  check(
+    `toggl: a year is asked for in windows the API will serve (${ranges.length} requests)`,
+    ranges.length >= 4,
+    ranges.length === 1 ? "asked for all 365 days at once — the API clamps it and nobody notices" : "",
+  );
+  check(
+    "…and those windows cover the whole year, with no gap",
+    Boolean(ranges[0]?.startsWith("2025-01-01") && ranges.at(-1)?.endsWith("2025-12-31")),
+    ranges.join(" | "),
+  );
 
   if (failures) {
     console.log(`\n✗ ${failures} check(s) failed.\n`);

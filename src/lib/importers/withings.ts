@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   num,
   unixSec,
   type DailyTable,
@@ -32,7 +33,8 @@ interface MeasureGroup {
 interface MeasureResp {
   status?: number;
   error?: string;
-  body?: { measuregrps?: MeasureGroup[] };
+  /** `more` + `offset` = "I truncated this; ask again from here". Never read. */
+  body?: { measuregrps?: MeasureGroup[]; more?: number; offset?: number };
 }
 
 const API = "https://wbsapi.withings.net/measure";
@@ -90,20 +92,26 @@ export const withingsPlugin: ImporterPlugin = {
   unit: "kg",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = `${API}?action=getmeas&meastype=${WEIGHT_TYPE}&category=1&startdate=${unixSec(
-      ctx.from,
-    )}&enddate=${unixSec(ctx.to, true)}`;
-    let raw: unknown;
+    // Withings truncates a long window and says so with `more` + an `offset`. We made
+    // exactly one call, so a scale reporting several groups a day silently lost the
+    // OLDEST months of every chunk (groups come back newest-first) — weight history
+    // full of holes that read as "I didn't weigh myself then".
+    let groups: MeasureGroup[];
     try {
-      raw = await getJson(url, { Authorization: `Bearer ${ctx.credential ?? ""}` }, fetchImpl);
+      groups = await pageAll<MeasureGroup>("Withings getmeas", async (cursor) => {
+        const url =
+          `${API}?action=getmeas&meastype=${WEIGHT_TYPE}&category=1` +
+          `&startdate=${unixSec(ctx.from)}&enddate=${unixSec(ctx.to, true)}` +
+          (cursor ? `&offset=${cursor}` : "");
+        const raw = (await getJson(url, { Authorization: `Bearer ${ctx.credential ?? ""}` }, fetchImpl)) as MeasureResp;
+        if (typeof raw.status === "number" && raw.status !== 0) {
+          throw new Error(`Withings API status ${raw.status}${raw.error ? ` — ${raw.error}` : ""}`);
+        }
+        return { items: raw.body?.measuregrps ?? [], next: raw.body?.more ? (raw.body?.offset ?? null) : null };
+      });
     } catch (e) {
       throw new Error(`Withings getmeas → ${(e as Error).message}`);
     }
-    const resp = raw as MeasureResp;
-    if (typeof resp.status === "number" && resp.status !== 0) {
-      throw new Error(`Withings API status ${resp.status}${resp.error ? ` — ${resp.error}` : ""}`);
-    }
-    const groups = resp.body?.measuregrps ?? [];
     return { table: normalizeWithings(groups, ctx.from, ctx.to), meta: { groups: groups.length } };
   },
 };

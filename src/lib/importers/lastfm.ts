@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   inWindow,
   splitCredential,
   unixSec,
@@ -25,7 +26,11 @@ interface LfmTrack {
   date?: { uts?: string };
 }
 interface LfmResp {
-  recenttracks?: { track?: LfmTrack[] };
+  recenttracks?: {
+    track?: LfmTrack[];
+    /** Last.fm tells you how many pages it holds — we used to never look. */
+    "@attr"?: { page?: string; totalPages?: string; total?: string };
+  };
 }
 
 const API = "https://ws.audioscrobbler.com/2.0/";
@@ -67,21 +72,30 @@ export const lastfmPlugin: ImporterPlugin = {
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
     const [apiKey, user] = splitCredential(ctx.credential);
-    const url = new URL(API);
-    url.searchParams.set("method", "user.getrecenttracks");
-    url.searchParams.set("user", user);
-    url.searchParams.set("api_key", apiKey);
-    url.searchParams.set("from", String(unixSec(ctx.from)));
-    url.searchParams.set("to", String(unixSec(ctx.to, true)));
-    url.searchParams.set("limit", "200");
-    url.searchParams.set("format", "json");
-    let raw: unknown;
+    // Last.fm serves 200 scrobbles a page and reports how many pages it holds. We
+    // used to read page 1 and stop: a listener with ~10,000 scrobbles a year landed
+    // 200 of them, and the record showed a decade at roughly 2% of what was played.
+    let tracks: LfmTrack[];
     try {
-      raw = await getJson(url.toString(), { Accept: "application/json" }, fetchImpl);
+      tracks = await pageAll<LfmTrack>("Last.fm recent tracks", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("method", "user.getrecenttracks");
+        url.searchParams.set("user", user);
+        url.searchParams.set("api_key", apiKey);
+        url.searchParams.set("from", String(unixSec(ctx.from)));
+        url.searchParams.set("to", String(unixSec(ctx.to, true)));
+        url.searchParams.set("limit", "200");
+        url.searchParams.set("page", String(cursor ?? 1));
+        url.searchParams.set("format", "json");
+        const raw = (await getJson(url.toString(), { Accept: "application/json" }, fetchImpl)) as LfmResp;
+        const items = raw?.recenttracks?.track ?? [];
+        const page = Number(raw?.recenttracks?.["@attr"]?.page ?? cursor ?? 1);
+        const total = Number(raw?.recenttracks?.["@attr"]?.totalPages ?? 1);
+        return { items, next: page < total ? page + 1 : null };
+      });
     } catch (e) {
       throw new Error(`Last.fm recent tracks → ${(e as Error).message}`);
     }
-    const tracks = (raw as LfmResp)?.recenttracks?.track ?? [];
     return { table: normalizeLastfm(tracks, ctx.from, ctx.to), meta: { pulledScrobbles: tracks.length } };
   },
 };

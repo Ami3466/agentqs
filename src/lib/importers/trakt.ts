@@ -1,5 +1,6 @@
 import {
   getJson,
+  pageAll,
   inWindow,
   splitCredential,
   type DailyTable,
@@ -23,6 +24,7 @@ interface TraktPlay {
   watched_at?: string;
 }
 
+const PER_PAGE = 100;
 const API = "https://api.trakt.tv/users/me/history";
 
 export function normalizeTrakt(plays: TraktPlay[], from: string, to: string): DailyTable {
@@ -71,26 +73,33 @@ export const traktPlugin: ImporterPlugin = {
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
     const [clientId, token] = splitCredential(ctx.credential);
-    const url = new URL(API);
-    url.searchParams.set("start_at", `${ctx.from}T00:00:00Z`);
-    url.searchParams.set("end_at", `${ctx.to}T23:59:59Z`);
-    url.searchParams.set("limit", "100");
-    let raw: unknown;
+    // Trakt serves 100 plays a page, newest first. Reading page 1 and stopping meant
+    // anyone watching two episodes a day kept ~7 weeks of each year and lost the rest.
+    let plays: TraktPlay[];
     try {
-      raw = await getJson(
-        url.toString(),
-        {
-          "trakt-api-key": clientId,
-          "trakt-api-version": "2",
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-        },
-        fetchImpl,
-      );
+      plays = await pageAll<TraktPlay>("Trakt history", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("start_at", `${ctx.from}T00:00:00Z`);
+        url.searchParams.set("end_at", `${ctx.to}T23:59:59Z`);
+        url.searchParams.set("limit", String(PER_PAGE));
+        url.searchParams.set("page", String(cursor ?? 1));
+        const raw = await getJson(
+          url.toString(),
+          {
+            "trakt-api-key": clientId,
+            "trakt-api-version": "2",
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+          },
+          fetchImpl,
+        );
+        const batch = Array.isArray(raw) ? (raw as TraktPlay[]) : [];
+        const page = Number(cursor ?? 1);
+        return { items: batch, next: batch.length < PER_PAGE ? null : page + 1 };
+      });
     } catch (e) {
       throw new Error(`Trakt history → ${(e as Error).message}`);
     }
-    const plays = Array.isArray(raw) ? (raw as TraktPlay[]) : [];
     return { table: normalizeTrakt(plays, ctx.from, ctx.to), meta: { pulledPlays: plays.length } };
   },
 };

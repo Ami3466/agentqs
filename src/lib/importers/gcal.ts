@@ -1,6 +1,7 @@
 import { googleScopes, SCOPE_CALENDAR } from "../google";
 import {
   getJson,
+  pageAll,
   num,
   type DailyTable,
   type ImporterContext,
@@ -27,6 +28,8 @@ interface GEvent {
 }
 interface GList {
   items?: GEvent[];
+  /** The rest of the events. Never read, so they were never fetched. */
+  nextPageToken?: string;
 }
 
 const API = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
@@ -88,23 +91,31 @@ export const gcalPlugin: ImporterPlugin = {
   unit: "meetings",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = new URL(API);
-    url.searchParams.set("timeMin", `${ctx.from}T00:00:00Z`);
-    url.searchParams.set("timeMax", `${ctx.to}T23:59:59Z`);
-    url.searchParams.set("singleEvents", "true");
-    url.searchParams.set("orderBy", "startTime");
-    url.searchParams.set("maxResults", "2500");
-    let raw: unknown;
+    // Calendar caps a page at 2,500 events and hands back a nextPageToken for the
+    // rest. We never read the token: with singleEvents=true a daily standup alone is
+    // ~250 instances a year, so a year of real meetings blew past the cap and simply
+    // stopped existing partway through — ordered by startTime, so it was always the
+    // LATER months that vanished.
+    let events: GEvent[];
     try {
-      raw = await getJson(
-        url.toString(),
-        { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
-        fetchImpl,
-      );
+      events = await pageAll<GEvent>("Google Calendar events", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("timeMin", `${ctx.from}T00:00:00Z`);
+        url.searchParams.set("timeMax", `${ctx.to}T23:59:59Z`);
+        url.searchParams.set("singleEvents", "true");
+        url.searchParams.set("orderBy", "startTime");
+        url.searchParams.set("maxResults", "2500");
+        if (cursor) url.searchParams.set("pageToken", String(cursor));
+        const raw = (await getJson(
+          url.toString(),
+          { Authorization: `Bearer ${ctx.credential ?? ""}`, Accept: "application/json" },
+          fetchImpl,
+        )) as GList;
+        return { items: raw?.items ?? [], next: raw?.nextPageToken ?? null };
+      });
     } catch (e) {
       throw new Error(`Google Calendar events → ${(e as Error).message}`);
     }
-    const events = (raw as GList)?.items ?? [];
     return { table: normalizeCalendar(events), meta: { pulledEvents: events.length } };
   },
 };

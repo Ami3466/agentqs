@@ -1,6 +1,8 @@
 import {
   getJson,
+  pageAll,
   inWindow,
+  unixSec,
   type DailyTable,
   type ImporterContext,
   type ImporterPlugin,
@@ -24,6 +26,7 @@ interface SwarmResp {
   response?: { checkins?: { items?: SwarmCheckin[] } };
 }
 
+const PER_PAGE = 200;
 const API = "https://api.foursquare.com/v2/users/self/checkins";
 
 export function normalizeSwarm(items: SwarmCheckin[], from: string, to: string): DailyTable {
@@ -68,18 +71,29 @@ export const swarmPlugin: ImporterPlugin = {
   unit: "check-ins",
   async fetch(ctx: ImporterContext): Promise<ImporterResult> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const url = new URL(API);
-    url.searchParams.set("oauth_token", ctx.credential ?? "");
-    url.searchParams.set("v", "20240101");
-    url.searchParams.set("limit", "200");
-    url.searchParams.set("sort", "newestfirst");
-    let raw: unknown;
+    // Foursquare offers BOTH a server-side time range (afterTimestamp/beforeTimestamp)
+    // and offset paging — and we used neither, taking the newest 200 check-ins and
+    // filtering them client-side. A decade of check-ins was unreachable: every older
+    // chunk got the same 200, filtered to nothing, and the backfill walk gave up.
+    let items: SwarmCheckin[];
     try {
-      raw = await getJson(url.toString(), { Accept: "application/json" }, fetchImpl);
+      items = await pageAll<SwarmCheckin>("Swarm check-ins", async (cursor) => {
+        const url = new URL(API);
+        url.searchParams.set("oauth_token", ctx.credential ?? "");
+        url.searchParams.set("v", "20240101");
+        url.searchParams.set("limit", String(PER_PAGE));
+        url.searchParams.set("sort", "newestfirst");
+        url.searchParams.set("afterTimestamp", String(unixSec(ctx.from)));
+        url.searchParams.set("beforeTimestamp", String(unixSec(ctx.to, true)));
+        if (cursor) url.searchParams.set("offset", String(cursor));
+        const raw = (await getJson(url.toString(), { Accept: "application/json" }, fetchImpl)) as SwarmResp;
+        const batch = raw?.response?.checkins?.items ?? [];
+        const offset = Number(cursor ?? 0);
+        return { items: batch, next: batch.length < PER_PAGE ? null : offset + PER_PAGE };
+      });
     } catch (e) {
       throw new Error(`Swarm check-ins → ${(e as Error).message}`);
     }
-    const items = (raw as SwarmResp)?.response?.checkins?.items ?? [];
     return { table: normalizeSwarm(items, ctx.from, ctx.to), meta: { pulledCheckins: items.length } };
   },
 };

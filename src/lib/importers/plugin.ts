@@ -487,6 +487,82 @@ export async function netFetch(
   throw last;
 }
 
+/** One page of a paginated API: the items, and how to ask for the next page.
+ *  `next` is whatever that API's cursor happens to be — a page number, an offset,
+ *  an opaque token, a `max_id`. Falsy means there is no more. */
+export interface Page<T> {
+  items: T[];
+  next?: string | number | null;
+}
+
+/**
+ * FOLLOW A PAGINATED API TO ITS END.
+ *
+ * The single most expensive bug in this codebase: thirteen of eighteen importers
+ * asked for one page and treated it as the whole answer. Nothing was broken, nothing
+ * errored, nothing was empty — the record just quietly held a fraction of a life.
+ * Last.fm returned 200 of a year's ~10,000 scrobbles; Strava returned the newest 200
+ * activities of each year, so every January through August simply did not exist;
+ * Calendar stopped at 2,500 events and the rest of that year's meetings never
+ * happened. Each one reported `ok`.
+ *
+ * There is no clever fix for that, only a boring one every source must use. So: this.
+ *
+ * A short page (or no cursor) ends the walk — that is the API saying "that's all".
+ * Running out of PAGES does not: hitting the ceiling while the API still offers a
+ * next cursor THROWS, because the one thing we must never do is stop early and call
+ * it success. A loud failure sends someone to narrow the window; a quiet one edits
+ * their history.
+ */
+export async function pageAll<T>(
+  label: string,
+  fetchPage: (cursor: string | number | undefined, page: number) => Promise<Page<T>>,
+  maxPages = MAX_PAGES,
+): Promise<T[]> {
+  const out: T[] = [];
+  let cursor: string | number | undefined;
+  for (let page = 1; page <= maxPages; page++) {
+    const { items, next } = await fetchPage(cursor, page);
+    out.push(...items);
+    if (!next || items.length === 0) return out; // the API says that is all
+    cursor = next;
+  }
+  throw new Error(
+    `${label}: the API still had more after ${maxPages} pages (${out.length} items). ` +
+      "Refusing to land a partial history as if it were whole — re-run with a narrower window (--days).",
+  );
+}
+
+/** A runaway guard, NOT a window: at 200 pages even a 200-per-page API has served
+ *  40,000 items for one chunk. Reaching it throws (see pageAll) — it never truncates. */
+export const MAX_PAGES = 200;
+
+/**
+ * Cut [from, to] into sub-windows of at most `maxDays`, for an API that REFUSES a
+ * longer range (Todoist and Toggl both cap a request at roughly three months).
+ *
+ * This is not a window and not a cap: the caller still asks for every day it was
+ * asked for, just in mouthfuls the API will accept. Todoist's own file said "the
+ * window is capped by Todoist at ~3 months per request" — and then sent it the whole
+ * 365-day backfill chunk anyway, which the API either rejects or silently clamps. A
+ * ceiling you know about and ignore is the same as one you never looked for.
+ */
+export function windowChunks(from: string, to: string, maxDays: number): Array<{ from: string; to: string }> {
+  const out: Array<{ from: string; to: string }> = [];
+  const end = Date.parse(`${to}T00:00:00Z`);
+  let cur = Date.parse(`${from}T00:00:00Z`);
+  if (!Number.isFinite(cur) || !Number.isFinite(end) || cur > end) return [{ from, to }];
+  while (cur <= end) {
+    const stop = Math.min(cur + (maxDays - 1) * 86_400_000, end);
+    out.push({
+      from: new Date(cur).toISOString().slice(0, 10),
+      to: new Date(stop).toISOString().slice(0, 10),
+    });
+    cur = stop + 86_400_000;
+  }
+  return out;
+}
+
 /**
  * Map over items with at most `limit` calls in flight. An importer that must ask
  * the API once PER DAY (Gmail counts a day at a time) does years of history in
