@@ -13,9 +13,11 @@ import { getTextEmbedder } from "./embedder";
  * into "find days that felt like this" — default-on, zero setup, no key, private.
  *
  * The record's free text (every inbox memo + every session synthesis) is embedded by
- * the local neural model (embedder.ts → all-MiniLM-L6-v2, hash fallback offline) and
- * stored as vectors so a query is matched by *meaning*, not keywords. Two backends
- * behind one API:
+ * the local neural model (embedder.ts → multilingual-e5-small, hash fallback offline)
+ * and stored as vectors so a query is matched by *meaning*, not keywords. Long text is
+ * CHUNKED first (collectItems) — the model's window is finite, so one vector per
+ * document indexed only its opening and left the rest unfindable. Two backends behind
+ * one API:
  *
  *   - sqlite-vec (default): the vectors live in a vec0 virtual table and KNN runs in
  *     SQLite. This is the "sqlite-vec embeddings" path from the plan.
@@ -54,10 +56,10 @@ function openVec(file: string): VecDb {
 const ITEMS_DDL = `
 CREATE TABLE IF NOT EXISTS items (
   rowid  INTEGER PRIMARY KEY,
-  ref    TEXT NOT NULL,        -- inbox:<id> | session:<id>
-  kind   TEXT NOT NULL,        -- memo | session
+  ref    TEXT NOT NULL,        -- inbox:<id> | session:<id> | daily:<hash>, +"#NNN" per chunk
+  kind   TEXT NOT NULL,        -- memo | session | daily_text
   date   TEXT NOT NULL,        -- ISO day the item belongs to
-  text   TEXT NOT NULL,        -- the source text (for the snippet)
+  text   TEXT NOT NULL,        -- the chunk's text (for the snippet)
   vector BLOB NOT NULL         -- float32[dim], also kept for the JS fallback
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -79,9 +81,90 @@ const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 // column and let the semantic and keyword indexes drift apart.
 const DAILY_TEXT_MIN_CHARS = 20;
 
+// A sentence-transformer's context window is finite (a few hundred tokens) and the
+// pipeline CLIPS anything longer. One vector per document therefore indexed only a
+// document's OPENING: an 8KB BACKGROUND.md or a year-summary memo was searchable by
+// its first paragraph and invisible from there on — stored, reindexed, and
+// unfindable. So long text is split into overlapping windows, one vector each.
+// Chars, not tokens: the tokenizer isn't loaded here, and ~4 chars/token (~3 for
+// Hebrew) keeps a window inside the window with room to spare.
+const CHUNK_CHARS = 900;
+const CHUNK_OVERLAP = 150; // carries a sentence across a cut so a fact split in two still matches
+
+/** Split long text into overlapping windows, preferring a paragraph/sentence break
+ *  near the cut so a chunk doesn't start mid-word. Short text returns as-is. */
+export function chunkText(text: string, size = CHUNK_CHARS, overlap = CHUNK_OVERLAP): string[] {
+  if (text.length <= size) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + size, text.length);
+    if (end < text.length) {
+      // Back off to the last clean break in the final quarter of the window.
+      const floor = start + Math.floor(size * 0.75);
+      const window = text.slice(floor, end);
+      const br = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(". "), window.lastIndexOf("। "));
+      if (br > 0) end = floor + br + 1;
+    }
+    const piece = text.slice(start, end).trim();
+    if (piece) chunks.push(piece);
+    if (end >= text.length) break;
+    start = Math.max(end - overlap, start + 1);
+  }
+  return chunks;
+}
+
+/** Was this capture merged into daily cells by the DIRECT CSV column map? Then it is
+ *  a data table and the cells now hold it — `structurePending` stamps `via` on the
+ *  item's meta, so the record answers this itself and nothing has to be guessed. */
+function structuredViaCsv(meta: unknown): boolean {
+  const s = (meta as { structured?: { via?: string } } | null)?.structured;
+  return s?.via === "csv";
+}
+
+/**
+ * Is this capture a data TABLE rather than prose? The belt to the braces above: a CSV
+ * that is still PENDING (or kept as a reference) was never structured, so nothing has
+ * stamped it — and chunking one would flood the index with rows of digits that a
+ * compressed-score model (E5) ranks alongside real writing. Worth one vector, never
+ * hundreds.
+ */
+function isTabular(text: string): boolean {
+  const lines = text.split("\n", 24).filter((l) => l.trim());
+  if (lines.length < 3) return false;
+  const split = (l: string) => (l.includes("\t") ? l.split("\t") : l.split(","));
+  const cols = split(lines[0]).length;
+  if (cols < 3) return false;
+  // Shape alone is not the test: a comma-heavy PARAGRAPH also splits into "columns",
+  // and treating prose as a table would silently drop it back to one clipped vector —
+  // the very bug this file exists to fix. What actually separates a data table from
+  // writing is that its cells are NUMBERS. Judge the body, not the header.
+  const body = lines.slice(1);
+  const shaped = body.filter((l) => Math.abs(split(l).length - cols) <= 1).length;
+  if (shaped < body.length - 1) return false;
+  const cells = body.flatMap(split);
+  const numeric = cells.filter((c) => /\d/.test(c) && /^[-+]?[\d.,:%/\s-]*$/.test(c.trim())).length;
+  return cells.length > 0 && numeric / cells.length >= 0.5;
+}
+
+/** Emit one item per chunk. A single-chunk item keeps its bare ref, so short text
+ *  (the common case) indexes exactly as before; only split text gets a `#NNN`
+ *  suffix, zero-padded so the deterministic ref sort stays in reading order. */
+function pushChunked(out: IndexItem[], base: Omit<IndexItem, "text">, text: string): void {
+  const pieces = isTabular(text) ? [text.slice(0, CHUNK_CHARS)] : chunkText(text);
+  if (pieces.length === 1) {
+    out.push({ ...base, text: pieces[0] });
+    return;
+  }
+  pieces.forEach((piece, i) => {
+    out.push({ ...base, ref: `${base.ref}#${String(i).padStart(3, "0")}`, text: piece });
+  });
+}
+
 /** Collect the record's free text into embeddable items, deterministically ordered
  *  so the index rebuilds identically. Numeric daily cells stay in SQL; text daily
- *  cells from imports (for example Notion journal text) are embedded for recall. */
+ *  cells from imports (for example Notion journal text) are embedded for recall.
+ *  Long text is chunked, so a document is retrievable by ANY passage in it. */
 export function collectItems(recordDir: string): IndexItem[] {
   const out: IndexItem[] = [];
 
@@ -89,9 +172,18 @@ export function collectItems(recordDir: string): IndexItem[] {
     // Mirror the FTS insert in rebuild(): no image bodies (base64 data URLs),
     // no discarded captures (Reject removes an item from every index).
     if (it.kind === "image" || it.status === "discarded") continue;
+    // RAW OR STRUCTURED, NEVER BOTH. A dropped CSV is kept verbatim AND merged into
+    // daily cells, and those cells are embedded below — so indexing its raw text too
+    // stored every row TWICE and sliced the file into fragments like
+    // "smate Session 2024-01-12,personal,focus" that then outscore real writing.
+    // The record already says how a capture was structured: `via: "csv"` is the
+    // direct column map (a data table — its meaning is now in the cells, index those),
+    // while an LLM/prose structuring only lifts a few metrics out of writing that
+    // still deserves to be searchable, so THAT text stays.
+    if (it.status === "structured" && structuredViaCsv(it.meta)) continue;
     const text = it.text.trim();
     if (!text) continue;
-    out.push({ ref: `inbox:${it.id}`, kind: "memo", date: (it.ts || "").slice(0, 10), text });
+    pushChunked(out, { ref: `inbox:${it.id}`, kind: "memo", date: (it.ts || "").slice(0, 10) }, text);
   }
 
   for (const s of readSessionsFromRecord(recordDir)) {
@@ -100,12 +192,11 @@ export function collectItems(recordDir: string): IndexItem[] {
       .join(". ")
       .trim();
     if (!text) continue;
-    out.push({
-      ref: `session:${s.id}`,
-      kind: "session",
-      date: s.date || (s.startedAt || "").slice(0, 10),
+    pushChunked(
+      out,
+      { ref: `session:${s.id}`, kind: "session", date: s.date || (s.startedAt || "").slice(0, 10) },
       text,
-    });
+    );
   }
 
   for (const d of readDailyFromRecord(recordDir)) {
@@ -113,12 +204,7 @@ export function collectItems(recordDir: string): IndexItem[] {
     if (d.valueNum != null || text.length < DAILY_TEXT_MIN_CHARS) continue;
     const refKey = `${d.date}:${d.source}:${d.metric}`;
     const ref = `daily:${(fnv1a(refKey) >>> 0).toString(16).padStart(8, "0")}`;
-    out.push({
-      ref,
-      kind: "daily_text",
-      date: d.date,
-      text: `${d.source}.${d.metric}: ${text}`,
-    });
+    pushChunked(out, { ref, kind: "daily_text", date: d.date }, `${d.source}.${d.metric}: ${text}`);
   }
 
   out.sort((a, b) => cmp(a.date, b.date) || cmp(a.ref, b.ref));
@@ -152,7 +238,7 @@ export async function buildIndex(
   const items = collectItems(rDir);
   const hash = recordHash(rDir);
   const embedder = await getTextEmbedder();
-  const vectors = await embedder.embed(items.map((it) => it.text));
+  const vectors = await embedder.embed(items.map((it) => it.text), "passage");
 
   const { db, vec } = openVec(tmp);
   try {
@@ -294,10 +380,13 @@ export async function semanticSearch(query: string, opts: SearchOptions = {}): P
   if (!fs.existsSync(file)) return [];
 
   const embedder = await getTextEmbedder();
-  const qvec = (await embedder.embed([q]))[0];
+  const qvec = (await embedder.embed([q], "query"))[0];
   if (!qvec || qvec.every((x) => x === 0)) return [];
 
-  const candidates = limit * 8;
+  // Chunking means one long document can own many neighbours, so a pool sized for
+  // whole-document items would let a single memo crowd every other day out of the
+  // KNN before the per-day collapse below ever runs.
+  const candidates = limit * 24;
   const { db, vec } = openVec(file);
   let raw: { ref: string; kind: string; date: string; text: string; score: number }[] = [];
   try {
