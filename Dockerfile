@@ -32,7 +32,7 @@ ENV HOSTNAME=0.0.0.0
 # git + tar are FEATURES here, not conveniences: `backup github` pushes a snapshot
 # branch with git plumbing, and `backup drive` streams the store through tar.
 # ca-certificates: every source syncs over TLS.
-RUN apt-get update && apt-get install -y --no-install-recommends git tar ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git tar ca-certificates curl \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd -g 1001 nodejs \
   && useradd -u 1001 -g nodejs -m -s /bin/bash nextjs \
