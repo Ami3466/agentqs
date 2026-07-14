@@ -70,7 +70,7 @@ import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
-import { recordSyncRun } from "./sync-runs";
+import { readBackfillState, recordSyncRun, writeBackfillState } from "./sync-runs";
 import { pipelineReport } from "./pipeline";
 import { doctorReport, migrateStore } from "./store-doctor";
 import { structureCsv, sourceName } from "./structure";
@@ -620,7 +620,18 @@ export function syncWindow(
       : windowDays(BACKFILL_CHUNK_DAYS, now).from;
     return { from, to, firstImport: true };
   }
-  return { from: shiftIso(last, -7), to, firstImport: false };
+  // CLAMP. `from` is derived from the record, and the record can hold a FUTURE date —
+  // a journal-edit on next month, an imported CSV of planned events, a source that
+  // records scheduled items. Then `from` lands after `to` and the window is INVERTED,
+  // for good: Calendar would send timeMin > timeMax and 400 on every sync, and an API
+  // that just answers `[]` would report "ok · 0 days" forever while nothing in the
+  // record ever removes the future row that caused it.
+  return { from: minIso(shiftIso(last, -7), to), to, firstImport: false };
+}
+
+/** The earlier of two ISO dates. */
+function minIso(a: string, b: string): string {
+  return a < b ? a : b;
 }
 
 /**
@@ -658,7 +669,14 @@ async function backfillPlugin(
   to: string,
   progress: (phase: string, pct: number) => void,
 ): Promise<PluginImportSummary> {
-  let cursor = to;
+  // RESUME WHERE THE LAST WALK STOPPED. Each chunk merges as it lands, so a twelve-year
+  // walk that died on chunk 2 left last year's rows in the record — and "is this a first
+  // import?" used to mean "is the record empty?", so the NEXT sync saw those rows,
+  // decided the history was already there, fetched the last 7 days and reported ok. The
+  // other eleven years were never fetched again by ANY code path. An interrupted
+  // backfill looked exactly like a finished one. Now the walk writes down how far it
+  // got, so it can be picked up rather than silently abandoned.
+  let cursor = readBackfillState(instanceId).cursor ?? to;
   let chunks = 0;
   let earliest = to;
   // The last chunk that HELD data seeds the summary; the rest is accumulated onto it,
@@ -668,6 +686,7 @@ async function backfillPlugin(
   let cells = 0;
   let skipped = 0;
   const metrics = new Set<string>();
+  const extraSources = new Set<string>();
 
   // ALL THE WAY DOWN. There is no early exit any more — see the doc above. Every year
   // between today and the floor is asked about, so a silence in the middle of a life
@@ -684,6 +703,7 @@ async function backfillPlugin(
     if (plugin.hasAnyData && !(await plugin.hasAnyData({ ...ctx, from, to: cursor }))) {
       skipped++;
       cursor = shiftIso(from, -1);
+      writeBackfillState(instanceId, { cursor });
       continue;
     }
 
@@ -693,16 +713,28 @@ async function backfillPlugin(
       daysWithData += s.daysWithData;
       cells += s.cells;
       for (const m of s.metrics) metrics.add(m);
+      for (const x of s.extraSources) extraSources.add(x);
+      // EVERY chunk's events and text tables, not just the last one's. The summary
+      // seeds from the newest chunk that held data, so an older chunk's `_texts` rows
+      // and journal events were dropped from the accounting — written to the record,
+      // but never inserted into the cache or the search index, so a decade of imported
+      // meeting notes was unsearchable until someone happened to run `rebuild`.
       merged = merged
         ? { ...s, appendedEvents: [...merged.appendedEvents, ...s.appendedEvents] }
         : s;
     }
     cursor = shiftIso(from, -1);
+    writeBackfillState(instanceId, { cursor });
   }
+  // The walk reached the floor: this source's history is now fully in the record, and a
+  // later sync can safely resume from the newest day instead of walking again.
+  writeBackfillState(instanceId, { cursor: undefined, done: true, at: new Date().toISOString() });
+
   // Nothing anywhere: report the empty window honestly rather than inventing one.
   if (!merged) return await importPlugin(plugin, { ...ctx, from: earliest, to }, rDir, instanceId);
   return {
     ...merged,
+    extraSources: [...extraSources],
     from: earliest,
     to,
     daysWithData,
@@ -922,6 +954,28 @@ function landSyncInCache(rDir: string, change: SyncCacheChange): number {
   return patched ? patched.dailyRows : rebuild({ recordDir: rDir }).daily;
 }
 
+/**
+ * The sources a set of saved column-merge rules just REWROTE on disk.
+ *
+ * `applySavedMerges` runs on every sync and it writes BOTH sides of each rule — it sets
+ * cells in the target's CSV and deletes the duplicate column from the source's. But the
+ * cache patch only ever named the source being synced, so a SPOTIFY sync could rewrite
+ * `health_daily.csv` and `fitbit.csv` on disk and patch neither: the DB kept a
+ * `health_daily.steps` column the record no longer had — a ghost metric haunting
+ * `query`, the journal and the graphs until someone happened to run `agentqs rebuild`.
+ * Whatever a sync touches, a sync patches.
+ */
+function mergedSources(outcomes: MergeOutcome[]): string[] {
+  const out = new Set<string>();
+  for (const o of outcomes) {
+    for (const ref of [o.from, o.into]) {
+      const stem = ref.split(".")[0];
+      if (stem) out.add(stem);
+    }
+  }
+  return [...out];
+}
+
 /** Run one API source now: fetch → merge → rebuild, persisting the sync time.
  *  `fixture` (a JSON file) drives it offline for GitHub-style ships-when tests. */
 export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
@@ -981,9 +1035,9 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     progress("fetching commits from GitHub", 60);
     const s = await importGithub({ token, login: opts.login, from: gFrom, to: gw.to, recordDir: rDir, fetchImpl });
     progress("merging into the record", 75);
-    applySavedMerges(rDir); // keep accepted column merges merged on every sync
+    const ghMerges = applySavedMerges(rDir); // keep accepted column merges merged on every sync
     progress("updating the cache", 88);
-    const dailyRows = landSyncInCache(rDir, { sources: ["github"] });
+    const dailyRows = landSyncInCache(rDir, { sources: ["github", ...mergedSources(ghMerges)] });
     persistSync("github", opts.credential, now);
     return {
       id: "github", name: "GitHub", from: gFrom, to: gw.to,
@@ -1031,13 +1085,17 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
       hrDays: opts.hrDays && opts.hrDays > 0 ? opts.hrDays : undefined,
     });
     progress("merging into the record", 75);
-    applySavedMerges(rDir);
+    const wMerges = applySavedMerges(rDir);
     progress("updating the cache", 88);
-    const dailyRows = landSyncInCache(rDir, { sources: [instanceId] });
+    const dailyRows = landSyncInCache(rDir, { sources: [instanceId, ...mergedSources(wMerges)] });
+    // The refreshed LOGIN is worth keeping whatever happens next (it is not a claim
+    // about data). The SYNC TIMESTAMP is not: it used to be stamped here, before the
+    // zero-day check below could throw, so a failed sync left the row reading "last
+    // sync: just now" beside its own red error — and `isDue` went false, so an hourly
+    // schedule considered itself satisfied by a sync that landed nothing at all.
     const c2 = readConfig();
     if (c2) {
       setWhoopCreds(c2, instanceId, s.creds);
-      c2.sourceSyncedAt = { ...(c2.sourceSyncedAt ?? {}), [instanceId]: now };
       writeConfig(c2);
     }
     // Landing NOTHING is not success. A silent "ok · 0 days" is exactly how a
@@ -1053,6 +1111,8 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
           : `${name}: WHOOP returned no cycles at all for ${s.from} → ${s.to}. The login worked, so this account holds no data in that window.`,
       );
     }
+    // It really synced. NOW it is stamped.
+    persistSync(instanceId, undefined, now);
     return {
       id: instanceId, name, from: s.from, to: s.to,
       days: s.daysWithData, metrics: s.metrics, cells: s.cells, dailyRows, syncedAt: now,
@@ -1096,8 +1156,16 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
   // A first import DISCOVERS its range by walking back until the source runs dry —
   // unless the API can't walk (`backfillDays`), in which case one capped window is
   // the most it can ever give and pretending otherwise just burns calls.
+  //
+  // AN UNFINISHED WALK IS STILL A FIRST IMPORT. Chunks merge as they land, so a walk
+  // that died halfway left rows behind — and "first import" meant "the record is empty",
+  // so the next sync saw those rows, decided the history was already imported, and
+  // topped up the last 7 days. Everything the walk never reached was abandoned in
+  // silence. A source is only past its first import once the walk says it FINISHED.
+  // (`--days N` is a deliberate top-up and never triggers a walk.)
+  const resuming = !opts.days && !pw.firstImport && !readBackfillState(instanceId).done;
   const summary =
-    pw.firstImport && !plugin.backfillDays
+    (pw.firstImport || resuming) && !plugin.backfillDays
       ? await backfillPlugin(plugin, { credential, fetchImpl }, rDir, instanceId, pw.to, progress)
       : await (async () => {
           progress(pw.firstImport ? `fetching your ${plugin.name} history` : `fetching your ${plugin.name} data`, 15);
@@ -1118,10 +1186,10 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
     );
   }
   progress("merging into the record", 75);
-  applySavedMerges(rDir);
+  const pMerges = applySavedMerges(rDir);
   progress("updating the cache", 88);
   const dailyRows = landSyncInCache(rDir, {
-    sources: [instanceId, ...summary.extraSources],
+    sources: [instanceId, ...summary.extraSources, ...mergedSources(pMerges)],
     eventsReplaced: summary.eventsReplaced,
     eventsAdded: summary.appendedEvents,
   });
@@ -1140,17 +1208,34 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
   const skipped: { id: string; reason: string }[] = [];
   const cfg = readConfig();
   const candidates = ["github", "whoop", ...SOURCE_PLUGINS.filter((p) => p.live).map((p) => p.id)];
-  // Extra accounts ("spotify-2") carry their own credential — sync them too.
-  for (const key of Object.keys(cfg?.sourceCreds ?? {})) {
+  // EVERY EXTRA ACCOUNT, however it was connected. This used to scan `sourceCreds`
+  // only — so a second account connected by the OAUTH DANCE (whose credential lives in
+  // `sourceOAuth`, not `sourceCreds`) was never a candidate, and a second WHOOP athlete
+  // (`whoopCredsByInstance`) was not either: `pluginInstanceById("whoop-2")` is null,
+  // because WHOOP is bespoke rather than a SOURCE_PLUGIN. `agentqs sync` silently never
+  // synced them, and did not even list them as skipped — they were invisible. (`sync
+  // --due` covered them, via buildSources, so the two entry points disagreed about
+  // which accounts exist.)
+  const extra = new Set<string>([
+    ...Object.keys(cfg?.sourceCreds ?? {}),
+    ...Object.keys(cfg?.sourceOAuth ?? {}),
+    ...Object.keys(cfg?.whoopCredsByInstance ?? {}),
+  ]);
+  for (const key of extra) {
+    if (candidates.includes(key)) continue;
+    if (isWhoopInstance(key)) {
+      candidates.push(key);
+      continue;
+    }
     const inst = pluginInstanceById(key);
-    if (inst && inst.plugin.live && key !== inst.plugin.id && !candidates.includes(key)) candidates.push(key);
+    if (inst && inst.plugin.live && !inst.plugin.backupTarget && key !== inst.plugin.id) candidates.push(key);
   }
   for (const id of candidates) {
     const hasCred =
       id === "github"
         ? Boolean(resolveGithubToken())
-        : id === "whoop"
-          ? Boolean(cfg?.whoopCreds?.email && (cfg.whoopCreds.password || cfg.whoopCreds.refreshToken))
+        : isWhoopInstance(id)
+          ? whoopHasCredential(whoopCredsFor(cfg, id))
           : Boolean(resolveSyncCredential(pluginInstanceById(id)!.plugin, undefined, cfg, id));
     if (!hasCred) {
       skipped.push({ id, reason: "no credential" });
@@ -1211,6 +1296,17 @@ async function syncFileSourceInner(opts: {
   const win = windowDays(narrowed || 1);
   const from = narrowed ? win.from : "0001-01-01";
   const summary = await importFile(importer, { path: filePath, from, to: win.to }, rDir);
+  // A FILE THAT LANDS NOTHING IS NOT A SUCCESS. A file is finite and sitting on your
+  // disk: if we read it whole and got zero days, we did not find an empty life — we
+  // failed to read it (wrong file, an export shape we do not parse, a browser DB whose
+  // schema moved). Reporting ok here is how a broken importer passes for a working one.
+  // (Apple Health already threw on zero records; nothing else did.)
+  if (summary.daysWithData === 0) {
+    throw new Error(
+      `${importer.name}: read ${filePath} but found no data for any date. That is not an empty history — ` +
+        "check this is the right file (and the right export format); nothing was written to the record.",
+    );
+  }
   applySavedMerges(rDir);
   const dailyRows = rebuild({ recordDir: rDir }).daily;
   persistSync(importer.id, undefined, new Date().toISOString());
