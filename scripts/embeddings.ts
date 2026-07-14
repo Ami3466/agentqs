@@ -147,8 +147,11 @@ function seedRecord(recordDir: string) {
       const o = JSON.parse(l);
       o.ts = all[i][0] + "T12:00:00.000Z";
       if (all[i][0] === STRUCTURED_DATE) {
+        // EXACTLY what structurePending writes to the record: `via` sits FLAT on meta.
+        // (Only the /api/log wire shape nests it under `structured` — seeding that
+        // nested shape here made this test pass while production matched nothing.)
         o.status = "structured";
-        o.meta = { ...(o.meta ?? {}), structured: { via: "csv", source: "health", cells: 2400 } };
+        o.meta = { ...(o.meta ?? {}), filename: "health", via: "csv", source: "health", cells: 2400 };
       }
       return JSON.stringify(o);
     });

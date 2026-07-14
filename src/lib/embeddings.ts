@@ -116,10 +116,12 @@ export function chunkText(text: string, size = CHUNK_CHARS, overlap = CHUNK_OVER
 
 /** Was this capture merged into daily cells by the DIRECT CSV column map? Then it is
  *  a data table and the cells now hold it — `structurePending` stamps `via` on the
- *  item's meta, so the record answers this itself and nothing has to be guessed. */
+ *  item's meta, so the record answers this itself and nothing has to be guessed.
+ *  The RECORD stores it flat (`meta.via`); only the /api/log wire shape nests it
+ *  under `structured`, so read both or this silently matches nothing. */
 function structuredViaCsv(meta: unknown): boolean {
-  const s = (meta as { structured?: { via?: string } } | null)?.structured;
-  return s?.via === "csv";
+  const m = meta as { via?: string; structured?: { via?: string } } | null;
+  return m?.via === "csv" || m?.structured?.via === "csv";
 }
 
 /**
