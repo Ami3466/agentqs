@@ -45,6 +45,26 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   rebuild re-derives `heart_rate` from `record/whoop/hr/*.csv`.
 - `agentqs recall "<feeling or situation>"` - local semantic search over memos,
   sessions and journal text (on-device embeddings, no key).
+  ⛔ THE EMBEDDING MODEL MUST BE MULTILINGUAL, AND LONG TEXT MUST BE CHUNKED.
+  Both were broken, and both failed SILENTLY - the memo was stored, reindexed,
+  reported in the index count, and simply never came back from any query:
+    - the model was `all-MiniLM-L6-v2`, which is ENGLISH-ONLY, on a record that is
+      largely HEBREW. Every Hebrew dream, journal note and letter was unreachable
+      in any language. The only Hebrew "hits" came from the English
+      `<source>.<metric>:` prefix we prepend, never from the words. It is now
+      `multilingual-e5-small` (`embedder.ts`), which is also CROSS-lingual: an
+      English question finds the Hebrew day.
+    - E5 is ASYMMETRIC: a stored document is embedded as `passage: …` and a search
+      string as `query: …`. `embed(texts, role)` takes the role; `buildIndex` passes
+      "passage", `semanticSearch` passes "query". Dropping the prefixes costs real
+      accuracy.
+    - a sentence-transformer's window is finite and the pipeline CLIPS the overflow,
+      so ONE vector per document indexed only its OPENING. An 8KB BACKGROUND.md was
+      searchable by its first paragraph and invisible after it. `collectItems` now
+      splits long text into overlapping windows (`chunkText`), one vector each,
+      ref `<base>#NNN`. A document is retrievable by ANY passage in it.
+  `semantic:test` seeds a fact buried mid-document and a Hebrew document, and FAILS
+  if either regresses. Bumping `NEURAL_ID` forces a clean reindex on next use.
 - Combine both, then answer in your own words with the numbers cited.
 
 ### Everything else (already key-free)

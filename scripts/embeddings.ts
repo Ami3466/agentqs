@@ -27,7 +27,7 @@ import net from "net";
 import os from "os";
 import path from "path";
 import { appendInboxItem } from "../src/lib/record";
-import { buildIndex, indexStatus, semanticSearch, ensureIndex } from "../src/lib/embeddings";
+import { buildIndex, chunkText, collectItems, indexStatus, semanticSearch, ensureIndex } from "../src/lib/embeddings";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -78,9 +78,66 @@ const DAYS: [string, string][] = [
   ["2026-06-05", "Frustrated and angry at the meeting, snapped at people."],
 ];
 
+// Filler long enough to push the buried fact WELL past the model's context window, so
+// a single whole-document vector provably cannot see it.
+const FILLER_EN =
+  "Notes on the quarter. Shipped the importer, fixed the sync scheduler, reviewed the backlog, " +
+  "rewrote the onboarding copy, argued about naming, cleaned up the cache layer, and moved on. ";
+const FILLER_HE =
+  "הערות מהרבעון. שחררתי את המייבא, תיקנתי את המתזמן, עברתי על המשימות, ניקיתי את המטמון והמשכתי הלאה. ";
+
+// Two LONG documents whose distinctive fact sits in the MIDDLE, buried under ~4KB of
+// filler. This is the exact shape that used to fail: the memo was stored, reindexed,
+// and unfindable, because only its opening ever reached the model.
+//   - the English one proves CHUNKING (the tail of a long doc is embedded at all).
+//   - the Hebrew one proves the model is MULTILINGUAL (an English-only model can't
+//     retrieve it in any language, and Hebrew is most of this record).
+const BURIED_EN_DATE = "2026-06-08";
+const BURIED_HE_DATE = "2026-06-09";
+const BURIED_EN =
+  FILLER_EN.repeat(12) +
+  "\n\nThe decision I keep avoiding: I want to leave the agency and go work on brain-computer " +
+  "interfaces, memory research specifically. I have not told anyone this yet.\n\n" +
+  FILLER_EN.repeat(12);
+const BURIED_HE =
+  FILLER_HE.repeat(12) +
+  "\n\nההחלטה שאני כל הזמן דוחה: אני רוצה לעזוב את הסוכנות וללכת לעבוד על ממשקי מוח-מחשב, " +
+  "ובמיוחד על מחקר של זיכרון. עוד לא סיפרתי על זה לאף אחד.\n\n" +
+  FILLER_HE.repeat(12);
+
+// A dropped CSV lands VERBATIM in the inbox. Chunking one would flood the index with
+// hundreds of rows of digits which a compressed-score model ranks alongside real
+// writing — the numbers then crowd the journal out of its own search. A table is
+// worth ONE vector; its meaning lives in the daily cells it structures into.
+const TABLE_DATE = "2026-06-10";
+const TABLE_CSV =
+  "date,steps,resting_hr,hrv,sleep_min,calories\n" +
+  Array.from(
+    { length: 400 },
+    (_, i) => `2025-${String((i % 12) + 1).padStart(2, "0")}-01,${8000 + i},${52 + (i % 9)},${40 + (i % 30)},${380 + (i % 90)},${2100 + i}`,
+  ).join("\n");
+
+const LONG: [string, string][] = [
+  [BURIED_EN_DATE, BURIED_EN],
+  [BURIED_HE_DATE, BURIED_HE],
+];
+
+// The SAME table, but already merged into daily cells (`via: "csv"`). Its rows now live
+// in the daily table, which is embedded on its own — so indexing the raw file too would
+// store every row twice and slice the file into fragments that outscore real writing.
+// Raw or structured, never both.
+const STRUCTURED_DATE = "2026-06-11";
+
 function seedRecord(recordDir: string) {
-  for (const [, text] of DAYS) appendInboxItem({ text, source: "memo" }, { recordDir });
-  // Backdate each memo's ts so it belongs to its intended day.
+  const all: [string, string][] = [
+    ...DAYS,
+    ...LONG,
+    [TABLE_DATE, TABLE_CSV],
+    [STRUCTURED_DATE, TABLE_CSV],
+  ];
+  for (const [, text] of all) appendInboxItem({ text, source: "memo" }, { recordDir });
+  // Backdate each memo's ts so it belongs to its intended day, and mark the LAST one
+  // structured-via-csv exactly as structurePending would.
   const inboxFile = path.join(recordDir, "inbox.jsonl");
   const lines = fs
     .readFileSync(inboxFile, "utf8")
@@ -88,7 +145,11 @@ function seedRecord(recordDir: string) {
     .split("\n")
     .map((l, i) => {
       const o = JSON.parse(l);
-      o.ts = DAYS[i][0] + "T12:00:00.000Z";
+      o.ts = all[i][0] + "T12:00:00.000Z";
+      if (all[i][0] === STRUCTURED_DATE) {
+        o.status = "structured";
+        o.meta = { ...(o.meta ?? {}), structured: { via: "csv", source: "health", cells: 2400 } };
+      }
       return JSON.stringify(o);
     });
   fs.writeFileSync(inboxFile, lines.join("\n") + "\n");
@@ -106,8 +167,26 @@ async function main() {
   // ---- 1. The pure local index (sqlite-vec + the local model), keyless. ----
   console.log("\nThe local semantic index — sqlite-vec + the local embedding model (no key)…\n");
   const built = await buildIndex({ recordDir: rDir, vecFile });
+  // A long PROSE memo becomes several chunks; a 400-row CSV stays ONE vector.
+  const expected = DAYS.length + LONG.reduce((n, [, t]) => n + chunkText(t).length, 0) + 1;
   check("the index built with the sqlite-vec backend", built.backend === "sqlite-vec", built.backend);
-  check("every dated memo was embedded", built.count === DAYS.length, `${built.count} entries`);
+  check("every dated memo was embedded", built.count === expected, `${built.count} entries`);
+  check(
+    "long memos are CHUNKED, not clipped to their opening",
+    chunkText(BURIED_EN).length > 1 && chunkText(BURIED_HE).length > 1,
+    `${chunkText(BURIED_EN).length} + ${chunkText(BURIED_HE).length} chunks`,
+  );
+  // The guard: a dropped table must NOT become hundreds of rows of digits in the
+  // index. Its rows would score alongside prose and bury the journal. Both copies of
+  // the same 400-row table are seeded — one pending, one already structured via csv —
+  // so this counts BOTH: the pending one is worth a single vector, the structured one
+  // is worth NONE (its rows are daily cells now, and those are embedded on their own).
+  const tableItems = collectItems(rDir).filter((it) => it.text.startsWith("date,steps,resting_hr"));
+  check(
+    "a structured CSV leaves the index entirely; a pending one is ONE vector, never rows of digits",
+    tableItems.length === 1,
+    `${tableItems.length} entries for two 400-row tables`,
+  );
 
   // Feeling-queries that share NO words with the memo they should match — the real
   // neural model has to line them up by MEANING, not lexical overlap.
@@ -132,13 +211,32 @@ async function main() {
   }
   check("semantic recall matches by MEANING, not keywords", semanticOk === semantic.length, `${semanticOk}/${semantic.length}`);
 
+  // --- The two regressions this suite exists to catch. ---
+  // Both queries name a fact buried in the MIDDLE of a ~4KB memo. With one vector per
+  // document (the old behaviour) the fact is past the model's window and unreachable;
+  // with an English-only model the Hebrew memo is unreachable in any language.
+  console.log("\n  A fact buried mid-document, and a document written in Hebrew…\n");
+  const buried: [string, string, string][] = [
+    ["wanting to quit my job and move into neuroscience", BURIED_EN_DATE, "buried mid-document (English)"],
+    ["רוצה לעזוב את העבודה ולעבוד על מחקר מוח", BURIED_HE_DATE, "Hebrew query → Hebrew document"],
+    ["wanting to quit my job and move into brain research", BURIED_HE_DATE, "English query → HEBREW document (cross-lingual)"],
+  ];
+  for (const [q, want, label] of buried) {
+    const hits = await semanticSearch(q, { recordDir: rDir, vecFile, limit: 5 });
+    const dates = hits.map((h) => h.date);
+    // The Hebrew and English docs say the same thing, so either may top the other for a
+    // cross-lingual query — what must hold is that the buried day is FOUND at all.
+    const pass = dates.includes(want);
+    check(`${label}`, pass, pass ? `found ${niceDate(want)}` : `got ${dates.map(niceDate).join(", ") || "(none)"}`);
+  }
+
   // Deterministic: rebuild → identical ranking (compare to the first build's result).
   await buildIndex({ recordDir: rDir, vecFile });
   const again = await semanticSearch(semantic[0][0], { recordDir: rDir, vecFile, limit: 3 });
   check("the index is deterministic (same record → same top day)", again[0]?.date === firstTop, `${again[0]?.date} vs ${firstTop}`);
   check("ensureIndex is a no-op when the index is fresh", (await ensureIndex({ recordDir: rDir, vecFile })) === null);
   const st = await indexStatus({ recordDir: rDir, vecFile });
-  check("indexStatus reports built + fresh", st.built && !st.stale && st.count === DAYS.length);
+  check("indexStatus reports built + fresh", st.built && !st.stale && st.count === expected, `${st.count} entries`);
 
   // ---- 2. End to end over the built app, NO AI key. ----
   const port = await freePort();
@@ -219,7 +317,7 @@ async function main() {
     // --- GET /api/embeddings — the status the Settings panel shows. ---
     const statusRes = await fetch(`${base}/api/embeddings`, { headers: { cookie } });
     const status = await statusRes.json();
-    check("/api/embeddings reports a built index", status.built === true && status.count === DAYS.length, `${status.count} entries · ${status.backend}`);
+    check("/api/embeddings reports a built index", status.built === true && status.count === expected, `${status.count} entries · ${status.backend}`);
   } finally {
     server.kill("SIGKILL");
     fs.rmSync(root, { recursive: true, force: true });
