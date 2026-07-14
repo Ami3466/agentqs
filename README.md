@@ -20,7 +20,7 @@ npm run dev               # → http://localhost:3000
 
 The agent can import and structure the data already on your machine, connect your accounts and set up syncs.
 
-Better on the cloud: needs to be live for Slack and telegram integration. and needed a public url for auth apps
+Better on the cloud: it needs to be live for the Slack and Telegram integrations, and OAuth apps need a public, stable callback URL. Either way you can back your data up, encrypted, to your own Google Drive - on the schedule you set.
 
 ![Deploy on FlowEngine](https://flowengine.cloud/button.svg)## Features
 
