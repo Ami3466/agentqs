@@ -469,7 +469,18 @@ export async function getJson(
     }
     throw new Error(`${res.status}${body ? ` — ${body}` : ""}`);
   }
-  return res.json();
+  // A 200 with an EMPTY BODY is a real answer, not a crash. Gmail does exactly this:
+  // ask for a day with no mail while a `fields` mask is set and it returns 200 with
+  // nothing at all — res.json() then throws "Unexpected end of JSON input" and takes
+  // the whole sync down, on a quiet Tuesday, which reads as "Gmail is broken".
+  // An empty body means an empty result; say so.
+  const text = await res.text();
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`${res.status} returned a body that is not JSON — ${text.trim().slice(0, 120)}`);
+  }
 }
 
 /** POST JSON to a URL and parse the JSON reply — same error shape as getJson.
