@@ -61,13 +61,18 @@ export async function GET() {
 }
 
 /**
- * End a session: distill the transcript into {title, summary, insights,
- * commitments}, append it to the typed session store (record/sessions.jsonl,
- * separate from daily data), rebuild the cache so it lands on the Journal
- * timeline, and return the synthesis. The agent later reads this synthesis —
- * never the transcript — for continuity.
+ * End a session and record its synthesis {title, summary, insights, commitments}
+ * to the typed session store (record/sessions.jsonl, separate from daily data),
+ * rebuild so it lands on the Journal timeline, and return it. The agent later reads
+ * this synthesis — never the transcript — for continuity.
  *
- * Body: `{ messages: [{role,content}], skill, title?, startedAt? }`.
+ * TWO shapes, because YOU are the AI:
+ *  - Key-free (the self-building path): send the synthesis you already reasoned —
+ *    `{ insights: [...], commitments: [...], summary?, title?, skill?, startedAt?,
+ *    transcript? }`. Nothing is sent to any model; agentqs just validates + records.
+ *    Same contract idea as POST /api/structure's `csv`.
+ *  - Transcript: `{ messages: [{role,content}], skill, title?, startedAt? }` — agentqs
+ *    distills it with the configured AI key (what the built-in chat UI uses).
  */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -79,8 +84,43 @@ export async function POST(req: Request) {
     skill?: string;
     title?: string;
     startedAt?: string;
+    summary?: string;
+    insights?: string[];
+    commitments?: string[];
+    transcript?: string;
   };
 
+  const skill = resolveSkill(body.skill).id;
+  const startedAt = body.startedAt || new Date().toISOString();
+  const date = startedAt.slice(0, 10);
+  const rDir = recordDir();
+
+  const cleanList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map((s) => s.trim()) : [];
+  const insights = cleanList(body.insights);
+  const commitments = cleanList(body.commitments);
+  const summary = typeof body.summary === "string" ? body.summary.trim() : "";
+
+  // Key-free path: the agent already did the reasoning — record it verbatim, no model call.
+  if (insights.length || commitments.length || summary) {
+    const item = appendSession(
+      {
+        skill,
+        startedAt,
+        date,
+        title: body.title?.trim() || null,
+        summary: summary || null,
+        transcript: typeof body.transcript === "string" ? body.transcript : "", // optional provenance
+        insights,
+        commitments,
+      },
+      { recordDir: rDir },
+    );
+    rebuild({ recordDir: rDir });
+    return NextResponse.json({ ok: true, via: "provided", session: toView(item) });
+  }
+
+  // Transcript path: distill with the configured AI (the chat UI's flow).
   const messages = Array.isArray(body.messages)
     ? body.messages.filter(
         (m) =>
@@ -88,17 +128,18 @@ export async function POST(req: Request) {
       )
     : [];
   if (!messages.some((m) => m.role === "user")) {
-    return NextResponse.json({ error: "Nothing to save — a session needs at least one message." }, { status: 400 });
+    return NextResponse.json(
+      {
+        error:
+          "Nothing to save. Send the synthesis you reasoned — {insights:[…], commitments:[…], summary?} — or a transcript {messages:[…]} for agentqs to distill.",
+      },
+      { status: 400 },
+    );
   }
 
-  const skill = resolveSkill(body.skill).id;
-  const startedAt = body.startedAt || new Date().toISOString();
-  const date = startedAt.slice(0, 10);
   const cfg = readConfig();
-
   const { synthesis, via, transcript } = await synthesizeSession({ messages, skill, date, cfg });
 
-  const rDir = recordDir();
   const item = appendSession(
     {
       skill,
