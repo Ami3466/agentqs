@@ -4,7 +4,7 @@
 
 **The source-available pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
-[Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
+[Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI, API & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
 </div>
 
@@ -141,6 +141,17 @@ Expose it over MCP - the agent reads, writes and queries through local tools. Re
 ```json
 { "command": "agentqs", "args": ["serve", "--mcp"] }
 ```
+
+**Over HTTP, the same core.** A running instance exposes every capability as a REST endpoint behind one bearer key (mint it in Settings → API). Nothing is CLI-only that an agent driving the API can't reach - the faces are thin, the brain is shared.
+
+```bash
+curl -s "$URL/api"                                    # discovery manifest: every endpoint + its CLI/MCP twin, and the routing rules
+curl -s "$URL/api/query" -H "authorization: Bearer $KEY"   # schema + LIVE metric catalog (every metric, its source + span) + query recipes
+curl -s "$URL/api/query" -H "authorization: Bearer $KEY" \
+  -d '{"sql":"select metric, count(*) from daily group by metric","limit":500}'   # POST body = read-only SQL, the analytical door
+```
+
+`GET /api` is a machine-readable map an agent reads first, so it never guesses a route. `POST /api/query` is the analytical door - arbitrary read-only SQL over the record, run on a worker thread with a timeout so a heavy scan never freezes the instance; `GET /api/query` self-describes it (the metric names live in a column, not as columns, and it tells you so). The key-free reasoning flows work here too: `POST /api/structure` takes the CSV your agent extracted, `POST /api/sessions` records the insights and commitments it reasoned - the instance needs no model key of its own. `POST /api/chat` and `POST /api/search` (semantic recall) round out the natural-language side.
 
 ## Deploy
 
