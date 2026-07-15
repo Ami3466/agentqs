@@ -107,6 +107,16 @@ export const PAGING: Record<string, PagingSpec> = {
     item: (day) => ({ completed_at: iso(day) }),
     wrap: (items, page, last) => ({ items, ...(last ? { next_cursor: null } : { next_cursor: String(page + 1) }) }),
   },
+  readwise: {
+    full: 1, // an explicit `next` cursor, so one highlight per page proves the walk
+    pageOf: (u) => Number(u.searchParams.get("page") ?? 1) - 1,
+    item: (day) => ({ highlighted_at: iso(day) }),
+    wrap: (items, page, last) => ({
+      count: items.length,
+      next: last ? null : `https://readwise.io/api/v2/highlights/?page=${page + 2}`,
+      results: items,
+    }),
+  },
 };
 
 /**

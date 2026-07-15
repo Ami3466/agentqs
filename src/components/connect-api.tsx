@@ -23,7 +23,7 @@ export const skillSnip = (b: string, k: string) =>
     '- Capture: POST /api/inbox {"text":"…"} · structure: POST /api/structure {"id","csv"} · quality: POST /api/scan {}',
     '- Backups: GET /api/backup (status) · POST /api/backup {"target":"github"|"drive"} · migrate here: {"target":"restore","confirm":"replace-record"}',
     '- Connect a source: POST /api/import/<id> {"credential"} (tested before saved) · OAuth: POST /api/oauth/<id> {"clientId","clientSecret"}',
-    '- Skills (the chat personas): GET /api/skills lists them · push one: POST /api/skills {"name","system","blurb"?,"id"?} — name is the chip label, system is the persona prompt (to push a Claude Code skill, send its SKILL.md body as "system") · remove: DELETE /api/skills?id=<id>. Built-in ids (mentor·therapist·coach) are reserved — a pushed skill needs its own id.',
+    '- Skills (the chat personas): GET /api/skills lists them · push one: POST /api/skills {"name","system","blurb"?,"id"?} — name is the chip label, system is the persona prompt (to push an agent skill, send its SKILL.md body as "system") · remove: DELETE /api/skills?id=<id>. Built-in ids (mentor·therapist·coach) are reserved — a pushed skill needs its own id.',
   ].join("\n");
 
 /** Ready-to-paste prompt: hands an AI the data-quality endpoints plus the
@@ -40,8 +40,9 @@ export const fixPromptSnip = (b: string, k: string) =>
     "- Same flows key-free via the CLI: `agentqs scan --json`, `agentqs structure --id <id>`, `agentqs log reject <id>`.",
     "Decide per finding: APPLY when it's clearly one metric imported twice, a dead column, or junk cells. DISMISS when the data is meaningful as-is (different metrics that merely correlate, a real all-zero streak). Ask me before touching anything you are unsure about.",
   ].join("\n");
+// The standard MCP server config block — drop it into any MCP client's config.
 export const mcpSnip = (b: string, k: string) =>
-  `claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}'`;
+  `{"agentqs":{"command":"agentqs","args":["serve","--mcp"],"env":{"AGENTQS_URL":"${b}","AGENTQS_KEY":"${k}"}}}`;
 
 /** Small copy state hook: flips a checkmark for 1.2s after writing to the clipboard. */
 export function useCopy(): [boolean, (code: string) => void] {

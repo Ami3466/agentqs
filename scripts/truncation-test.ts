@@ -416,7 +416,7 @@ async function main() {
   check(`Readwise files a 9pm-NY highlight on the 10th (${rwRow[0]?.[0]})`, rwRow[0]?.[0] === "2026-06-10", rwRow[0]?.[0] ?? "no row");
 
   // ---- 6. NO FACE MAY REACH FOR A TRAILING WINDOW ----------------------------
-  // The rule (CLAUDE.md): a file is finite and already on your disk, so it is read
+  // The rule (the agent guide): a file is finite and already on your disk, so it is read
   // WHOLE. Clipping ten years of your own Chrome history to a trailing 90 days throws
   // away years that were sitting right there — and since every later run re-asks for
   // the same trailing 90, they are never fetched even once.

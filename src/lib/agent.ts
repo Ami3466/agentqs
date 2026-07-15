@@ -16,7 +16,7 @@ import type { LlmMessage } from "./llm";
 
 /**
  * The mentor brain (Loop 4). A provider-agnostic agent built on the Vercel AI SDK
- * (default Anthropic/Claude, BYO key can pick OpenAI or Gemini) that answers from
+ * (default Anthropic, BYO key can pick OpenAI or Gemini) that answers from
  * the user's real record by *calling tools*, not by having numbers stuffed into its
  * prompt:
  *

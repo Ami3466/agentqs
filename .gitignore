@@ -14,3 +14,6 @@ dist/
 tsconfig.tsbuildinfo
 tsconfig*.tsbuildinfo
 CLAUDE.local.md
+
+# Agent guide — kept local, not shipped in the public repo
+CLAUDE.md

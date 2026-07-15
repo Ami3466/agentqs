@@ -10,7 +10,7 @@
  *      and citing those exact numbers — proven by asserting the reply quotes a
  *      value that genuinely exists in the daily table.
  *   3. (Optional) With ANTHROPIC_API_KEY set, the same runMentor path is exercised
- *      against the real Claude API and must cite a number too.
+ *      against the real Anthropic API and must cite a number too.
  *
  * Drives the production code: mentorTools + runMentor (the exact functions
  * /api/chat uses) against a real SQLite cache rebuilt from samples/record. The
@@ -144,7 +144,7 @@ async function main() {
     `cited ${cited.join(", ")} (real: ${sleepValues.join(", ")})`,
   );
 
-  // ---- 3. Optional: the same path against the real Claude API ---------------
+  // ---- 3. Optional: the same path against the real Anthropic API ---------------
   console.log("\nShips-when 3 — same agent path against a live provider (optional)");
   const key = process.env.ANTHROPIC_API_KEY;
   if (key) {
@@ -169,7 +169,7 @@ async function main() {
       check("live call succeeded", false, (e as Error).message);
     }
   } else {
-    console.log("  · skipped (set ANTHROPIC_API_KEY to exercise the real Claude API)");
+    console.log("  · skipped (set ANTHROPIC_API_KEY to exercise the real Anthropic API)");
   }
 
   fs.rmSync(root, { recursive: true, force: true });

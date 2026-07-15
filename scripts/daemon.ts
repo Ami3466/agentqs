@@ -86,7 +86,7 @@ async function ingest(args: Args): Promise<IngestResult> {
   // A FILE IS FINITE AND ALREADY ON YOUR DISK, so it is read WHOLE. Clipping your own
   // ten-year Chrome history to a trailing 90 days throws away years that were sitting
   // right there — and because every later run re-asks for the same trailing 90, those
-  // years are never fetched even once. This is the banned hardcoded window (CLAUDE.md),
+  // years are never fetched even once. This is the banned hardcoded window (the agent guide),
   // and it outlived its own fix: cli-core stopped doing it, these two shipped faces did
   // not — including the daemon the README tells hosted users to schedule.
   // `--days N` still means exactly that, for someone who wants a quick top-up.
