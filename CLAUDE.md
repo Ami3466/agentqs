@@ -352,6 +352,22 @@ MCP equivalents: `inbox_pending` -> `structure {id, csv}` / `inbox_resolve {id, 
   callback that trusts it redirects the user to `https://0.0.0.0:3000`. The
   Docker image is Debian (glibc), NOT alpine: onnxruntime (local embeddings /
   `recall`) has no musl build, and `backup github` needs the real `git`.
+  THE IMAGE IS THE ARTIFACT, AND agentqs IS NOT PUBLISHED. A tag (`git tag v0.2.0
+  && git push origin v0.2.0`) builds `ghcr.io/ami3466/agentqs` in CI
+  (`.github/workflows/release.yml`, amd64 + arm64) and the package inherits this
+  repo's PRIVATE visibility. `package.json` stays `private: true` - nothing goes to
+  npm. A host then PULLS a tagged image; it never clones the source, so the code
+  never lands on the machine holding the record, a deploy is seconds instead of a
+  4-minute `docker build` on a small VPS, and a rollback is the previous tag.
+  Building from source on the host is what forced a PUBLIC deploy mirror of this
+  private repo once - do not go back to it.
+  The record lives on a persistent volume at `/data` (`AGENTQS_DATA_DIR=/data`,
+  `VOLUME /data`, and the app runs as uid 1001 `nextjs` which OWNS it - a bind
+  mount from a host dir it cannot write answers "Could not write config to the data
+  directory"; a NAMED volume inherits the image's ownership and is what to use).
+  A hosting platform must mount that volume on a rule that cannot drift - FlowEngine
+  gated it on the repo NAME containing "wpbot" (hence the mirror's name), which is
+  now `persistDataDirForRepo` keyed on the template.
 - Importer HTTP goes through `netFetch` (plugin.ts): it retries a transient
   network failure (a cold container's first DNS lookup) and names the real cause
   instead of undici's bare "fetch failed", which reads like a bad credential.

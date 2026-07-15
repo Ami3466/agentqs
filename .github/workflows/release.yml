@@ -1,0 +1,88 @@
+# Cut a release: `git tag v0.2.0 && git push origin v0.2.0`.
+#
+# Builds ONE image and pushes it to GHCR, where it inherits this repo's
+# visibility - the repo is private, so the package is private. Nothing here
+# publishes agentqs to npm or to a public registry.
+#
+# Why an image at all: a host that BUILDS from source needs the source on it, and
+# spends ~4 minutes of a small VPS's CPU doing what CI already did. Pulling a
+# tagged image instead means the record's machine never sees the code, a deploy is
+# seconds, and a rollback is the previous tag.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Extra tag to publish (e.g. edge). The digest is always tagged too."
+        required: false
+        default: "edge"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # v0.2.0 -> :0.2.0, :0.2, :latest. A manual run -> :edge (or whatever was typed).
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # amd64 for the VPS, arm64 so the same image runs on an Apple Silicon laptop.
+      # onnxruntime (the local embedder behind `recall`) has no musl build, which is
+      # why the Dockerfile is Debian - do not "optimize" it to alpine here.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image is the artifact, so it has to actually boot. Pull the amd64 image
+      # we just pushed, run it on a throwaway /data, and require a real HTTP answer -
+      # a build that compiles and then dies on start is not a release.
+      - name: Smoke-test the pushed image
+        run: |
+          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          docker run -d --name qs -p 3000:3000 -v /tmp/qs-data:/data "$IMG"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || true)
+            if [ "$code" != "000" ] && [ "$code" != "" ]; then
+              echo "image answered HTTP $code"
+              docker rm -f qs
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "image never answered on :3000"
+          docker logs qs
+          docker rm -f qs
+          exit 1
