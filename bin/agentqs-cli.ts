@@ -2,7 +2,7 @@
  * agentqs — the CLI-first face of the whole app.
  *
  * Every capability the GUI has is here and, through the same core (src/lib/cli-core)
- * and the MCP server (`serve --mcp`), reachable from Claude Code: import a file,
+ * and the MCP server (`serve --mcp`), reachable from an MCP client: import a file,
  * connect a source, schedule and run syncs, add/edit a mentor, rebuild, query, chat.
  * The web app and the JSON API call the identical core — one brain, three faces.
  *
@@ -1011,8 +1011,8 @@ program
 // ---- serve (web + MCP) ----------------------------------------------------
 program
   .command("serve")
-  .description("run the web app, or the MCP server for Claude Code")
-  .option("--mcp", "start the MCP server on stdio (for Claude Code)")
+  .description("run the web app, or the MCP server for MCP clients")
+  .option("--mcp", "start the MCP server on stdio (for MCP clients)")
   .option("-p, --port <n>", "web port", "3000")
   .action(async (opts: { mcp?: boolean; port: string }) => {
     if (opts.mcp) {

@@ -4,7 +4,7 @@
  * The `agentqs` CLI (bin/agentqs-cli.ts) and the MCP server (bin/mcp.ts) both call
  * ONLY these functions; the Next app's API routes call the same underlying lib.
  * So "import a file, connect a source, schedule a sync, run a sync, add a mentor,
- * rebuild, query, chat" behave identically from the terminal, from Claude Code
+ * rebuild, query, chat" behave identically from the terminal, from an MCP client
  * (MCP), from `curl` (JSON API), and from the GUI. Server-only (fs + sqlite).
  *
  * Every function returns a plain JSON-able object — the CLI prints it, the MCP

@@ -16,7 +16,7 @@ agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your
 
 ## Quick start
 
-agentqs is a CLI-first platform: the recommended (and free) setup needs no API keys and no environment variables. Clone the repo and ask Claude Code or Codex to set everything up for you.
+agentqs is a CLI-first platform: the recommended (and free) setup needs no API keys and no environment variables. Clone the repo and ask an AI coding agent to set everything up for you.
 
 ```bash
 git clone https://github.com/Ami3466/agentqs.git && cd agentqs
@@ -136,10 +136,10 @@ agentqs structure --id <id> --csv "date,mood,steps
 agentqs recall "days that felt burned out" # meaning-search, fully on-device
 ```
 
-Expose it over MCP - the agent reads, writes and queries through local tools (the repo's `CLAUDE.md` teaches these workflows automatically):
+Expose it over MCP - the agent reads, writes and queries through local tools. Register the server with any MCP client:
 
-```bash
-claude mcp add-json agentqs '{"command":"agentqs","args":["serve","--mcp"]}'
+```json
+{ "command": "agentqs", "args": ["serve", "--mcp"] }
 ```
 
 ## Deploy

@@ -132,7 +132,7 @@ export async function autoStructureNewItem(id: string): Promise<StructureRunResu
 }
 
 /** Drain pending inbox items into daily rows. `{id}` structures one; `{}` drains all.
- *  `{id, csv}` is the key-free agent route: a CLI agent (Claude Code, Codex) reads
+ *  `{id, csv}` is the key-free agent route: a CLI agent (e.g. Codex) reads
  *  the pending item itself and SUPPLIES the extracted daily CSV — same validation,
  *  merge, and undo metadata as the LLM route, no API key involved. */
 export async function structurePending(
@@ -256,7 +256,7 @@ export async function structurePending(
           route,
           status: "error",
           message:
-            "No AI key configured. Add one in Settings, or structure key-free with a CLI agent: `agentqs structure --id <id> --csv '<date,... CSV>'` (see CLAUDE.md).",
+            "No AI key configured. Add one in Settings, or structure key-free with a CLI agent: `agentqs structure --id <id> --csv '<date,... CSV>'`.",
         });
         continue;
       }

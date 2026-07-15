@@ -334,7 +334,7 @@ export async function transcribeMemo(input: TranscribeInput, env: SttEnv): Promi
  * written back to the record. Two providers, picked in Settings → Voice:
  *
  *   - elevenlabs  — Conversational AI; needs an API key + an agent id (the
- *                   agent's brain is configured to Claude in the ElevenLabs
+ *                   agent's brain is configured to your LLM in the ElevenLabs
  *                   dashboard). The server mints a signed URL to connect to.
  *   - google-live — Gemini Live; needs only a Gemini API key (a Google provider
  *                   key can be linked). The server mints a single-use ephemeral

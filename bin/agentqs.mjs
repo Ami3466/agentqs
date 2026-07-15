@@ -2,7 +2,7 @@
 /**
  * `agentqs` entry point. The CLI itself is TypeScript (bin/agentqs-cli.ts); this
  * thin Node shim runs it through the project's own tsx so `npm link` gives you a
- * real `agentqs` command (and a working `serve --mcp` for Claude Code) without a
+ * real `agentqs` command (and a working `serve --mcp` for MCP clients) without a
  * build step. stdio is inherited, so the MCP JSON-RPC stream passes straight
  * through.
  */

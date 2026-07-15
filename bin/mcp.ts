@@ -1,9 +1,9 @@
 /**
- * agentqs MCP server — the Claude Code face of agentqs.
+ * agentqs MCP server — the MCP face of agentqs.
  *
  * Launched by `agentqs serve --mcp` (see the Connect / API bar in the app). It
  * speaks MCP over stdio and exposes the SAME core the CLI, the JSON API, and the
- * GUI call (src/lib/cli-core) as tools, so from Claude Code you can import a file,
+ * GUI call (src/lib/cli-core) as tools, so from an MCP client you can import a file,
  * connect a source, schedule and run syncs, add or edit a mentor, rebuild, query
  * your data, and chat with your grounded record — without leaving the terminal.
  */
