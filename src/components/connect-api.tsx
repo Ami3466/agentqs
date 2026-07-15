@@ -23,6 +23,7 @@ export const skillSnip = (b: string, k: string) =>
     '- Capture: POST /api/inbox {"text":"…"} · structure: POST /api/structure {"id","csv"} · quality: POST /api/scan {}',
     '- Backups: GET /api/backup (status) · POST /api/backup {"target":"github"|"drive"} · migrate here: {"target":"restore","confirm":"replace-record"}',
     '- Connect a source: POST /api/import/<id> {"credential"} (tested before saved) · OAuth: POST /api/oauth/<id> {"clientId","clientSecret"}',
+    '- Skills (the chat personas): GET /api/skills lists them · push one: POST /api/skills {"name","system","blurb"?,"id"?} — name is the chip label, system is the persona prompt (to push a Claude Code skill, send its SKILL.md body as "system") · remove: DELETE /api/skills?id=<id>. Built-in ids (mentor·therapist·coach) are reserved — a pushed skill needs its own id.',
   ].join("\n");
 
 /** Ready-to-paste prompt: hands an AI the data-quality endpoints plus the
