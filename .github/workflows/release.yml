@@ -1,17 +1,19 @@
-# Cut a release: `git tag v0.2.0 && git push origin v0.2.0`.
+# Build + publish the agentqs image to GHCR:
+#   - push to `main`           -> :latest (+ :sha-<short>)
+#   - `git tag vX.Y.Z && push` -> :X.Y.Z + :X.Y + :latest
+# The package is PUBLIC (any host can pull it anonymously); the source repo stays
+# private. Nothing here publishes to npm, and nothing here knows about any specific
+# host - deploying/redeploying is the host's job (whatever pulls this image decides
+# when to roll it), which keeps this repo free of deploy credentials or coupling.
 #
-# Builds ONE image and pushes it to GHCR, where it inherits this repo's
-# visibility - the repo is private, so the package is private. Nothing here
-# publishes agentqs to npm or to a public registry.
-#
-# Why an image at all: a host that BUILDS from source needs the source on it, and
-# spends ~4 minutes of a small VPS's CPU doing what CI already did. Pulling a
-# tagged image instead means the record's machine never sees the code, a deploy is
-# seconds, and a rollback is the previous tag.
+# Why an image at all: a host that BUILDS from source spends ~4 min of a small VPS's
+# CPU doing what CI already did. Pulling the image means the record's machine never
+# sees the code, a deploy is seconds, and a rollback is the previous tag.
 name: release
 
 on:
   push:
+    branches: ["main"]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -54,7 +56,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       # amd64 is the deploy target (the VPS). arm64 is opt-in via the
