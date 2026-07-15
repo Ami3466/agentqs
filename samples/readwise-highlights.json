@@ -1,0 +1,9 @@
+{
+  "count": 3,
+  "next": null,
+  "results": [
+    { "highlighted_at": "2026-06-15T12:00:00Z" },
+    { "highlighted_at": "2026-06-15T14:30:00Z" },
+    { "highlighted_at": "2026-06-18T09:15:00Z" }
+  ]
+}

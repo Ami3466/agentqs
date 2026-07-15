@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { apiError } from "@/lib/api";
 import { pipelineReport } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
@@ -12,5 +13,9 @@ export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  return NextResponse.json(pipelineReport());
+  try {
+    return NextResponse.json(pipelineReport());
+  } catch (e) {
+    return apiError(e);
+  }
 }

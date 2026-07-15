@@ -1,11 +1,13 @@
 (function () {
   const STATUS_KEY = "agentqsImportStatus";
   const BASE_KEY = "agentqsBaseUrl";
+  const TOKEN_KEY = "agentqsIngestToken";
   const DEFAULT_BASE = "http://localhost:3000";
   const statusNode = document.getElementById("status");
   const autoBrowser = document.getElementById("auto-browser");
   const importerSelect = document.getElementById("importer");
   const baseInput = document.getElementById("base-url");
+  const tokenInput = document.getElementById("ingest-token");
 
   function render(status) {
     if (!status) {
@@ -83,9 +85,10 @@
     });
   }
 
-  chrome.storage.local.get([STATUS_KEY, BASE_KEY], (result) => {
+  chrome.storage.local.get([STATUS_KEY, BASE_KEY, TOKEN_KEY], (result) => {
     render(result[STATUS_KEY]);
     baseInput.value = result[BASE_KEY] || DEFAULT_BASE;
+    tokenInput.value = result[TOKEN_KEY] || "";
   });
   loadImporters();
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -96,6 +99,11 @@
     const base = normalizedBase();
     baseInput.value = base;
     chrome.storage.local.set({ [BASE_KEY]: base });
+  });
+  tokenInput.addEventListener("change", () => {
+    const token = (tokenInput.value || "").trim();
+    tokenInput.value = token;
+    chrome.storage.local.set({ [TOKEN_KEY]: token });
   });
   document.getElementById("start-import").addEventListener("click", () => start(importerSelect.value, false));
   document.getElementById("stop-import").addEventListener("click", () => {

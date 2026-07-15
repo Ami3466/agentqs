@@ -22,6 +22,7 @@ import Database from "better-sqlite3";
 import { unixMsToWebkit } from "../src/lib/importers/files/chrome";
 import { unixMsToMacAbsolute } from "../src/lib/importers/files/safari";
 import { buildSources } from "../src/lib/source-registry";
+import { appendInboxItems, readInboxFromRecord } from "../src/lib/record";
 
 const REPO = process.cwd();
 const TSX = path.join(REPO, "node_modules/.bin/tsx");
@@ -455,6 +456,19 @@ function main(): void {
   check("not pushed without --push", sRes.pushed === false);
   const log = execFileSync("git", ["-C", recordDir, "log", "--oneline"], { encoding: "utf8" });
   check("commit is in the record repo history", log.trim().length > 0, log.trim().split("\n")[0]);
+
+  console.log("\na dropped file lands ONCE — content-hashed, so a re-drop is idempotent");
+  {
+    const dr = path.join(root, "record-drops");
+    appendInboxItems([{ text: "same dropped content", source: "drop", kind: "text" }], { recordDir: dr });
+    appendInboxItems([{ text: "same dropped content", source: "drop", kind: "text" }], { recordDir: dr });
+    const drops = readInboxFromRecord(dr).filter((i) => i.source === "drop");
+    check("re-dropping the same file adds nothing twice", drops.length === 1, `${drops.length} drop item(s)`);
+    // A typed memo can legitimately recur — it must NOT be deduped by content.
+    appendInboxItems([{ text: "recurring note", source: "memo", kind: "text" }], { recordDir: dr });
+    appendInboxItems([{ text: "recurring note", source: "memo", kind: "text" }], { recordDir: dr });
+    check("a typed memo can still recur (not content-deduped)", readInboxFromRecord(dr).filter((i) => i.source === "memo").length === 2);
+  }
 
   fs.rmSync(root, { recursive: true, force: true });
 

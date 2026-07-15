@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { apiError } from "@/lib/api";
 import { doctorReport } from "@/lib/store-doctor";
 
 export const runtime = "nodejs";
@@ -11,5 +12,9 @@ export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  return NextResponse.json(doctorReport());
+  try {
+    return NextResponse.json(doctorReport());
+  } catch (e) {
+    return apiError(e);
+  }
 }

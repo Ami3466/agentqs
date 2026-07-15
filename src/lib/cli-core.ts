@@ -98,7 +98,7 @@ import {
 import { runAutomation, type AutomationRunResult } from "./automation-run";
 import type { AutomationCreds, PublicAutomation } from "./automation-types";
 import { composeReply, type ComposedReply } from "./reply";
-import { listSkills, removeSkill, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
+import { listSkills, removeSkill, restoreBuiltinSkills, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
 import { isProvider } from "./models";
 import {
   importPhotos,
@@ -178,8 +178,22 @@ export function journal(opts: { limit?: number; source?: string } = {}) {
 export function journalEdit(edits: DailyEdit[]) {
   const rDir = recordDir();
   const result = applyDailyEdits(edits, { recordDir: rDir });
-  const rebuilt = rebuild({ recordDir: rDir });
-  return { ...result, dailyRows: rebuilt.daily };
+  // Patch only the daily sources this edit rewrote — a full rebuild re-reads
+  // events.jsonl (hundreds of MB on a real record) and blocks the server for minutes
+  // just to fix one junk cell. Fall back to a rebuild only when there is no cache yet.
+  const dailyRows = landDailyEditInCache(rDir, result.sources);
+  return { ...result, dailyRows };
+}
+
+/** Patch the cache for a set of daily sources a journal edit / revert rewrote, or
+ *  fall back to the one full rebuild when no cache exists yet. */
+function landDailyEditInCache(rDir: string, sources: string[]): number {
+  if (sources.length === 0) {
+    const cached = refreshSyncCache({ sources: [] }, { recordDir: rDir });
+    return cached ? cached.dailyRows : rebuild({ recordDir: rDir }).daily;
+  }
+  const patched = refreshSyncCache({ sources }, { recordDir: rDir });
+  return patched ? patched.dailyRows : rebuild({ recordDir: rDir }).daily;
 }
 
 export function logItems(limit = 50) {
@@ -405,14 +419,14 @@ export async function testSourceCredential(id: string, credential?: string): Pro
  *  registered and the app must be up when the browser bounces back. */
 export function sourceAuthorize(
   id: string,
-  clientId: string,
-  clientSecret: string,
+  clientId = "",
+  clientSecret = "",
   origin = "http://127.0.0.1:3000",
 ): { id: string; authorizeUrl: string; redirectUri: string; note: string } {
-  if (!clientId?.trim() || !clientSecret?.trim()) {
-    throw new Error("Pass --client-id and --client-secret (from the provider's developer console).");
-  }
   const base = origin.trim().replace(/\/$/, "");
+  // Empty client id/secret = REUSE the saved app key — signing in again, or adding a
+  // second account, never re-enters the key. beginOAuth throws a clear "no key saved
+  // yet" if nothing was ever registered; pass creds only to REPLACE the saved key.
   const r = beginOAuth(id, clientId.trim(), clientSecret.trim(), base);
   return {
     id,
@@ -1743,8 +1757,18 @@ export function skillUpsert(input: UpsertSkillInput) {
 }
 
 export function skillRemove(id: string): { removed: string } {
-  if (!removeSkill(id)) throw new Error(`No custom mentor "${id}".`);
+  // removeSkill hides a built-in (restorable) or drops a custom one; false = nothing
+  // by that id. A built-in is never gone for good — say so.
+  if (!removeSkill(id)) {
+    throw new Error(isBuiltinSkill(id) ? `Built-in persona "${id}" is already hidden.` : `No mentor "${id}".`);
+  }
   return { removed: id };
+}
+
+/** Un-hide every deleted built-in persona (the CLI/MCP twin of Settings → Restore
+ *  defaults). Returns how many came back. */
+export function skillsRestoreDefaults(): { restored: number } {
+  return { restored: restoreBuiltinSkills() };
 }
 
 // ---- rebuild --------------------------------------------------------------

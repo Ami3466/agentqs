@@ -1,6 +1,8 @@
+import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import { readIngestToken } from "./config";
 import { extensionPingFile, ingestGoogleActivityApiItems, isGooglePreset } from "./google-web-scraper";
 
 /**
@@ -51,12 +53,39 @@ export function isAllowedIngestOrigin(origin: string | null): boolean {
   return origin !== null && (allowedOrigins.has(origin) || origin.startsWith("chrome-extension://"));
 }
 
+/** Header the extension sends its ingest token in. The Origin check alone can't
+ *  authorize a WRITE (curl sets Origin freely), so record-landing batches must
+ *  carry this token; the ping heartbeat (no record data) does not. */
+export const INGEST_TOKEN_HEADER = "x-agentqs-ingest-token";
+
+/** Authorize a record-landing ingest batch. Returns null when authorized, else the
+ *  {status,error} to send back. Refuses (503) when no token is configured so an
+ *  unconfigured instance can't be poisoned by a forged POST, and 401s a mismatch
+ *  (constant-time compare). */
+export function ingestAuthError(token: string | null | undefined): { status: number; error: string } | null {
+  const expected = readIngestToken();
+  if (!expected) {
+    return {
+      status: 503,
+      error:
+        "Ingest token not configured. Open the app → Pipeline → Google data to copy the token, then paste it into the extension.",
+    };
+  }
+  const got = (token || "").trim();
+  const a = Buffer.from(got);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return { status: 401, error: "Bad ingest token." };
+  }
+  return null;
+}
+
 export function ingestCorsHeaders(origin: string | null): Record<string, string> {
   const allow = origin && isAllowedIngestOrigin(origin) ? origin : "https://myactivity.google.com";
   return {
     "access-control-allow-origin": allow,
     "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": `content-type, ${INGEST_TOKEN_HEADER}`,
     "access-control-max-age": "86400",
   };
 }
@@ -133,6 +162,16 @@ export function startIngestServer(): void {
       res.writeHead(403, { "content-type": "application/json", ...cors });
       res.end(JSON.stringify({ error: "Origin not allowed." }));
       return;
+    }
+    // Record-landing batches need the ingest token; the ping heartbeat does not (it
+    // carries no record data and must work before the user has pasted the token).
+    if (url === INGEST_PATH) {
+      const authErr = ingestAuthError(req.headers[INGEST_TOKEN_HEADER] as string | undefined);
+      if (authErr) {
+        res.writeHead(authErr.status, { "content-type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: authErr.error }));
+        return;
+      }
     }
     const chunks: Buffer[] = [];
     let size = 0;

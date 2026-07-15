@@ -1,5 +1,7 @@
 import {
   getJson,
+  localDay,
+  recordTimeZone,
   windowChunks,
   inWindow,
   num,
@@ -29,11 +31,14 @@ interface TogglEntry {
 const MAX_RANGE_DAYS = 90;
 const API = "https://api.track.toggl.com/api/v9/me/time_entries";
 
-export function normalizeToggl(entries: TogglEntry[], from: string, to: string): DailyTable {
+export function normalizeToggl(entries: TogglEntry[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const count = new Map<string, number>();
   const seconds = new Map<string, number>();
   for (const e of entries) {
-    const day = (e.start ?? "").slice(0, 10);
+    // `start` is RFC3339 (UTC in the common case) — bucket by the local day the entry
+    // began. localDay parses the absolute instant, so an offset-bearing start is
+    // handled too; only a UTC start was being misfiled by the old date-slice.
+    const day = localDay(e.start ?? "", tz);
     if (!day || !inWindow(day, from, to)) continue;
     if (typeof e.duration !== "number" || e.duration < 0) continue; // running entry
     count.set(day, (count.get(day) ?? 0) + 1);

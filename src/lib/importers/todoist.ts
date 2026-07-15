@@ -1,6 +1,8 @@
 import {
   getJson,
+  localDay,
   pageAll,
+  recordTimeZone,
   windowChunks,
   inWindow,
   type DailyTable,
@@ -35,10 +37,12 @@ const PAGE_LIMIT = 200;
 /** Todoist will not answer a range longer than this in one request. */
 const MAX_RANGE_DAYS = 90;
 
-export function normalizeTodoist(items: TodoistItem[], from: string, to: string): DailyTable {
+export function normalizeTodoist(items: TodoistItem[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const done = new Map<string, number>();
   for (const it of items) {
-    const day = (it.completed_at ?? "").slice(0, 10);
+    // completed_at is UTC — bucket by the local day the task was finished, so an
+    // evening task doesn't slide onto tomorrow.
+    const day = localDay(it.completed_at ?? "", tz);
     if (!day || !inWindow(day, from, to)) continue;
     done.set(day, (done.get(day) ?? 0) + 1);
   }

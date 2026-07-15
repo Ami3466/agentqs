@@ -85,7 +85,7 @@ function iso(d: Date): string {
 
 /** The authenticated user's login — needed to scope the commit search. */
 export async function resolveLogin(token: string, fetchImpl: FetchLike = fetch): Promise<string> {
-  const res = await fetchImpl(`${API}/user`, { headers: headers(token) });
+  const res = await netFetch(`${API}/user`, { headers: headers(token) }, fetchImpl);
   if (!res.ok) throw new Error(`GitHub /user → ${res.status}. ${await bodyText(res)}`);
   const j = (await res.json()) as { login?: string };
   if (!j.login) throw new Error("GitHub /user returned no login.");

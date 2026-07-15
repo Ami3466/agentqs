@@ -3,10 +3,11 @@ import type { ChannelAdapter, ChannelEnv, ChannelStatus, WebhookVerdict } from "
 /**
  * Telegram bot adapter (Loop 14). Inbound: Telegram delivers each update as a JSON
  * webhook POST; we pull the text + chat id off `update.message`. Outbound: one POST
- * to the Bot API `sendMessage`. Auth is the bot token (in the URL) plus an optional
- * shared secret Telegram echoes in the `X-Telegram-Bot-Api-Secret-Token` header
- * (set when you register the webhook) — enforced only when configured, so a plain
- * token setup still works but a secret one rejects spoofed calls.
+ * to the Bot API `sendMessage`. Auth is the bot token (in the URL) plus a shared
+ * secret Telegram echoes in the `X-Telegram-Bot-Api-Secret-Token` header (set when
+ * you register the webhook). The secret is REQUIRED: a reply grounds an answer from
+ * the record and sends it to a caller-chosen chat id, so an update we cannot verify
+ * could be forged into leaking the record — an unverifiable webhook is refused.
  *
  * Register the webhook once (points Telegram at this route):
  *   curl "https://api.telegram.org/bot<token>/setWebhook?url=<host>/api/channels/telegram&secret_token=<secret>"
@@ -35,7 +36,11 @@ export const telegramAdapter: ChannelAdapter = {
       label: "Telegram",
       enabled,
       verified,
-      reason: enabled ? "" : "Set TELEGRAM_BOT_TOKEN to enable the Telegram bot.",
+      reason: !enabled
+        ? "Set TELEGRAM_BOT_TOKEN to enable the Telegram bot."
+        : !verified
+          ? "Set TELEGRAM_WEBHOOK_SECRET and register the webhook with it — inbound updates are refused until then."
+          : "",
     };
   },
 
@@ -43,9 +48,20 @@ export const telegramAdapter: ChannelAdapter = {
     if (!this.configured(env)) {
       return { error: "Telegram bot is not configured (TELEGRAM_BOT_TOKEN).", status: 503 };
     }
-    // Verify the shared secret when one is set (defence against a spoofed webhook).
+    // Require the shared secret: a reply grounds an answer from the record and sends
+    // it to a caller-chosen chat id, so an unverifiable update is refused, never
+    // answered. Telegram echoes the secret in this header when the webhook was
+    // registered with secret_token=… .
     const secret = env.telegramWebhookSecret?.trim();
-    if (secret && headers.get(SECRET_HEADER) !== secret) {
+    if (!secret) {
+      return {
+        error:
+          "Telegram webhook secret not set (TELEGRAM_WEBHOOK_SECRET). Register the webhook with the same " +
+          "secret_token — an unverified webhook is refused so the record can't be leaked to a forged caller.",
+        status: 503,
+      };
+    }
+    if (headers.get(SECRET_HEADER) !== secret) {
       return { error: "Bad Telegram webhook secret.", status: 401 };
     }
 

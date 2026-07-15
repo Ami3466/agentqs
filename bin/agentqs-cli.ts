@@ -915,10 +915,20 @@ skill
   });
 skill
   .command("remove <id>")
-  .description("remove a custom mentor")
+  .description("remove a mentor — a custom one is dropped, a built-in is hidden (restorable)")
   .action((id: string) => {
     try {
       out(core.skillRemove(id), (d) => `Removed "${d.removed}".`);
+    } catch (e) {
+      die(e);
+    }
+  });
+skill
+  .command("restore")
+  .description("un-hide every deleted built-in persona (mentor · therapist · coach)")
+  .action(() => {
+    try {
+      out(core.skillsRestoreDefaults(), (d) => `Restored ${d.restored} built-in persona(s).`);
     } catch (e) {
       die(e);
     }

@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { mergeDailyCsv } from "../record";
 import type { AppConfig } from "../config";
-import { num, type DailyTable, type FetchLike } from "./plugin";
+import { localDay, netFetch, num, recordTimeZone, type DailyTable, type FetchLike } from "./plugin";
 
 /**
  * WHOOP — the differentiator, connected the UNOFFICIAL way.
@@ -43,9 +43,10 @@ const HR_STEP_SECONDS = 60; // 60 = per-minute (6 = per-6s, the app's finest)
 /** All-time backfill: how far back the walk may go. WHOOP shipped to consumers in
  *  2015, so nothing predates this. */
 const ALL_TIME_FLOOR = "2015-01-01";
-/** The walk steps back in windows this wide, and gives up after this many in a row
- *  come back empty (~1 year of silence) — long enough to stride over a break from
- *  the strap, short enough not to grind back to 2015 for a 2024 account. */
+/** The all-time walk steps back in windows this wide, all the way to the floor with
+ *  NO early exit — a quiet stretch is a break from the strap, not the end of the
+ *  history (see fetchAllCycles). One request per 180 days is cheap enough to always
+ *  reach 2015 when asked. */
 const BACKFILL_WINDOW_DAYS = 180;
 
 /** Stored WHOOP credentials — kept in config.json (mode 0600, never committed).
@@ -224,9 +225,13 @@ export function mergeTokens(creds: WhoopCreds, session: WhoopSession): WhoopCred
 // ---- data fetch (the app's private endpoints) -----------------------------
 
 async function getAuthed(url: string, token: string, fetchImpl: FetchLike): Promise<unknown> {
-  const res = await fetchImpl(url, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-  });
+  // Through netFetch: a mid-backfill network blip retries and is named as a network
+  // failure, never surfaced as a WHOOP auth error.
+  const res = await netFetch(
+    url,
+    { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+    fetchImpl,
+  );
   if (!res.ok) {
     let detail = "";
     try {
@@ -485,14 +490,18 @@ interface DailyHr {
   hr_max: string;
 }
 
-/** Group per-minute samples by date; return the file rows + daily avg/max rollup. */
-export function bucketHeartRate(samples: HrSample[]): {
+/** Group per-minute samples by date; return the file rows + daily avg/max rollup.
+ *  Samples bucket by the record's LOCAL day so hr_avg/hr_max line up with the cycle
+ *  row (WHOOP keys cycles by its own local date); UTC bucketing split the same night
+ *  across two rows east/west of UTC. */
+export function bucketHeartRate(samples: HrSample[], tz: string = recordTimeZone()): {
   files: Map<string, string[][]>; // date → [[iso, bpm], ...]
   daily: Map<string, DailyHr>;
 } {
   const byDay = new Map<string, HrSample[]>();
   for (const s of samples) {
-    const day = new Date(s.time).toISOString().slice(0, 10);
+    const day = localDay(s.time, tz);
+    if (!day) continue;
     const list = byDay.get(day) ?? [];
     list.push(s);
     byDay.set(day, list);

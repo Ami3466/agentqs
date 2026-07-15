@@ -18,7 +18,7 @@
  * Flags:
  *   --source <id>     rescuetime | gcal | spotify   (required)
  *   --credential <c>  API key / OAuth access token
- *   --days <n>        trailing window length in days (default: 90)
+ *   --days <n>        window length in days (default: resume from the record)
  *   --from <date>     window start YYYY-MM-DD (overrides --days)
  *   --to <date>       window end   YYYY-MM-DD (default: today)
  *   --record <dir>    record dir to write (default: <data>/record)
@@ -30,8 +30,9 @@
  */
 import fs from "fs";
 import Database from "better-sqlite3";
-import { importPlugin, fixtureFetch, resolveCredential, windowDays } from "../src/lib/importers/plugin";
+import { importPlugin, fixtureFetch, resolveCredential } from "../src/lib/importers/plugin";
 import { pluginById, PLUGINS } from "../src/lib/importers/registry";
+import { syncWindow } from "../src/lib/cli-core";
 import { rebuild } from "../src/lib/record";
 import { dbPath, recordDir } from "../src/lib/paths";
 
@@ -92,7 +93,10 @@ async function main(): Promise<void> {
 
   const rDir = args.record ?? recordDir(args.data);
   const dbFile = dbPath(args.data);
-  const win = windowDays(args.days ? Number(args.days) : 90);
+  // The window comes from the RECORD, never a hardcoded trailing default: --days is
+  // honoured as asked, else resume from the last recorded day (a first import gets a
+  // discovery window). For a full first-time backfill, use `agentqs sync <id>`.
+  const win = syncWindow(rDir, plugin.id, { days: args.days ? Number(args.days) : undefined });
   const from = args.from ?? win.from;
   const to = args.to ?? win.to;
 

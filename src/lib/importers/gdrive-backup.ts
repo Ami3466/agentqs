@@ -1,4 +1,4 @@
-import type { ImporterContext, ImporterPlugin, ImporterResult } from "./plugin";
+import { netFetch, type ImporterContext, type ImporterPlugin, type ImporterResult } from "./plugin";
 import { driveErrorDetail } from "../backup";
 
 /**
@@ -45,9 +45,11 @@ export const gdriveBackupPlugin: ImporterPlugin = {
   },
   async probe(ctx: ImporterContext): Promise<string> {
     const fetchImpl = ctx.fetchImpl ?? fetch;
-    const res = await fetchImpl("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)", {
-      headers: { Authorization: `Bearer ${ctx.credential ?? ""}` },
-    });
+    const res = await netFetch(
+      "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)",
+      { headers: { Authorization: `Bearer ${ctx.credential ?? ""}` } },
+      fetchImpl,
+    );
     if (!res.ok) throw new Error(`Drive about → HTTP ${res.status}: ${driveErrorDetail(await res.text())}`);
     const who = (await res.json()) as { user?: { emailAddress?: string } };
     return `Drive reachable as ${who.user?.emailAddress ?? "unknown account"}`;

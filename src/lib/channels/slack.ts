@@ -6,9 +6,10 @@ import type { ChannelAdapter, ChannelEnv, ChannelStatus, WebhookVerdict } from "
  * shape as Telegram. Inbound: Slack POSTs Events API callbacks; the first-time
  * `url_verification` handshake is echoed back, and a `message` event yields the
  * text + channel id. Outbound: `chat.postMessage` with the bot token as a bearer.
- * Requests are verified with the Slack signing secret (HMAC of `v0:ts:body`) when
- * one is set, and stale/retried deliveries are dropped so the bot never
- * double-replies.
+ * Requests are verified with the Slack signing secret (HMAC of `v0:ts:body`), which
+ * is REQUIRED: a reply sends record-grounded text to a caller-chosen channel, so an
+ * unsigned request that could be forged is refused. Stale/retried deliveries are
+ * dropped so the bot never double-replies.
  */
 
 const DEFAULT_API_BASE = "https://slack.com/api";
@@ -47,7 +48,11 @@ export const slackAdapter: ChannelAdapter = {
       label: "Slack",
       enabled,
       verified,
-      reason: enabled ? "" : "Set SLACK_BOT_TOKEN to enable the Slack bot.",
+      reason: !enabled
+        ? "Set SLACK_BOT_TOKEN to enable the Slack bot."
+        : !verified
+          ? "Set SLACK_SIGNING_SECRET — inbound events are refused until then."
+          : "",
     };
   },
 
@@ -68,9 +73,20 @@ export const slackAdapter: ChannelAdapter = {
     if (!this.configured(env)) {
       return { error: "Slack bot is not configured (SLACK_BOT_TOKEN).", status: 503 };
     }
-    // Verify the request signature when a signing secret is configured.
+    // Require a signed request: a reply sends record-grounded text to a caller-chosen
+    // channel, so an event we cannot verify is refused, never answered. (The
+    // url_verification handshake above is exempt — it only echoes Slack's challenge
+    // and never touches the record.)
     const secret = env.slackSigningSecret?.trim();
-    if (secret && !validSignature(secret, headers, rawBody)) {
+    if (!secret) {
+      return {
+        error:
+          "Slack signing secret not set (SLACK_SIGNING_SECRET). Set it (Slack app → Basic Information → " +
+          "Signing Secret) — an unverified request is refused so the record can't be leaked to a forged caller.",
+        status: 503,
+      };
+    }
+    if (!validSignature(secret, headers, rawBody)) {
       return { error: "Bad Slack request signature.", status: 401 };
     }
 

@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import type { FetchLike } from "./importers/plugin";
+import { netFetch, type FetchLike } from "./importers/plugin";
 
 /**
  * Granola — meeting notes, transcripts and AI summaries.
@@ -45,11 +45,13 @@ async function post<T>(
   fetchImpl: FetchLike,
   token?: string,
 ): Promise<T> {
-  const res = await fetchImpl(`${API}${endpoint}`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify(body ?? {}),
-  });
+  // Through netFetch: Granola events are mutable (a dropped request is destructive),
+  // so a transient blip retries and is named as a network failure, not an auth error.
+  const res = await netFetch(
+    `${API}${endpoint}`,
+    { method: "POST", headers: headers(token), body: JSON.stringify(body ?? {}) },
+    fetchImpl,
+  );
   if (!res.ok) {
     let detail = "";
     try {
@@ -169,7 +171,7 @@ export interface GranolaTranscriptSegment {
 }
 
 const PAGE = 100;
-const MAX_PAGES = 50; // 5k documents — a backstop, not a real limit
+const MAX_PAGES = 50; // 5k documents — a runaway backstop that THROWS, never truncates
 
 /** Every non-deleted document, newest first. */
 export async function listGranolaDocuments(
@@ -186,9 +188,13 @@ export async function listGranolaDocuments(
     );
     const docs = res.docs ?? [];
     out.push(...docs.filter((d) => !d.deleted_at));
-    if (docs.length < PAGE) break;
+    if (docs.length < PAGE) return out; // a short page is the end
   }
-  return out;
+  // Ran out of PAGES with a full last page: more remain. Refuse to return a partial
+  // list as if it were the whole history.
+  throw new Error(
+    `Granola: more than ${MAX_PAGES * PAGE} documents — refusing to land a partial list as if it were whole.`,
+  );
 }
 
 export async function getGranolaPanels(

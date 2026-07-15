@@ -18,9 +18,11 @@ import {
   applyDailyEdits,
   mergeDailyCsv,
   readInboxFromRecord,
+  rebuild,
   type DailyEdit,
 } from "../src/lib/record";
-import { inboxResolve } from "../src/lib/cli-core";
+import { dbPath } from "../src/lib/paths";
+import { inboxResolve, journalEdit, query } from "../src/lib/cli-core";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -142,6 +144,26 @@ check("discard un-keeps a reference memo", unkept.status === "discarded");
 check("discard is idempotent", inboxResolve(keepMe.id, "discard").status === "discarded");
 delete process.env.AGENTQS_DATA_DIR;
 fs.rmSync(dataDir2, { recursive: true, force: true });
+
+// ---- 7. journalEdit patches the cache (no full rebuild) and stays consistent -
+console.log("\njournalEdit patches the cache to match a full rebuild");
+const dataDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-jedit-"));
+process.env.AGENTQS_DATA_DIR = dataDir3;
+const rDir3 = path.join(dataDir3, "record");
+mergeDailyCsv(rDir3, "whoop", { header: ["date", "recovery"], rows: [["2026-07-01", "60"], ["2026-07-02", "70"]] });
+mergeDailyCsv(rDir3, "oura", { header: ["date", "sleep"], rows: [["2026-07-01", "7"]] });
+rebuild({ recordDir: rDir3, dbPath: dbPath() });
+const je = journalEdit([{ op: "set", source: "whoop", metric: "recovery", date: "2026-07-01", value: "61" }]);
+check("journalEdit names the patched source", je.sources.includes("whoop"), JSON.stringify(je.sources));
+const cell = query("SELECT value_num FROM daily WHERE source='whoop' AND metric='recovery' AND date='2026-07-01'");
+check("the patched cache reflects the edited cell", Number(cell.rows[0]?.value_num) === 61, JSON.stringify(cell.rows));
+// The patch must equal exactly what a full rebuild would produce (no cache drift).
+const afterPatch = query("SELECT date,source,metric,value_num,value_text FROM daily ORDER BY source,metric,date");
+rebuild({ recordDir: rDir3, dbPath: dbPath() });
+const afterRebuild = query("SELECT date,source,metric,value_num,value_text FROM daily ORDER BY source,metric,date");
+check("patched cache is byte-identical to a full rebuild", JSON.stringify(afterPatch.rows) === JSON.stringify(afterRebuild.rows));
+delete process.env.AGENTQS_DATA_DIR;
+fs.rmSync(dataDir3, { recursive: true, force: true });
 
 fs.rmSync(rDir, { recursive: true, force: true });
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed");

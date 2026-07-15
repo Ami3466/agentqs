@@ -638,6 +638,8 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   instapaper: Instapaper,
   withings: Withings,
   granola: Granola,
+  wakatime: Code,
+  readwise: Bookmark,
   "health-connect": ShieldHeart,
   "apple-weather": Apple,
   // Live-capture channels — Pipeline rows too, so they get their brand mark, not a plug.
@@ -650,8 +652,7 @@ export const SOURCE_ICONS: Record<string, (p: P) => JSX.Element> = {
   health_daily: HeartPulse,
   // Archive imports reuse their service's mark rather than the generic plug.
   granola_texts: Granola,
-  spotify_history: Spotify,
-  spotify_history_texts: Spotify,
+  spotify_texts: Spotify,
 };
 
 export function sourceIcon(id: string): (p: P) => JSX.Element {

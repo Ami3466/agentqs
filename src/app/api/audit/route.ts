@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { apiError } from "@/lib/api";
 import { auditIndex } from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -12,5 +13,9 @@ export async function GET() {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  return NextResponse.json(auditIndex());
+  try {
+    return NextResponse.json(auditIndex());
+  } catch (e) {
+    return apiError(e);
+  }
 }

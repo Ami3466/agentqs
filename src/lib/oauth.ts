@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { readConfig, writeConfig, type AppConfig, type OAuthApp, type OAuthGrant } from "./config";
 import { pluginInstanceById, pluginInstanceName } from "./importers/registry";
 import {
+  netFetch,
   oauthGrantKey,
   resolveCredentialWithoutGrant,
   resolveSyncCredential,
@@ -202,7 +203,9 @@ async function tokenRequest(
     headers["Content-Type"] = "application/x-www-form-urlencoded";
     body = new URLSearchParams(all).toString();
   }
-  const res = await fetchImpl(o.tokenUrl, { method: "POST", headers, body });
+  // Through netFetch: a cold-container DNS blip on a token mint is retried and named
+  // as a network failure, never surfaced as "reconnect in Pipeline" (a bad credential).
+  const res = await netFetch(o.tokenUrl, { method: "POST", headers, body }, fetchImpl);
   const text = await res.text();
   if (!res.ok) throw new Error(`${res.status}${text ? ` — ${text.trim().slice(0, 200)}` : ""}`);
   let reply = JSON.parse(text) as TokenReply;

@@ -68,8 +68,9 @@ The Spotify Web API only returns your last 50 plays (that's the built-in `spotif
 source). To get the *year* behind it, request **Account data** at
 [spotify.com/account/privacy](https://www.spotify.com/account/privacy) — the zip
 arrives by email in a few days. It's an archive, not an API, so it imports from disk
-via the CLI (the server can't reach your `~/Downloads`), writing to `spotify_history`
-so a later live `spotify` sync can never overwrite a full day with its 50-play window.
+via the CLI (the server can't reach your `~/Downloads`), landing in the SAME `spotify`
+source the live sync keeps fresh — count columns merge with `max`, so one Spotify row
+holds your whole history and the 50-play live sync only tops up its recent end.
 
 ```bash
 npm run import:spotify                                  # reads ~/Downloads/my_spotify_data.zip
@@ -82,8 +83,8 @@ What it produces:
 
 | Where | What |
 | --- | --- |
-| `daily/spotify_history.csv` | `tracks · minutes · artists · podcast_episodes · podcast_minutes · searches` per day |
-| `daily/spotify_history_texts.csv` | a searchable digest of each day's listening (top tracks/artists) |
+| `daily/spotify.csv` | `tracks · minutes · artists · podcast_episodes · podcast_minutes · searches` per day |
+| `daily/spotify_texts.csv` | a searchable digest of each day's listening (top tracks/artists) |
 | `events.jsonl` | one event per play, per podcast episode, and per search |
 | `inbox.jsonl` | taste profile, Wrapped, playlists, saved tracks — as `reference` documents (searchable, never queued for structuring) |
 

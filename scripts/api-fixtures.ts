@@ -27,6 +27,9 @@ export const FIXTURES: Record<string, string> = {
   mastodon: "samples/mastodon-statuses.json",
   withings: "samples/withings-measures.json",
   granola: "samples/granola-documents.json",
+  wakatime: "samples/wakatime-summaries.json",
+  ynab: "samples/ynab-transactions.json",
+  readwise: "samples/readwise-highlights.json",
 };
 
 // Split-credential sources take "<a>:<b>" in the single credential slot.

@@ -1,0 +1,10 @@
+{
+  "data": {
+    "transactions": [
+      { "date": "2026-06-12", "amount": -52340, "deleted": false },
+      { "date": "2026-06-12", "amount": -8000, "deleted": false },
+      { "date": "2026-06-14", "amount": 250000, "deleted": false },
+      { "date": "2026-06-14", "amount": -15990, "deleted": false }
+    ]
+  }
+}

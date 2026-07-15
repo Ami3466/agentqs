@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { mergeDailyCsv, type DailyMergeResult } from "../record";
+import { mergeDailyCsv, type DailyMergeResult, type MergePolicy } from "../record";
 import { recordDir } from "../paths";
 import type { DailyTable } from "./plugin";
 
@@ -45,6 +45,11 @@ export interface FileImporter {
    *  than the rolling sync window. A function makes the call per file — Chrome
    *  is a rolling DB normally but a lifetime export when fed Takeout JSON. */
   fullHistoryDefault?: boolean | ((path: string) => boolean);
+  /** How this importer's daily columns merge. Default "replace" (a re-read of the
+   *  same file is authoritative). A file importer that BACKFILLS an API plugin's
+   *  source (Spotify export → `spotify`) must match that plugin's policy — "max" —
+   *  so a full historical day is never lowered by the API's partial recent window. */
+  mergePolicy?: MergePolicy;
   /** Default OS locations to probe when `--path` is omitted (platform-aware). */
   defaultPaths(): string[];
   /** Read the local file and normalize a window into the wide daily table. */
@@ -72,7 +77,7 @@ export async function importFile(
   dir: string = recordDir(),
 ): Promise<FileImportSummary> {
   const result = await importer.read(ctx);
-  const merge = mergeDailyCsv(dir, importer.id, result.table);
+  const merge = mergeDailyCsv(dir, importer.id, result.table, { policy: importer.mergePolicy });
   return {
     ...merge,
     id: importer.id,

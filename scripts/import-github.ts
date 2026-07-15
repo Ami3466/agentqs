@@ -16,7 +16,7 @@
  * Flags:
  *   --token <pat>    GitHub personal access token
  *   --login <user>   author to search (default: the token's own user)
- *   --days <n>       trailing window length in days (default: 90)
+ *   --days <n>       window length in days (default: resume from the record)
  *   --from <date>    window start YYYY-MM-DD (overrides --days)
  *   --to <date>      window end   YYYY-MM-DD (default: today)
  *   --record <dir>   record dir to write (default: <data>/record)
@@ -32,11 +32,11 @@ import {
   fetchGithubCommits,
   importGithub,
   resolveGithubToken,
-  windowDays,
   writeGithubRecord,
   type FetchLike,
   type ImportGithubSummary,
 } from "../src/lib/importers/github";
+import { syncWindow } from "../src/lib/cli-core";
 import { rebuild } from "../src/lib/record";
 import { dbPath, recordDir } from "../src/lib/paths";
 
@@ -131,8 +131,10 @@ async function main(): Promise<void> {
   const rDir = args.record ?? recordDir(args.data);
   const dbFile = dbPath(args.data);
 
-  // Window: explicit --from/--to win, else a trailing --days window (default 90).
-  const win = windowDays(args.days ? Number(args.days) : 90);
+  // Window from the RECORD, never a hardcoded trailing default: --from/--to win, then
+  // --days as asked, else resume from the last recorded day. Full first-time backfill
+  // lives in `agentqs sync github`.
+  const win = syncWindow(rDir, "github", { days: args.days ? Number(args.days) : undefined });
   const from = args.from ?? win.from;
   const to = args.to ?? win.to;
 

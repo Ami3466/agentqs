@@ -1,4 +1,4 @@
-import { readConfig, type AppConfig } from "../config";
+import { readConfig, recordTimeZone, type AppConfig } from "../config";
 import { gmailParts, googleScopes, SCOPE_GMAIL } from "../google";
 import {
   getJson,
@@ -65,11 +65,45 @@ export interface GmailDay {
   sent?: number;
 }
 
-/** UTC midnight, in epoch SECONDS — Gmail's after:/before: accept a timestamp,
- *  which is exact, where `after:2026/07/12` is interpreted in the account's own
- *  timezone and quietly slides the boundary. */
-function epochDay(date: string): number {
-  return Math.floor(Date.parse(`${date}T00:00:00Z`) / 1000);
+/** Offset (minutes east of UTC) of `tz` at the given instant. The standard
+ *  Intl round-trip: format the instant in `tz`, read it back as if UTC, diff. */
+function tzOffsetMinutes(tz: string, atMs: number): number {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    const p: Record<string, string> = {};
+    for (const part of dtf.formatToParts(new Date(atMs))) p[part.type] = part.value;
+    let hour = Number(p.hour);
+    if (hour === 24) hour = 0; // some engines emit "24" for midnight
+    const asUTC = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), hour, Number(p.minute), Number(p.second));
+    return Math.round((asUTC - atMs) / 60_000);
+  } catch {
+    return 0; // unknown tz → treat as UTC, never lose a day
+  }
+}
+
+/** LOCAL midnight of `date` in `tz`, in epoch SECONDS — Gmail's after:/before: take a
+ *  timestamp, so bucketing by the record's LOCAL day files a 9pm mail on the day it
+ *  was lived, not tomorrow (UTC midnight did the latter). Re-evaluates the offset at
+ *  the guessed instant so DST switch days stay exact. */
+function epochDay(date: string, tz: string = recordTimeZone()): number {
+  const utcMidnight = Date.parse(`${date}T00:00:00Z`);
+  let guess = utcMidnight - tzOffsetMinutes(tz, utcMidnight) * 60_000;
+  guess = utcMidnight - tzOffsetMinutes(tz, guess) * 60_000;
+  return Math.floor(guess / 1000);
+}
+
+/** The next calendar day, as YYYY-MM-DD (UTC arithmetic on the date label only). */
+function nextDay(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
 function eachDay(from: string, to: string): string[] {
@@ -179,7 +213,7 @@ export const gmailPlugin: ImporterPlugin = {
     const parts = gmailParts(readConfig());
     const q = parts.inbox ? Q_RECEIVED : Q_SENT;
     const url = new URL(API);
-    url.searchParams.set("q", `${q} after:${epochDay(ctx.from)} before:${epochDay(ctx.to) + 86_400}`);
+    url.searchParams.set("q", `${q} after:${epochDay(ctx.from)} before:${epochDay(nextDay(ctx.to))}`);
     url.searchParams.set("maxResults", "1");
     url.searchParams.set("fields", "messages/id");
     const raw = (await getJson(
@@ -209,8 +243,9 @@ export const gmailPlugin: ImporterPlugin = {
     // away rather than fetched.
     const days = eachDay(ctx.from, ctx.to);
     const out = await mapPool(days, DAY_CONCURRENCY, async (date) => {
+      // Local-midnight-to-local-midnight window (DST-safe: not a fixed +86400).
       const start = epochDay(date);
-      const end = start + 86_400;
+      const end = epochDay(nextDay(date));
       const window = `after:${start} before:${end}`;
       const day: GmailDay = { date };
       try {

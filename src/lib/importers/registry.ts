@@ -17,6 +17,9 @@ import { mastodonPlugin } from "./mastodon";
 import { withingsPlugin } from "./withings";
 import { granolaPlugin } from "./granola";
 import { whoopApiPlugin } from "./whoop-api";
+import { wakatimePlugin } from "./wakatime";
+import { ynabPlugin } from "./ynab";
+import { readwisePlugin } from "./readwise";
 import { gdriveBackupPlugin } from "./gdrive-backup";
 
 /**
@@ -52,6 +55,9 @@ export const PLUGINS: ImporterPlugin[] = [
   mastodonPlugin,
   withingsPlugin,
   granolaPlugin,
+  wakatimePlugin,
+  ynabPlugin,
+  readwisePlugin,
   // NOT an importer and NOT a source: the encrypted-Drive BACKUP target. It sits
   // in this registry for one reason — a registry entry is what buys the OAuth
   // dance, the token refresh and `source authorize`. It brings no data in, so it

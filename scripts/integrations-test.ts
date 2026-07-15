@@ -45,13 +45,13 @@ async function main() {
   //    container's socket — otherwise a perfect OAuth connect ends on a dead page.
   const proxied = proxiedRequest({
     host: "0.0.0.0:3000",
-    "x-forwarded-host": "48068d-webvp28.vps.flowengine.cloud",
+    "x-forwarded-host": "journal.example.com",
     "x-forwarded-proto": "https",
   });
   const origin = requestOrigin(proxied);
-  check("proxied callback resolves the PUBLIC origin", origin === "https://48068d-webvp28.vps.flowengine.cloud", origin);
+  check("proxied callback resolves the PUBLIC origin", origin === "https://journal.example.com", origin);
   check("…so the bounce lands on a reachable page",
-    new URL("/pipeline?connected=1", origin).href.startsWith("https://48068d-webvp28.vps.flowengine.cloud/pipeline"),
+    new URL("/pipeline?connected=1", origin).href.startsWith("https://journal.example.com/pipeline"),
     new URL("/pipeline?connected=1", origin).href);
 
   // A proxy that forwards nothing but Host still beats req.url.
