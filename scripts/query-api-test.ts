@@ -19,7 +19,7 @@ import os from "os";
 import path from "path";
 import Database from "better-sqlite3";
 import { rebuild } from "../src/lib/record";
-import { runQueryAsync, prepareSql, MAX_ROWS } from "../src/lib/query-async";
+import { runQueryAsync, describeSchema, explainQueryError, prepareSql, MAX_ROWS } from "../src/lib/query-async";
 import { API_CATALOG, API_ORIENTATION, API_OMISSIONS } from "../src/lib/api-catalog";
 
 let failures = 0;
@@ -110,6 +110,18 @@ async function main() {
       2,
     );
     check("row cap holds despite a subquery LIMIT (no over-return)", capped.count === 2, `got ${capped.count}`);
+  }
+
+  // ---- self-describe: the API teaches an agent the schema ------------------
+  {
+    const schema = await describeSchema();
+    check("describeSchema lists the long-format grain", /LONG format/i.test(schema.grain));
+    check("describeSchema returns the live metric catalog", schema.metrics.some((m) => m.metric === "recovery" || m.metric === "minutes"));
+    check("describeSchema carries copy-paste recipes", schema.recipes.length >= 3 && schema.recipes.some((r) => /CASE WHEN/.test(r.sql)));
+    check("describeSchema documents the daily columns", schema.tables[0].columns.includes("metric") && schema.tables[0].columns.includes("value_num"));
+    // The exact mistake the user's agent made: wide-column guess against long `daily`.
+    const guidance = explainQueryError("no such column: recovery");
+    check("a wide-column error becomes long-format guidance", /metric=/.test(guidance) && /GET \/api\/query/.test(guidance));
   }
 
   // ---- a non-SELECT is refused at the door ---------------------------------

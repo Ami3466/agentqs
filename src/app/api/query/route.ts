@@ -1,10 +1,28 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { apiError } from "@/lib/api";
-import { runQueryAsync, MAX_ROWS } from "@/lib/query-async";
+import { runQueryAsync, describeSchema, explainQueryError, MAX_ROWS } from "@/lib/query-async";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * GET /api/query — self-describe the queryable record: the schema, the LIVE metric
+ * catalog (every metric with its source, day-count and span), the sources, the date
+ * range, and copy-paste query recipes. An agent GETs this first so it queries the
+ * long-format `daily` table correctly instead of guessing wide columns. This is what
+ * closes the gap between the great local experience and the "blind over HTTP" one.
+ */
+export async function GET() {
+  if (!getCurrentUser()) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  try {
+    return NextResponse.json({ ...(await describeSchema()), maxRows: MAX_ROWS });
+  } catch (e) {
+    return apiError(e);
+  }
+}
 
 /**
  * Read-only SQL over the rebuilt cache — the same door as `agentqs query` and the
@@ -14,7 +32,8 @@ export const dynamic = "force-dynamic";
  *
  * Tables: daily(date, source, metric, value_num, value_text), raw_inbox, sessions,
  * events, search (FTS); when a detail store exists it is attached as `detail`
- * (per-minute detail.heart_rate, per-visit detail.chrome_visits).
+ * (per-minute detail.heart_rate, per-visit detail.chrome_visits). GET this route for
+ * the live schema + metric catalog.
  *
  * SELECT / WITH only. Runs on a worker thread with a wall-clock timeout, so a heavy
  * or runaway query is cancelled instead of freezing the web server.
@@ -48,6 +67,8 @@ export async function POST(req: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     const isUserError =
       /^Only read-only|LIMIT|no such|syntax error|unrecognized|near |ambiguous|has no column|exceeded \d+s/i.test(msg);
-    return apiError(e, isUserError ? 400 : 500);
+    // Turn a schema mistake into guidance (the long-format `daily` trap) instead of a
+    // dead-end error — the difference between an agent that recovers and one that gives up.
+    return NextResponse.json({ error: explainQueryError(msg) }, { status: isUserError ? 400 : 500 });
   }
 }

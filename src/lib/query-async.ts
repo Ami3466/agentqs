@@ -124,3 +124,86 @@ export async function runQueryAsync(
     worker.once("error", (e) => finish(() => reject(e)));
   });
 }
+
+/** The core tables, documented — an agent reads this instead of guessing column names.
+ *  `daily` is the trap: it's LONG format, so metric names are VALUES in a column, not
+ *  columns. Every "no such column: recovery" mistake comes from missing that. */
+const SCHEMA_TABLES = [
+  {
+    name: "daily",
+    columns: ["date", "source", "metric", "value_num", "value_text"],
+    grain:
+      "LONG format — one row per (date, source, metric). Metric names (recovery, steps, …) are VALUES in the `metric` column, NOT columns. Read one metric with WHERE metric='recovery'; combine several by pivoting (see recipes).",
+  },
+  { name: "events", columns: ["date", "source", "kind", "detail", "value_num"], grain: "Raw timeline events, one row each." },
+  { name: "sessions", columns: ["id", "date", "kind", "summary", "commitments"], grain: "Chat/therapy sessions with synthesized insight." },
+  { name: "raw_inbox", columns: ["id", "ts", "text", "status"], grain: "Captured notes before they're structured." },
+  { name: "search", columns: ["date", "source", "text"], grain: "FTS index over the record's free text (use MATCH)." },
+];
+
+/** Copy-paste query shapes — the difference between an agent that flails and one that
+ *  gets it right on the first call. */
+const QUERY_RECIPES = [
+  { what: "one metric over time", sql: "SELECT date, value_num FROM daily WHERE metric='recovery' ORDER BY date DESC" },
+  {
+    what: "several metrics side by side (pivot)",
+    sql: "SELECT date, MAX(CASE WHEN metric='recovery' THEN value_num END) AS recovery, MAX(CASE WHEN metric='steps' THEN value_num END) AS steps FROM daily GROUP BY date ORDER BY date DESC",
+  },
+  {
+    what: "correlate two metrics on shared days",
+    sql: "SELECT a.date, a.value_num AS recovery, b.value_num AS steps FROM daily a JOIN daily b ON a.date=b.date WHERE a.metric='recovery' AND b.metric='steps' ORDER BY a.date DESC",
+  },
+  { what: "what metrics exist", sql: "SELECT metric, source, COUNT(*) AS days FROM daily GROUP BY metric, source ORDER BY days DESC" },
+];
+
+export interface SchemaDescription {
+  grain: string;
+  tables: typeof SCHEMA_TABLES;
+  metrics: Record<string, unknown>[];
+  sources: string[];
+  dateRange: Record<string, unknown> | null;
+  recipes: typeof QUERY_RECIPES;
+}
+
+/**
+ * Self-describe the queryable record — the schema plus the LIVE metric catalog (every
+ * metric, its source, day-count and date span). This is what makes the HTTP query door
+ * as usable as the local CLI: an agent GETs this first and knows exactly what to ask,
+ * instead of guessing `recovery/happiness/fire` as columns and hitting errors.
+ */
+export async function describeSchema(): Promise<SchemaDescription> {
+  const safe = (sql: string, limit = 1000) =>
+    runQueryAsync(sql, limit).catch(() => ({ columns: [], rows: [], count: 0 }) as QueryResult);
+  const metricsRes = await safe(
+    "SELECT metric, source, COUNT(*) AS days, MIN(date) AS first_date, MAX(date) AS last_date FROM daily GROUP BY metric, source ORDER BY days DESC",
+  );
+  const rangeRes = await safe(
+    "SELECT MIN(date) AS first_date, MAX(date) AS last_date, COUNT(DISTINCT date) AS days FROM daily",
+  );
+  const sources = [...new Set(metricsRes.rows.map((r) => String(r.source)))].sort();
+  return {
+    grain: SCHEMA_TABLES[0].grain,
+    tables: SCHEMA_TABLES,
+    metrics: metricsRes.rows,
+    sources,
+    dateRange: rangeRes.rows[0] ?? null,
+    recipes: QUERY_RECIPES,
+  };
+}
+
+/** Turn a raw SQLite error into agent-actionable guidance. The classic failure — a
+ *  wide-column guess against the long `daily` table — becomes a pointer to the right
+ *  shape and the schema door, instead of a dead end. */
+export function explainQueryError(message: string): string {
+  if (/no such column/i.test(message)) {
+    return (
+      `${message} — NOTE: \`daily\` is long-format (columns: date, source, metric, value_num, value_text). ` +
+      `Metric names are VALUES in \`metric\`, not columns: use WHERE metric='<name>'. ` +
+      `GET /api/query for the live metric catalog + query recipes.`
+    );
+  }
+  if (/no such table/i.test(message)) {
+    return `${message} — tables: daily, events, sessions, raw_inbox, search (+ detail.* when present). GET /api/query for the schema.`;
+  }
+  return message;
+}
