@@ -26,6 +26,7 @@
     "sync:test": "tsx scripts/sync-engine.ts",
     "integration:test": "tsx scripts/integration-batch.ts",
     "api:test": "tsx scripts/api-sources.ts",
+    "query:test": "tsx scripts/query-api-test.ts",
     "whoop:test": "tsx scripts/whoop.ts",
     "granola:test": "tsx scripts/granola.ts",
     "files:test": "tsx scripts/import-files-test.ts",
