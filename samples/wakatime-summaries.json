@@ -1,0 +1,7 @@
+{
+  "data": [
+    { "range": { "date": "2026-06-09" }, "grand_total": { "total_seconds": 7200 } },
+    { "range": { "date": "2026-06-10" }, "grand_total": { "total_seconds": 12600 } },
+    { "range": { "date": "2026-06-11" }, "grand_total": { "total_seconds": 3000 } }
+  ]
+}

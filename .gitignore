@@ -1,6 +1,7 @@
 node_modules
-.env
-.env.local
+# every env flavour (.env.production, .env.development.local, …) — but keep a committed example
+.env*
+!.env.example
 # /data* also catches iCloud resurrections/renames ("data 2", data.stray-*)
 /data*
 /tmp/
@@ -12,5 +13,4 @@ dist/
 .next-*/
 tsconfig.tsbuildinfo
 tsconfig*.tsbuildinfo
-/tmp/
 CLAUDE.local.md

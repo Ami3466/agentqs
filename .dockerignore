@@ -2,11 +2,10 @@ node_modules
 .next
 .git
 .gitignore
-data
+# data, data.nosync, "data 2" — never copy a real record into the build context
+data*
 *.db
-.env
-.env.local
-.env.*.local
+.env*
 npm-debug.log*
 .DS_Store
 docs

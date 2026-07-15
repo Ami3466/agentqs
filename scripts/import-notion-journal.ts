@@ -198,16 +198,27 @@ function importNotionPages(dir: string, rDir: string): number {
 }
 
 async function main(): Promise<void> {
-  const journalFile = firstExisting([
-    "~/Downloads/ExportBlock-bb4469ae-52f3-4b23-a0ad-c966b8543394-Part-1/Journal 0da17dc78a154f45afab4b0ec454cd8c_all.csv",
-    "~/Desktop/example-journal/data/notion-pages/2022-summarize-table.csv",
-    "~/Library/CloudStorage/GoogleDrive-amit@flowengine.cloud/My Drive/Journal Notion.csv",
-  ]);
-  const textFile = firstExisting([
-    "~/Desktop/example-journal/data/journal/journal_texts.csv",
-    "~/Desktop/agentqs-example-data/record/daily/journal_texts.csv",
-  ]);
-  if (!journalFile) throw new Error("No Notion journal export found");
+  // Generic Notion-export importer — the caller supplies the paths, nothing is tied
+  // to one machine. Flags win, then env, so it works from CLI or a scheduled job:
+  //   import-notion-journal --journal <journal.csv> [--texts <texts.csv>] [--pages <dir>]
+  //   (or AGENTQS_NOTION_JOURNAL / AGENTQS_NOTION_TEXTS / AGENTQS_NOTION_PAGES)
+  const args = process.argv.slice(2);
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const journalArg = flag("--journal") || process.env.AGENTQS_NOTION_JOURNAL;
+  const textArg = flag("--texts") || process.env.AGENTQS_NOTION_TEXTS;
+  const pagesArg = flag("--pages") || process.env.AGENTQS_NOTION_PAGES;
+  if (!journalArg) {
+    throw new Error(
+      "Usage: import-notion-journal --journal <journal.csv> [--texts <texts.csv>] [--pages <notion-pages-dir>]\n" +
+        "  (or set AGENTQS_NOTION_JOURNAL / AGENTQS_NOTION_TEXTS / AGENTQS_NOTION_PAGES)",
+    );
+  }
+  const journalFile = firstExisting([journalArg]);
+  const textFile = textArg ? firstExisting([textArg]) : null;
+  if (!journalFile) throw new Error(`Notion journal export not found: ${journalArg}`);
 
   const rDir = recordDir();
   const journal = buildNotionJournalTable(journalFile);
@@ -218,7 +229,7 @@ async function main(): Promise<void> {
     text = buildTextTable(textFile);
     textMerge = mergeDailyCsv(rDir, TEXT_SOURCE, text);
   }
-  const pages = importNotionPages(expandHome("~/Desktop/example-journal/data/notion-pages"), rDir);
+  const pages = pagesArg ? importNotionPages(expandHome(pagesArg), rDir) : 0;
   rebuild({ recordDir: rDir, dbPath: dbPath() });
 
   const cfg = readConfig();

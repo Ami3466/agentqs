@@ -2,7 +2,7 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { num, type DailyTable } from "../plugin";
+import { localDay, num, recordTimeZone, type DailyTable } from "../plugin";
 import type { FileImporter, FileImportContext, FileImportResult } from "../file-plugin";
 
 /**
@@ -69,11 +69,15 @@ interface Rollup {
 }
 
 /** Fold one file's worth of plays into the running per-day totals. */
-function foldPlays(plays: SpotifyPlay[], from: string, to: string, into: Rollup): void {
+function foldPlays(plays: SpotifyPlay[], from: string, to: string, into: Rollup, tz: string = recordTimeZone()): void {
   for (const p of plays) {
-    // Extended writes `ts` (ISO, UTC); the account export writes `endTime`
-    // ("YYYY-MM-DD HH:MM", local). Both start with the day, which is all we need.
-    const day = (p.ts ?? p.endTime ?? "").slice(0, 10);
+    // Both timestamps are UTC (Spotify documents endTime as UTC too), so bucket each
+    // by the record's LOCAL day — a late-night play lands on the day you lived, and
+    // this matches the API importer exactly (they merge into one `spotify` file).
+    // `ts` (extended export) is ISO with a zone; `endTime` (account export) is
+    // "YYYY-MM-DD HH:MM" with no marker, so pin it to UTC before converting.
+    const iso = p.ts ?? (p.endTime ? `${p.endTime.replace(" ", "T")}:00Z` : "");
+    const day = localDay(iso, tz);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < from || day > to) continue;
     const played = p.ms_played ?? p.msPlayed ?? 0;
     if (!(played > 0)) continue;
@@ -93,9 +97,9 @@ function rollupTable(r: Rollup): DailyTable {
   return { header: ["date", "tracks", "minutes"], rows };
 }
 
-export function normalizeSpotifyExport(plays: SpotifyPlay[], from: string, to: string): DailyTable {
+export function normalizeSpotifyExport(plays: SpotifyPlay[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const rollup: Rollup = { tracks: new Map(), ms: new Map() };
-  foldPlays(plays, from, to, rollup);
+  foldPlays(plays, from, to, rollup, tz);
   return rollupTable(rollup);
 }
 
@@ -177,6 +181,9 @@ export const spotifyExportImporter: FileImporter = {
   // A one-shot lifetime export — never clipped to a trailing window. A file is finite
   // and already on your disk; throwing away the years inside it would be absurd.
   fullHistoryDefault: true,
+  // Match the `spotify` plugin: counts merge with `max`, so importing the export
+  // after an API sync (or vice versa) never lowers a day's fuller count.
+  mergePolicy: "max",
   defaultPaths(): string[] {
     const home = os.homedir();
     return [

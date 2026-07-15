@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import { configPath, dataDir, recordDir } from "./paths";
 import type { JournalView } from "./journal";
@@ -194,6 +195,12 @@ export interface AppConfig {
    *  exactly like a plugin's second account under sourceCreds. */
   whoopCredsByInstance?: Record<string, WhoopCreds>;
   apiKey?: string; // bearer token for the HTTP API over the wire (generated in Connect)
+  /** Shared token authorizing the browser extension's ingest writes. The ingest
+   *  endpoint can't use the session cookie (a cross-origin content-script fetch
+   *  never carries it), so the extension sends this in the `x-agentqs-ingest-token`
+   *  header instead. Minted lazily by the authenticated status route so the owner
+   *  can copy it into the extension; enforcement never mints one. */
+  ingestToken?: string;
   demoSeeded?: boolean; // generic demo data is loaded; auto-wiped on the first real import
   autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)
   columnMerges?: ColumnMergeRule[]; // accepted duplicate-column merges, re-applied on every import (column scanner)
@@ -343,6 +350,28 @@ export function writeConfig(cfg: AppConfig): void {
 /** Secret used to sign sessions — env override wins, else the per-instance one. */
 export function sessionSecretFor(cfg: AppConfig): string {
   return process.env.SESSION_SECRET || cfg.sessionSecret;
+}
+
+/** The extension ingest token (env override wins). Read-only: enforcement uses this
+ *  and REFUSES ingest when it's empty, so an unconfigured instance can't be written
+ *  to by a forged caller. Minting happens only in ensureIngestToken (authenticated). */
+export function readIngestToken(): string {
+  return (process.env.AGENTQS_INGEST_TOKEN || readConfig()?.ingestToken || "").trim();
+}
+
+/** Return the ingest token, minting + persisting one on first use. Called only from
+ *  the authenticated status route, so the logged-in owner can copy it into the
+ *  extension — never from the enforcement path. */
+export function ensureIngestToken(): string {
+  const env = (process.env.AGENTQS_INGEST_TOKEN || "").trim();
+  if (env) return env;
+  const cfg = readConfig();
+  if (!cfg) throw new Error("Run setup first.");
+  const existing = (cfg.ingestToken || "").trim();
+  if (existing) return existing;
+  const token = crypto.randomBytes(24).toString("base64url");
+  writeConfig({ ...cfg, ingestToken: token });
+  return token;
 }
 
 function maskTail(s?: string): string {

@@ -2,7 +2,7 @@
 
 <img src="public/logo.svg" alt="agentqs" width="160" />
 
-**The open-source pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
+**The source-available pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
@@ -69,7 +69,7 @@ Answers come from your actual data: SQL over metrics, text search over memos and
 
 ### Skills
 
-Give the AI a persona - mentor, coach, therapist, or your own prompt. Skills run in chat or voice sessions, grounded in your record, and save their insights and commitments back to it.
+Give the AI a persona - mentor, coach, therapist, or your own prompt. Skills run in chat, grounded in your record, and a chat session saves its insights and commitments back to it.
 
 ### Memos
 
@@ -81,7 +81,7 @@ Slack and Telegram: log memos and ask your record questions from where you alrea
 
 ## Integrations / data pipelines
 
-**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · Google (Calendar, Gmail) · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*
+**Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · WakaTime · YNAB · Readwise · Google (Calendar, Gmail) · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*
 
 **Google is one connection.** One account, one key, and you tick what it imports - Calendar, and Gmail down to Inbox and Sent separately. The scope Google is asked for is only what you ticked, so if you never want Gmail you are never asked for your mail; tick it later and it re-authorizes the *same* key. Gmail counts, it never reads: message IDs only, landing `emails_received` and `emails_sent` per day. The products Google gives no API for - Search, Maps, YouTube, Gemini - come in through the Chrome extension under Automated imports instead. (Google Drive backup is not a source: backups send data out, and never appear in the pipeline.)
 

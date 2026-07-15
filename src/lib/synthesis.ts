@@ -1,7 +1,7 @@
 import { llmComplete, type LlmMessage } from "./llm";
 import { activeLlm, type AppConfig } from "./config";
 import type { SessionItem } from "./record";
-import { skillById } from "./skills";
+import { resolveSkill } from "./skills-store";
 
 /**
  * The synthesis layer — Loop 9's core. After a session ends we distill the
@@ -34,7 +34,7 @@ function truncate(s: string, n: number): string {
 
 /** Render the conversation as a plain transcript for the synthesis model. */
 export function formatTranscript(messages: LlmMessage[], skill: string): string {
-  const other = skillById(skill).name;
+  const other = resolveSkill(skill).name;
   return messages
     .map((m) => `${m.role === "user" ? "You" : other}: ${m.content.trim()}`)
     .join("\n");

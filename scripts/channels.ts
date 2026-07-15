@@ -120,6 +120,14 @@ async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-channels-"));
   const QUESTION = "Why am I so tired lately?";
   const MEMO = "// slept badly, woke at 3am wired";
+  const TG_SECRET = "e2e-telegram-secret";
+  const SL_SECRET = "e2e-slack-signing-secret";
+  const tgHeaders = () => ({ "content-type": "application/json", "x-telegram-bot-api-secret-token": TG_SECRET });
+  const slHeaders = (body: string) => {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = "v0=" + crypto.createHmac("sha256", SL_SECRET).update(`v0:${ts}:${body}`).digest("hex");
+    return { "content-type": "application/json", "x-slack-signature": sig, "x-slack-request-timestamp": ts };
+  };
 
   // ---- 1. The pure adapter contract (verification + parsing) ----------------
   console.log("\nThe channel-agnostic adapter contract (verify + parse, shared with the route)…\n");
@@ -133,6 +141,12 @@ async function main() {
   );
   const tgOk = telegramAdapter.ingest({ env: tgEnv, headers: new Headers({ "x-telegram-bot-api-secret-token": "s3cret" }), rawBody: tgUpdate });
   check("telegram parses a valid update → message", tgOk.message?.text === "why tired?" && tgOk.message?.target === "42");
+  // Regression guard: with a bot token but NO secret, an unverifiable webhook must be
+  // REFUSED (never answered) — else a forged POST leaks the record to a chosen chat.
+  {
+    const v = telegramAdapter.ingest({ env: { telegramBotToken: "tok" }, headers: new Headers(), rawBody: tgUpdate });
+    check("telegram refuses an unverifiable webhook (no secret configured)", v.error !== undefined && v.message === undefined);
+  }
   check("telegram ignores a bot's own message", Boolean(telegramAdapter.ingest({ env: tgEnv, headers: new Headers({ "x-telegram-bot-api-secret-token": "s3cret" }), rawBody: JSON.stringify({ message: { from: { is_bot: true }, chat: { id: 1 }, text: "hi" } }) }).ignore));
 
   // Slack: url_verification handshake, signing-secret check, event parsing.
@@ -151,6 +165,15 @@ async function main() {
   );
   const slOk = slackAdapter.ingest({ env: slEnv, headers: new Headers({ "x-slack-signature": goodSig, "x-slack-request-timestamp": ts }), rawBody: eventBody });
   check("slack parses a signed message event → message", slOk.message?.text === "why tired?" && slOk.message?.target === "D1");
+  // Regression guard: no signing secret → even a "signed" event is refused (we can't
+  // verify it), but the url_verification handshake (no record access) still answers.
+  {
+    const noSecret = { slackBotToken: "xoxb-1" };
+    const evt = slackAdapter.ingest({ env: noSecret, headers: new Headers({ "x-slack-signature": goodSig, "x-slack-request-timestamp": ts }), rawBody: eventBody });
+    check("slack refuses an event when no signing secret is configured", evt.error !== undefined && evt.message === undefined);
+    const hs = slackAdapter.ingest({ env: noSecret, headers: new Headers(), rawBody: JSON.stringify({ type: "url_verification", challenge: "xyz" }) });
+    check("slack still answers url_verification without a secret (no record access)", hs.challenge === "xyz");
+  }
 
   // ---- 2. + 3. End to end over the built app --------------------------------
   seedRecord(path.join(root, "record"));
@@ -173,9 +196,10 @@ async function main() {
       TELEGRAM_API_BASE: capBase,
       SLACK_BOT_TOKEN: "xoxb-test-slack-token",
       SLACK_API_BASE: capBase,
-      // No signing secret in the e2e path → verification is exercised in step 1.
-      TELEGRAM_WEBHOOK_SECRET: "",
-      SLACK_SIGNING_SECRET: "",
+      // Secrets ARE set: inbound webhooks are refused unless verified, so the e2e
+      // must sign/authenticate every POST — driving the real secure path.
+      TELEGRAM_WEBHOOK_SECRET: TG_SECRET,
+      SLACK_SIGNING_SECRET: SL_SECRET,
     },
     stdio: "ignore",
   });
@@ -199,7 +223,7 @@ async function main() {
     // --- Telegram DM: "why tired?" → grounded reply posted back out. ---
     console.log(`\n  Telegram DM:  “${QUESTION}”\n`);
     const tgInbound = JSON.stringify({ update_id: 1, message: { message_id: 7, from: { id: 100, is_bot: false }, chat: { id: 100, type: "private" }, text: QUESTION } });
-    const tgRes = await (await fetch(`${base}/api/channels/telegram`, { method: "POST", headers: { "content-type": "application/json" }, body: tgInbound })).json();
+    const tgRes = await (await fetch(`${base}/api/channels/telegram`, { method: "POST", headers: tgHeaders(), body: tgInbound })).json();
     check("telegram webhook handled → grounded chat reply", tgRes.ok === true && tgRes.mode === "chat" && tgRes.grounded === true, tgRes.via);
     const tgReply = cap.last.telegram || "";
     console.log(`  → bot replied: ${tgReply}\n`);
@@ -210,7 +234,7 @@ async function main() {
     // --- Same adapter shape for Slack: identical message, identical reply. ---
     console.log(`  Slack message:  “${QUESTION}”\n`);
     const slInbound = JSON.stringify({ type: "event_callback", event: { type: "message", user: "U100", text: QUESTION, channel: "C100" } });
-    const slRes = await (await fetch(`${base}/api/channels/slack`, { method: "POST", headers: { "content-type": "application/json" }, body: slInbound })).json();
+    const slRes = await (await fetch(`${base}/api/channels/slack`, { method: "POST", headers: slHeaders(slInbound), body: slInbound })).json();
     check("slack webhook handled → grounded chat reply", slRes.ok === true && slRes.mode === "chat" && slRes.grounded === true, slRes.via);
     const slReply = cap.last.slack || "";
     console.log(`  → bot replied: ${slReply}\n`);
@@ -220,7 +244,7 @@ async function main() {
     // --- A `//` memo over Telegram lands raw in the inbox, no LLM. ---
     console.log(`  Telegram memo:  “${MEMO}”\n`);
     const memoInbound = JSON.stringify({ update_id: 2, message: { message_id: 8, from: { id: 100, is_bot: false }, chat: { id: 100 }, text: MEMO } });
-    const memoRes = await (await fetch(`${base}/api/channels/telegram`, { method: "POST", headers: { "content-type": "application/json" }, body: memoInbound })).json();
+    const memoRes = await (await fetch(`${base}/api/channels/telegram`, { method: "POST", headers: tgHeaders(), body: memoInbound })).json();
     check("telegram memo handled as a memo (no chat)", memoRes.ok === true && memoRes.mode === "memo" && memoRes.grounded === false);
     check("the bot acked the memo (saved, no reply)", /saved/i.test(cap.last.telegram || ""), cap.last.telegram);
 

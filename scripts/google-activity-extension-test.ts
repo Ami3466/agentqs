@@ -13,6 +13,9 @@ process.env.AGENTQS_DATA_DIR = tmp;
 // (paths and ports are resolved at call time, so setting env here is safe
 // even though the imports below are static.)
 process.env.AGENTQS_INGEST_PORT = String(30000 + Math.floor(Math.random() * 20000));
+// Record-landing batches must carry this token (the endpoint can't read the session
+// cookie cross-origin). Env override so no config file is needed for the listener.
+process.env.AGENTQS_INGEST_TOKEN = "test-ingest-token";
 
 import { extensionLatestVersion, extensionPingFile, GOOGLE_PRESETS, ingestGoogleActivityApiItems } from "../src/lib/google-web-scraper";
 import { INGEST_PATH, INGEST_PING_PATH, ingestPort, startIngestServer } from "../src/lib/ingest-server";
@@ -122,7 +125,11 @@ async function listenerTest(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 300));
   const base = `http://127.0.0.1:${ingestPort()}`;
   const origin = { origin: "https://myactivity.google.com", "content-type": "application/json" };
+  const authed = { ...origin, "x-agentqs-ingest-token": process.env.AGENTQS_INGEST_TOKEN! };
+  const batchBodyStr = JSON.stringify({ preset: "browser_history", items: [item], page: 2, ct: "tok", final: false });
 
+  // Ping is a heartbeat (no record data) — ungated, so it works before the user has
+  // pasted the token.
   const pingRes = await fetch(`${base}${INGEST_PING_PATH}`, {
     method: "POST",
     headers: origin,
@@ -135,10 +142,22 @@ async function listenerTest(): Promise<void> {
   const noOrigin = await fetch(`${base}${INGEST_PING_PATH}`, { method: "POST", body: "{}" });
   if (noOrigin.status !== 403) throw new Error(`Originless ping must be rejected, got ${noOrigin.status}`);
 
+  // Regression guard: a record-landing batch with the right Origin but NO token must
+  // be refused (401) — the Origin header alone can't authorize a write (curl spoofs
+  // it). This is the hole the token closes.
+  const noToken = await fetch(`${base}${INGEST_PATH}`, { method: "POST", headers: origin, body: batchBodyStr });
+  if (noToken.status !== 401) throw new Error(`Tokenless batch must be rejected 401, got ${noToken.status}`);
+  const badToken = await fetch(`${base}${INGEST_PATH}`, {
+    method: "POST",
+    headers: { ...origin, "x-agentqs-ingest-token": "wrong" },
+    body: batchBodyStr,
+  });
+  if (badToken.status !== 401) throw new Error(`Bad-token batch must be rejected 401, got ${badToken.status}`);
+
   const batchRes = await fetch(`${base}${INGEST_PATH}`, {
     method: "POST",
-    headers: origin,
-    body: JSON.stringify({ preset: "browser_history", items: [item], page: 2, ct: "tok", final: false }),
+    headers: authed,
+    body: batchBodyStr,
   });
   const batchBody = (await batchRes.json()) as { ok?: boolean; result?: { added?: number } };
   if (!batchRes.ok || batchBody.ok !== true) throw new Error(`Listener ingest failed: ${batchRes.status} ${JSON.stringify(batchBody)}`);

@@ -1,7 +1,9 @@
 import {
   getJson,
   inWindow,
+  localDay,
   num,
+  recordTimeZone,
   type DailyTable,
   type ImporterContext,
   type ImporterPlugin,
@@ -14,8 +16,10 @@ import {
  *
  *   GET https://api.spotify.com/v1/me/player/recently-played?limit=50
  *
- * Auth is an OAuth 2 bearer access token (paste one). Plays are bucketed by their
- * `played_at` day into a per-day track count + total minutes listened.
+ * Auth is an OAuth 2 bearer access token (paste one). Plays are bucketed by the
+ * LOCAL day they happened (`played_at` is UTC — a New Yorker's 9pm play is past
+ * midnight UTC and belongs on the day they lived, not tomorrow) into a per-day
+ * track count + total minutes listened.
  */
 
 interface SpotifyItem {
@@ -29,19 +33,20 @@ interface SpotifyList {
 
 const API = "https://api.spotify.com/v1/me/player/recently-played?limit=50";
 
-/** Stop paging. Spotify's own ceiling is ~50 plays, so this is only a guard against
- *  an endpoint that never says "no more" — not a window, and not a cap on history:
- *  history comes from the export, which is finite and read WHOLE. */
+/** Runaway guard against an endpoint that never says "no more" — reaching it THROWS
+ *  (never truncates). Spotify's own ceiling is ~50 plays so the loop exits naturally
+ *  well before this; it is not a window, and not a cap on history (history comes from
+ *  the export, which is finite and read WHOLE). */
 const MAX_PAGES = 20;
 
-export function normalizeSpotify(items: SpotifyItem[], from: string, to: string): DailyTable {
+export function normalizeSpotify(items: SpotifyItem[], from: string, to: string, tz: string = recordTimeZone()): DailyTable {
   const tracks = new Map<string, number>();
   const ms = new Map<string, number>();
   for (const it of items) {
     const played = it.played_at;
     if (!played) continue;
-    const day = played.slice(0, 10);
-    if (!inWindow(day, from, to)) continue;
+    const day = localDay(played, tz);
+    if (!day || !inWindow(day, from, to)) continue;
     tracks.set(day, (tracks.get(day) ?? 0) + 1);
     const d = it.track?.duration_ms;
     if (typeof d === "number" && d > 0) ms.set(day, (ms.get(day) ?? 0) + d);
@@ -107,7 +112,14 @@ export const spotifyPlugin: ImporterPlugin = {
     let url = API;
     let pages = 0;
     try {
-      while (pages++ < MAX_PAGES) {
+      for (;;) {
+        // Running out of PAGES THROWS — a partial pull must never look complete.
+        // (In practice the endpoint tops out at ~50 plays and exits naturally below;
+        // this guard only fires if it somehow paged past the runaway limit.)
+        if (pages >= MAX_PAGES) {
+          throw new Error(`still had more after ${MAX_PAGES} pages — refusing to land a partial pull`);
+        }
+        pages++;
         const page = (await getJson(url, headers, fetchImpl)) as SpotifyList;
         const batch = (page?.items ?? []).filter((it) => {
           const at = it.played_at;
@@ -120,7 +132,7 @@ export const spotifyPlugin: ImporterPlugin = {
         items.push(...batch);
         const last = batch.at(-1)?.played_at ?? "";
         if (!last) break;
-        if (last.slice(0, 10) < ctx.from) break; // past the window we were asked for
+        if (localDay(last, recordTimeZone()) < ctx.from) break; // past the window we were asked for
         const before = page.cursors?.before ?? String(Date.parse(last));
         if (!before || before === "NaN") break;
         url = `${API}&before=${before}`;

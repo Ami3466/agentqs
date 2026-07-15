@@ -383,6 +383,38 @@ async function main() {
     browsed[0]?.[0] ?? "no row",
   );
 
+  // The sources that were STILL slicing a UTC day at publish time — each must now
+  // file the 9pm-in-New-York event on the 10th, not the 11th.
+  const lateIso = "2026-06-11T01:00:00Z";
+  const win: [string, string] = ["2026-06-01", "2026-06-30"];
+
+  const { normalizeSpotify } = await import("../src/lib/importers/spotify");
+  const spRow = normalizeSpotify([{ played_at: lateIso, track: { duration_ms: 180_000 } }], win[0], win[1], NY).rows;
+  check(`Spotify (API) files a 9pm-NY play on the 10th (${spRow[0]?.[0]})`, spRow[0]?.[0] === "2026-06-10", spRow[0]?.[0] ?? "no row");
+
+  const { normalizeSpotifyExport } = await import("../src/lib/importers/files/spotify-export");
+  const spxUtc = normalizeSpotifyExport([{ ts: lateIso, ms_played: 180_000, master_metadata_track_name: "x" }], win[0], win[1], NY).rows;
+  check(`Spotify export (ts, UTC) files it on the 10th (${spxUtc[0]?.[0]})`, spxUtc[0]?.[0] === "2026-06-10", spxUtc[0]?.[0] ?? "no row");
+  // endTime is UTC too ("2026-06-11 01:00" = 9pm on the 10th in New York).
+  const spxLocal = normalizeSpotifyExport([{ endTime: "2026-06-11 01:00", msPlayed: 180_000, trackName: "x" }], win[0], win[1], NY).rows;
+  check(`Spotify export (endTime, UTC) files a 9pm-NY play on the 10th (${spxLocal[0]?.[0]})`, spxLocal[0]?.[0] === "2026-06-10", spxLocal[0]?.[0] ?? "no row");
+
+  const { normalizeTodoist } = await import("../src/lib/importers/todoist");
+  const tdRow = normalizeTodoist([{ completed_at: lateIso }], win[0], win[1], NY).rows;
+  check(`Todoist files a 9pm-NY completion on the 10th (${tdRow[0]?.[0]})`, tdRow[0]?.[0] === "2026-06-10", tdRow[0]?.[0] ?? "no row");
+
+  const { normalizeToggl } = await import("../src/lib/importers/toggl");
+  const tgRow = normalizeToggl([{ start: lateIso, duration: 3600 }], win[0], win[1], NY).rows;
+  check(`Toggl files a 9pm-NY entry on the 10th (${tgRow[0]?.[0]})`, tgRow[0]?.[0] === "2026-06-10", tgRow[0]?.[0] ?? "no row");
+
+  const { bucketHeartRate } = await import("../src/lib/importers/whoop");
+  const hr = bucketHeartRate([{ time: lateNight, bpm: 60 }], NY);
+  check(`WHOOP per-minute HR buckets a 9pm-NY sample on the 10th`, hr.daily.has("2026-06-10") && !hr.daily.has("2026-06-11"), [...hr.daily.keys()].join(","));
+
+  const { normalizeReadwise } = await import("../src/lib/importers/readwise");
+  const rwRow = normalizeReadwise([{ highlighted_at: lateIso }], win[0], win[1], NY).rows;
+  check(`Readwise files a 9pm-NY highlight on the 10th (${rwRow[0]?.[0]})`, rwRow[0]?.[0] === "2026-06-10", rwRow[0]?.[0] ?? "no row");
+
   // ---- 6. NO FACE MAY REACH FOR A TRAILING WINDOW ----------------------------
   // The rule (CLAUDE.md): a file is finite and already on your disk, so it is read
   // WHOLE. Clipping ten years of your own Chrome history to a trailing 90 days throws
@@ -394,7 +426,13 @@ async function main() {
   // greps cli-core's sync body, so it could never have seen them. This one looks at
   // every face.
   console.log("\nno import face defaults to a trailing window:");
-  const FACES = ["scripts/daemon.ts", "scripts/import-file.ts", "src/lib/cli-core.ts"];
+  const FACES = [
+    "scripts/daemon.ts",
+    "scripts/import-file.ts",
+    "scripts/import-source.ts",
+    "scripts/import-github.ts",
+    "src/lib/cli-core.ts",
+  ];
   for (const face of FACES) {
     const src = fs.readFileSync(path.join(__dirname, "..", face), "utf8");
     const stray = src.match(/windowDays\([^)]*:\s*(\d{2,})\s*\)/g) ?? [];

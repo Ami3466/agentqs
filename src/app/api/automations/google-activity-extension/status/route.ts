@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { ensureIngestToken } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
 import { extensionLatestVersion, extensionPingFile, extensionSourceDir, GOOGLE_PRESETS } from "@/lib/google-web-scraper";
@@ -89,6 +90,8 @@ export async function GET() {
   return NextResponse.json({
     extensionDir: extensionSourceDir(),
     downloadUrl: "/downloads/agentqs-google-activity-exporter.zip",
+    // The owner copies this into the extension; ingest batches are refused without it.
+    ingestToken: ensureIngestToken(),
     extensionSeenAt: ping.seenAt,
     extensionVersion: ping.version,
     // Unpacked extensions never auto-update; the Pipeline tab compares this to the

@@ -2,6 +2,7 @@ import {
   getJson,
   inWindow,
   num,
+  pageAll,
   type DailyTable,
   type FetchLike,
   type ImporterContext,
@@ -27,7 +28,6 @@ import {
 
 const API = "https://api.prod.whoop.com/developer/v2";
 const PAGE_LIMIT = 25; // the API's maximum page size
-const MAX_PAGES = 40; // 1000 records ≈ years of daily data — a runaway guard
 
 interface WhoopApiCycle {
   id?: number;
@@ -67,24 +67,22 @@ async function drain<T>(
   to: string,
   fetchImpl: FetchLike,
 ): Promise<T[]> {
-  const out: T[] = [];
-  let nextToken: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page++) {
+  // pageAll follows the cursor to the end and THROWS rather than returning a partial
+  // history if the API still has more after the runaway guard — a truncated WHOOP
+  // backfill must never look like a complete one.
+  return pageAll<T>(`WHOOP ${endpoint}`, async (cursor) => {
     const url = new URL(`${API}${endpoint}`);
     url.searchParams.set("start", `${from}T00:00:00.000Z`);
     url.searchParams.set("end", `${to}T23:59:59.999Z`);
     url.searchParams.set("limit", String(PAGE_LIMIT));
-    if (nextToken) url.searchParams.set("nextToken", nextToken);
+    if (cursor) url.searchParams.set("nextToken", String(cursor));
     const raw = (await getJson(
       url.toString(),
       { Authorization: `Bearer ${token}`, Accept: "application/json" },
       fetchImpl,
     )) as Page<T>;
-    out.push(...(raw?.records ?? []));
-    nextToken = raw?.next_token ?? undefined;
-    if (!nextToken) break;
-  }
-  return out;
+    return { items: raw?.records ?? [], next: raw?.next_token ?? undefined };
+  });
 }
 
 const HEADER = [

@@ -5,6 +5,7 @@ import { Check, ChevronDown, Inbox, Plus, RefreshCw, Spinner, Trash, X } from "@
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
+import { CopyRow } from "@/components/connect-api";
 import { GoogleCard } from "@/components/google-card";
 import { SourceHeader, SourceTitle } from "@/components/source-title";
 import { AutomationSetup } from "@/components/automation-setup";
@@ -27,6 +28,7 @@ type GoogleImportStatus = {
 type ChromeImporterStatus = {
   extensionDir: string;
   downloadUrl: string;
+  ingestToken?: string;
   extensionSeenAt: string | null;
   extensionVersion: string;
   latestVersion: string;
@@ -644,9 +646,18 @@ function GoogleImporterCard({
         <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-xs text-muted-fg">
           <li>Download the extension zip and unzip it.</li>
           <li>Open <span className="font-mono text-[11px] text-fg">chrome://extensions</span>, turn on Developer mode, click <span className="font-medium text-fg">Load unpacked</span> and pick the unzipped folder.</li>
+          <li>Paste the ingest token below into the extension popup (its "Ingest token" field) — imports are refused without it.</li>
           <li>This card shows "extension connected" within a minute; then press Import on any row below.</li>
         </ol>
       )}
+
+      {status?.ingestToken ? (
+        <CopyRow
+          className="mt-2"
+          label="Copy ingest token (paste into the extension)"
+          code={status.ingestToken}
+        />
+      ) : null}
 
       {error ? (
         <div className="mt-3 rounded-md border border-border bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>

@@ -219,6 +219,51 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "log_list",
+    {
+      title: "List record-mutating log items",
+      description:
+        "Recent inbox/log items (structured, kept, discarded, notifications), newest first — find the id to revert with log_reject.",
+      inputSchema: { limit: z.number().int().positive().optional() },
+    },
+    async ({ limit }) => guard(() => core.logItems(limit)),
+  );
+
+  server.registerTool(
+    "log_reject",
+    {
+      title: "Revert a structured capture",
+      description:
+        "Undo a structuring: reverts the daily cells it merged (and forgets any column-merge rule it saved), restoring the item to pending. The other end of the structure {id, csv} loop.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => guard(() => core.logReject(id)),
+  );
+
+  server.registerTool(
+    "journal_edit",
+    {
+      title: "Edit daily cells (junk fixes, undo)",
+      description:
+        "Fix or clear individual daily cells the audit flags as junk. Each edit: op 'set' (value \"\" clears a cell), " +
+        "'deleteColumn' (source+metric), or 'deleteRow' (date across every source). Every edit is revertible from the log.",
+      inputSchema: {
+        edits: z.array(
+          z.object({
+            op: z.enum(["set", "revertSet", "deleteColumn", "deleteRow"]),
+            source: z.string().optional(),
+            metric: z.string().optional(),
+            date: z.string().optional(),
+            value: z.string().optional(),
+            expected: z.string().optional(),
+          }),
+        ),
+      },
+    },
+    async ({ edits }) => guard(() => core.journalEdit(edits as Parameters<typeof core.journalEdit>[0])),
+  );
+
+  server.registerTool(
     "scan",
     {
       title: "Scan data quality",
@@ -265,14 +310,15 @@ export async function startMcpServer(): Promise<void> {
     {
       title: "Start the OAuth dance for a source",
       description:
-        "For expiring-token sources (spotify, gcal, gdrive_backup, …): saves the provider app's client id + secret, " +
-        "stashes the state nonce, and returns the authorize URL for the user to open. The RUNNING app at `origin` " +
-        "receives the callback and stores the grant — the provider app must have `redirectUri` (returned) registered. " +
+        "For expiring-token sources (spotify, gcal, gdrive_backup, …): stashes the state nonce and returns the " +
+        "authorize URL for the user to open. The RUNNING app at `origin` receives the callback and stores the grant — " +
+        "the provider app must have `redirectUri` (returned) registered. clientId/clientSecret are OPTIONAL: omit them " +
+        "to reuse the saved app key (sign in again, add a second account); pass them only to REPLACE the saved key. " +
         "This is the CLI/MCP twin of the web connect form; pasted access tokens die within hours, grants refresh forever.",
       inputSchema: {
         source: z.string(),
-        clientId: z.string(),
-        clientSecret: z.string(),
+        clientId: z.string().optional(),
+        clientSecret: z.string().optional(),
         origin: z.string().optional(),
       },
     },
@@ -313,6 +359,19 @@ export async function startMcpServer(): Promise<void> {
         if (schedule !== undefined) return core.setBackupInterval(target, schedule);
         return target === "github" ? core.backupGithub({}) : core.backupDrive();
       }),
+  );
+
+  server.registerTool(
+    "backup_passphrase",
+    {
+      title: "Set the backup encryption passphrase",
+      description:
+        "The Drive archive is unreadable without it — set this BEFORE the first drive backup (the onboarding Drive step " +
+        "isn't done until it's set). Pass `generate: true` to mint a strong one (returned once, store it safely), or `value` " +
+        "to set your own. Restoring on a fresh instance needs the SAME passphrase.",
+      inputSchema: { value: z.string().optional(), generate: z.boolean().optional() },
+    },
+    async ({ value, generate }) => guard(() => core.setBackupPassphrase({ value, generate })),
   );
 
   server.registerTool(
@@ -489,6 +548,16 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "config_get",
+    {
+      title: "Read one setting",
+      description: "Read a single config value by key (provider, model, theme, timezone, …).",
+      inputSchema: { key: z.string() },
+    },
+    async ({ key }) => guard(() => core.configGet(key)),
+  );
+
+  server.registerTool(
     "config_set",
     {
       title: "Change a setting",
@@ -523,10 +592,21 @@ export async function startMcpServer(): Promise<void> {
     "skill_remove",
     {
       title: "Remove a mentor",
-      description: "Delete a custom mentor by id (built-ins are protected).",
+      description:
+        "Remove a mentor by id. A custom one is dropped; a built-in (mentor · therapist · coach) is HIDDEN, not deleted — bring it back with skill_restore.",
       inputSchema: { id: z.string() },
     },
     async ({ id }) => guard(() => core.skillRemove(id)),
+  );
+
+  server.registerTool(
+    "skill_restore",
+    {
+      title: "Restore built-in personas",
+      description: "Un-hide every deleted built-in persona (mentor · therapist · coach). The MCP twin of Settings → Restore defaults.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.skillsRestoreDefaults()),
   );
 
   server.registerTool(

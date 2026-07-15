@@ -38,11 +38,11 @@ export interface WebhookVerdict {
 export interface ChannelEnv {
   // Telegram
   telegramBotToken?: string; // TELEGRAM_BOT_TOKEN
-  telegramWebhookSecret?: string; // TELEGRAM_WEBHOOK_SECRET (optional shared secret)
+  telegramWebhookSecret?: string; // TELEGRAM_WEBHOOK_SECRET (required — inbound refused without it)
   telegramApiBase?: string; // default https://api.telegram.org
   // Slack
   slackBotToken?: string; // SLACK_BOT_TOKEN (xoxb-…)
-  slackSigningSecret?: string; // SLACK_SIGNING_SECRET (optional request signing)
+  slackSigningSecret?: string; // SLACK_SIGNING_SECRET (required — inbound refused without it)
   slackApiBase?: string; // default https://slack.com/api
   fetchImpl?: typeof fetch; // injectable for tests
 }

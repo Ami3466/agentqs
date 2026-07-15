@@ -7,13 +7,14 @@
  * it, so this is an archive import in the shape of the Takeout one: read the zip
  * (or an unpacked folder), fan it out into the four record streams, rebuild.
  *
- *   record/daily/spotify_history.csv        tracks · minutes · artists · podcasts · searches
- *   record/daily/spotify_history_texts.csv  a searchable digest of each day's listening
- *   record/events.jsonl                     one event per play and per search
- *   record/inbox.jsonl                      taste profile, Wrapped, playlists, library
+ *   record/daily/spotify.csv        tracks · minutes · artists · podcasts · searches
+ *   record/daily/spotify_texts.csv  a searchable digest of each day's listening
+ *   record/events.jsonl             one event per play and per search
+ *   record/inbox.jsonl              taste profile, Wrapped, playlists, library
  *
- * It writes `spotify_history`, not `spotify`, so a later API sync of the live
- * source can never overwrite a full day of history with its 50-play window.
+ * It lands in the SAME `spotify` source the API plugin syncs (count columns merge
+ * with `max`), so one Spotify row holds the lifetime and the API sync only tops up
+ * its recent end — never a separate `spotify_history` that double-counts.
  *
  * Usage:
  *   npm run import:spotify -- [--zip ~/Downloads/my_spotify_data.zip] [--dir <folder>] [--dry]
@@ -25,6 +26,7 @@ import os from "os";
 import path from "path";
 import { readConfig, writeConfig } from "../src/lib/config";
 import { wipeDemoOnImport } from "../src/lib/demo";
+import { localDay, recordTimeZone } from "../src/lib/importers/plugin";
 import { dbPath, recordDir } from "../src/lib/paths";
 import {
   appendEvents,
@@ -35,7 +37,12 @@ import {
   type AppendInboxInput,
 } from "../src/lib/record";
 
-const SOURCE = "spotify_history";
+// The export lands in the SAME `spotify` source the API plugin keeps fresh (the file
+// importer does likewise) — one Spotify row shows the lifetime, the API sync tops up
+// its recent end. Writing a separate `spotify_history` split one Spotify in two and
+// double-counted every cross-source rollup; count columns merge with `max` so a full
+// historical day is never lowered by the API's 50-play recent window.
+const SOURCE = "spotify";
 const TEXT_SOURCE = `${SOURCE}_texts`;
 
 // ---- Export shapes --------------------------------------------------------
@@ -201,6 +208,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const dry = argv.includes("--dry");
   const archive = openArchive(argv);
+  const tz = recordTimeZone(); // plays timestamp in UTC → bucket by the local day lived
 
   const music = readAll<MusicPlay>(archive, "StreamingHistory_music_");
   const podcasts = readAll<PodcastPlay>(archive, "StreamingHistory_podcast_");
@@ -225,7 +233,7 @@ async function main(): Promise<void> {
   for (const p of music) {
     if (!p.endTime || !p.trackName) continue;
     const ts = playTimestamp(p.endTime);
-    const date = ts.slice(0, 10);
+    const date = localDay(ts, tz);
     const agg = day(date);
     agg.tracks += 1;
     agg.ms += p.msPlayed ?? 0;
@@ -246,7 +254,7 @@ async function main(): Promise<void> {
   for (const p of podcasts) {
     if (!p.endTime || !p.episodeName) continue;
     const ts = playTimestamp(p.endTime);
-    const date = ts.slice(0, 10);
+    const date = localDay(ts, tz);
     const agg = day(date);
     agg.podcastEpisodes += 1;
     agg.podcastMs += p.msPlayed ?? 0;
@@ -265,7 +273,7 @@ async function main(): Promise<void> {
     const query = (s.searchQuery ?? "").trim();
     if (!query || !s.searchTime) continue;
     const ts = new Date(s.searchTime.replace(/\[UTC\]$/, "")).toISOString();
-    const date = ts.slice(0, 10);
+    const date = localDay(ts, tz);
     day(date).searches += 1;
     const uri = s.searchInteractionURIs?.[0];
     events.push({
@@ -368,7 +376,9 @@ async function main(): Promise<void> {
   wipeDemoOnImport(); // the first real import clears the generic demo record
 
   const rDir = recordDir();
-  const dailyMerge = mergeDailyCsv(rDir, SOURCE, daily);
+  // Counts merge with `max` so a full historical day is never lowered by the API's
+  // 50-play recent window (the daily columns are all counts/set-sizes).
+  const dailyMerge = mergeDailyCsv(rDir, SOURCE, daily, { policy: "max" });
   const textMerge = mergeDailyCsv(rDir, TEXT_SOURCE, texts);
   const added = appendEvents(events, { recordDir: rDir }).added;
   const capturesAdded = appendInboxItems(captures, { recordDir: rDir }).added;

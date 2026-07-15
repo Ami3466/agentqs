@@ -92,7 +92,7 @@ export function onboardingGuide(): OnboardingGuide {
       why: "anything in — a memo, a file, a folder; the inbox → structure loop starts here.",
       done: hasFile("inbox.jsonl") || hasFile("events.jsonl") || hasDaily(),
       cli: "agentqs import <file-or-folder>",
-      mcp: 'import_tree {"path":"…"} · then inbox_pending → structure {id, csv}',
+      mcp: 'import_tree {"dir":"…"} · then inbox_pending → structure {id, csv}',
       api: 'POST /api/inbox {"text":"…"}',
     },
     {
@@ -127,7 +127,7 @@ export function onboardingGuide(): OnboardingGuide {
       why: "the whole store as one AES-256-GCM archive — covers what GitHub can't. A backup target, not a data source: it never shows up in the pipeline.",
       done: driveConnected && Boolean(cfg?.backup?.passphrase),
       cli: "agentqs backup passphrase --generate (store it OFF this machine) → agentqs source authorize gdrive_backup --client-id … --client-secret … → agentqs backup drive --schedule daily",
-      mcp: 'backup_run {"target":"drive"} · schedule: backup_run {"target":"drive","schedule":"daily"} · backup_status',
+      mcp: 'backup_passphrase {"generate":true} (store it OFF this machine) · source_authorize {"source":"gdrive_backup"} · backup_run {"target":"drive","schedule":"daily"} · backup_status',
       api: 'POST /api/backup {"target":"passphrase","generate":true} · POST /api/oauth/gdrive_backup {"clientId","clientSecret"} · POST /api/backup {"target":"drive","schedule":"daily"}',
     },
     {

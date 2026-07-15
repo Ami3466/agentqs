@@ -108,13 +108,17 @@ async function main() {
   );
   check("redirect URI is the app callback (trailing slash trimmed)", auth.redirectUri === "http://127.0.0.1:3106/api/oauth/callback");
   check("state stashed like the web form", Boolean(readConfig()?.oauthPending?.state));
+  // A key was saved above, so signing in again needs NO re-entry — empty creds reuse it.
+  const reAuth = sourceAuthorize("gdrive_backup", "", "");
+  check("re-login reuses the saved app key (no client id/secret re-entry)", reAuth.authorizeUrl.startsWith("https://accounts.google.com"));
+  // But a source that never had a key saved refuses with a clear message.
   let rejected = false;
   try {
-    sourceAuthorize("gdrive_backup", "", "");
+    sourceAuthorize("strava", "", "");
   } catch {
     rejected = true;
   }
-  check("missing client id/secret refused loudly", rejected);
+  check("a source with no saved key refuses loudly", rejected);
 
   fs.rmSync(root, { recursive: true, force: true });
   if (failures) {

@@ -458,7 +458,14 @@ export function appendInboxItems(
   const lines: string[] = [];
   const items: InboxItem[] = [];
   for (const input of inputs) {
-    const id = input.id?.trim() || crypto.randomUUID();
+    // A dropped file (source "drop") gets a CONTENT-derived id, so the same file
+    // dropped twice — or dropped and then `agentqs import`ed — lands ONCE. Typed
+    // memos keep a random id: the same short note can legitimately recur day to day.
+    const fallbackId =
+      input.source === "drop"
+        ? `drop:${crypto.createHash("sha256").update(input.text ?? "").digest("hex").slice(0, 24)}`
+        : crypto.randomUUID();
+    const id = input.id?.trim() || fallbackId;
     if (existing.has(id)) continue;
     existing.add(id);
     const item = buildInboxItem(input, id);
@@ -1136,6 +1143,9 @@ export interface DailyEditResult {
   clears: number;
   deletedColumns: number;
   deletedRows: number;
+  /** Daily CSV stems this edit rewrote — enough to patch the cache (refreshSyncCache)
+   *  instead of a full rebuild that re-reads events.jsonl. */
+  sources: string[];
 }
 
 export function revertEditsFromAppliedMeta(meta: unknown): DailyEdit[] {
@@ -1223,7 +1233,7 @@ export function applyDailyEdits(
       .filter((f) => f.toLowerCase().endsWith(".csv"))
       .map((f) => f.replace(/\.csv$/i, ""));
 
-  const result: DailyEditResult = { sets: 0, clears: 0, deletedColumns: 0, deletedRows: 0 };
+  const result: DailyEditResult = { sets: 0, clears: 0, deletedColumns: 0, deletedRows: 0, sources: [] };
 
   for (const e of edits) {
     if (e.op === "set") {
@@ -1298,6 +1308,7 @@ export function applyDailyEdits(
   }
 
   for (const source of dirty) writeDailyTable(fileOf(source), load(source));
+  result.sources = [...dirty];
   return result;
 }
 

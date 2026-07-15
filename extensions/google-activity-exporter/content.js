@@ -7,6 +7,7 @@
 
   const DEFAULT_BASE = "http://localhost:3000";
   const BASE_KEY = "agentqsBaseUrl";
+  const TOKEN_KEY = "agentqsIngestToken"; // copied from the app's Pipeline → Google data card
   const STATUS_KEY = "agentqsImportStatus";
   const RESUME_KEY = "agentqs-google-exporter-resume";
   const STATE = { running: false, stop: false, pages: 0, seenItems: 0, added: 0, importer: "browser_history", retryTimer: null, workingBase: "" };
@@ -22,6 +23,17 @@
         });
       } catch {
         resolve(DEFAULT_BASE);
+      }
+    });
+  }
+  // The ingest token authorizes record-landing batches (the endpoint can't read the
+  // session cookie cross-origin). Copied from the app's Pipeline → Google data card.
+  function ingestToken() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get([TOKEN_KEY], (result) => resolve(String((result && result[TOKEN_KEY]) || "").trim()));
+      } catch {
+        resolve("");
       }
     });
   }
@@ -468,6 +480,7 @@
   async function postBatch(items, page, ct, final, preset = "browser_history") {
     let lastError = null;
     const base = await apiBase();
+    const token = await ingestToken();
     // Try the last target that worked first, then rotate through the others —
     // typically the app port, then the recompile-proof ingest listener.
     const targets = [...new Set([STATE.workingBase, base, INGEST_FALLBACK].filter(Boolean))];
@@ -481,13 +494,15 @@
       try {
         const res = await fetch(`${target}/api/automations/google-activity-extension`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-agentqs-ingest-token": token },
           body: JSON.stringify({ preset, items, page, ct, final }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const err = new Error(data.error || `AgentQS returned ${res.status}`);
-          if (res.status === 400 || res.status === 403) err.permanent = true;
+          // Unknown preset / rejected origin / bad-or-missing token — retrying can't
+          // fix these, so surface immediately instead of looping forever.
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 503) err.permanent = true;
           throw err;
         }
         STATE.workingBase = target;

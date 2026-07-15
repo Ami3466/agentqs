@@ -1439,14 +1439,14 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       {tab === "skills" ? (
       <>
       {/* Skills */}
-      <Section id="skills" title="Skills" icon={Wand} desc="Personas you can invoke in chat with /name. Any skill can be deleted — defaults are restorable.">
+      <Section id="skills" title="Skills" icon={Wand} desc="Personas for chat — switch with /skill <id>. Any skill can be deleted; defaults are restorable.">
         <div className="space-y-2">
           {skills.map((s) => (
             <div key={s.id} className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
               <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-fg/50" aria-hidden />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-fg">
-                  {s.name} <span className="font-mono text-xs text-muted-fg">/{s.id}</span>
+                  {s.name} <span className="font-mono text-xs text-muted-fg">/skill {s.id}</span>
                 </p>
                 <p className="text-xs text-muted-fg">{s.blurb}</p>
               </div>
@@ -1541,7 +1541,10 @@ const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[]
   { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source: the key is TESTED against the real API first (only a working key is saved), then the sync runs as a background job (202 + job) that survives page reloads — poll GET /api/import/{source} for its phase/progress. Pass {\"test\": true} to probe a credential without saving anything." },
   { method: "POST", path: "/api/oauth/{source}", body: `{"clientId":"…","clientSecret":"…"}`, desc: "Start the OAuth dance for an expiring-token source (spotify, gcal, fitbit, strava): saves your provider app's credentials and returns the authorize URL. The provider redirects to GET /api/oauth/callback, which stores the tokens; syncs then refresh them automatically. GET /api/import/{source} carries each source's credentialHelp guide + oauth state." },
   { method: "GET", path: "/api/automations", desc: "Browser-import recipes. POST saves one; POST /api/automations/run replays it; DELETE removes it." },
-  { method: "GET", path: "/api/skills", desc: "Mentor skills. POST adds or edits one; DELETE removes it." },
+  { method: "GET", path: "/api/skills", desc: "Mentor skills. POST adds or edits one (POST {\"restoreDefaults\":true} un-hides deleted built-ins); DELETE removes it (a built-in is hidden, restorable)." },
+  { method: "GET", path: "/api/sessions", desc: "Chat/therapy sessions with their synthesized insights + commitments. POST saves one; DELETE removes one." },
+  { method: "GET", path: "/api/voice/session", desc: "Mint a signed voice-session token (ElevenLabs/Gemini). POST /api/voice/memo lands a spoken memo; POST /api/voice/whisper manages local transcription models." },
+  { method: "GET", path: "/api/keys", desc: "The HTTP API bearer key (masked). POST rotates it; DELETE clears it. Cookie-only — a leaked bearer can't rotate itself." },
   { method: "GET", path: "/api/graphs", desc: "Saved graph definitions. POST replaces the saved set." },
   { method: "GET", path: "/api/embeddings", desc: "Semantic index status. POST reindexes from the record." },
   { method: "GET", path: "/api/photos", desc: "Photo record status. POST imports a folder; POST /api/photos/search finds photos by description." },

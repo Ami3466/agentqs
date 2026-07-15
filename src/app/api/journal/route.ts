@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { apiError } from "@/lib/api";
 import { readJournal } from "@/lib/journal";
 
 export const runtime = "nodejs";
@@ -24,5 +25,9 @@ export async function GET(req: Request) {
         ? Number(rawDays)
         : 180;
   const numericOnly = url.searchParams.get("numeric") === "1";
-  return NextResponse.json(readJournal({ days, numericOnly }));
+  try {
+    return NextResponse.json(readJournal({ days, numericOnly }));
+  } catch (e) {
+    return apiError(e);
+  }
 }

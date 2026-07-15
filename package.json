@@ -56,6 +56,7 @@
     "agent:test": "tsx scripts/agent-brain.ts",
     "automation:test": "tsx scripts/automation.ts",
     "edit:test": "tsx scripts/journal-edit.ts",
+    "skills:test": "tsx scripts/skills-test.ts",
     "log:test": "NEXT_DIST_DIR=.next-e2e next build && NEXT_DIST_DIR=.next-e2e tsx scripts/data-log-e2e.ts"
   },
   "dependencies": {

@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { ingestCorsHeaders, isAllowedIngestOrigin, runIngest, type IngestBody } from "@/lib/ingest-server";
+import {
+  INGEST_TOKEN_HEADER,
+  ingestAuthError,
+  ingestCorsHeaders,
+  isAllowedIngestOrigin,
+  runIngest,
+  type IngestBody,
+} from "@/lib/ingest-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +23,12 @@ export async function POST(req: Request) {
   const origin = req.headers.get("origin");
   if (!isAllowedIngestOrigin(origin)) {
     return NextResponse.json({ error: "Origin not allowed." }, { status: 403, headers: ingestCorsHeaders(origin) });
+  }
+  // The Origin check can't authorize a write (curl sets Origin freely); this batch
+  // lands data in the record, so it must carry a valid ingest token.
+  const authErr = ingestAuthError(req.headers.get(INGEST_TOKEN_HEADER));
+  if (authErr) {
+    return NextResponse.json({ error: authErr.error }, { status: authErr.status, headers: ingestCorsHeaders(origin) });
   }
   const body = (await req.json().catch(() => ({}))) as IngestBody;
   const { status, payload } = runIngest(body);
