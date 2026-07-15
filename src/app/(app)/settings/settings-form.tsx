@@ -35,6 +35,7 @@ import {
 } from "@/components/icons";
 import { CRON_CMD, CliRow, CopyRow, KeyRow, PH, SYNC_CMD, fixPromptSnip, mcpSnip, skillSnip } from "@/components/connect-api";
 import { Badge, Button, Card, Checkbox, Field, Input, Select, Switch, cn } from "@/components/ui";
+import { API_CATALOG } from "@/lib/api-catalog";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { ago } from "@/lib/sources";
 import { SKILLS, type Skill } from "@/lib/skills";
@@ -1517,39 +1518,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   );
 }
 
-/** Core HTTP endpoints the bearer key unlocks — the same routes the app itself uses. */
-const ENDPOINTS: { method: string; path: string; body?: string; desc: string }[] = [
-  { method: "POST", path: "/api/chat", body: `{"message":"…"}`, desc: "Ask your record — grounded answer with sources." },
-  { method: "POST", path: "/api/search", body: `{"query":"…","limit":5}`, desc: "Semantic search — closest days plus a ready answer." },
-  { method: "POST", path: "/api/inbox", body: `{"text":"…"}`, desc: "Log a capture to the inbox — zero tokens. GET lists pending captures; DELETE discards one; PATCH {id} keeps one as a searchable reference memo." },
-  { method: "POST", path: "/api/structure", body: `{"id":"…"}`, desc: "Structure a pending capture into daily rows with the configured AI (or pass all: true). Pass csv with the extracted date,… rows to structure key-free — same contract as the CLI/MCP tool." },
-  { method: "POST", path: "/api/scan", body: `{}`, desc: "Scan data quality: duplicate columns, dead all-zero columns, messy values; findings queue as inbox notifications. GET lists open findings; fix: true applies them all." },
-  { method: "GET", path: "/api/journal", desc: "List journal entries (?days=30, ?numeric=1)." },
-  { method: "POST", path: "/api/journal/edit", body: `{"edits":[…]}`, desc: "Edit the daily table — set/clear cells, drop rows or columns." },
-  { method: "GET", path: "/api/daily", desc: "The structured daily table." },
-  { method: "GET", path: "/api/events", desc: "Raw timeline events (?start=YYYY-MM-DD&end=…&limit=500)." },
-  { method: "GET", path: "/api/log", desc: "Captured log items; POST /api/log/reject {\"id\":\"…\"} undoes an import." },
-  { method: "GET", path: "/api/sources", desc: "Every source and its sync state. POST sets an interval; POST {\"id\":\"…\",\"action\":\"reset\"} wipes what a source landed but KEEPS its credential and schedule, so the next sync re-walks its whole history into a clean file (the repair path for rows a buggy importer invented — a sync only merges, so it can raise a value but never delete one); DELETE disconnects, taking the credential with it." },
-  { method: "GET", path: "/api/pipeline", desc: "Pipeline truth table: per-source origin, credential provenance, schedule, last run outcome, coverage." },
-  { method: "GET", path: "/api/google", desc: "Google as ONE connection with a product tree (Calendar, Gmail → Inbox/Sent). POST {\"enable\":[\"gmail.sent\"]} ticks a product; {\"products\":[…]} replaces the set. Ticking is not connecting: a product whose scope the stored key lacks answers needsAuthorize — re-authorize widens the SAME key." },
-  { method: "GET", path: "/api/doctor", desc: "Store health: sync-engine exposure (iCloud/Dropbox/OneDrive), evicted files, conflict twins, split stores." },
-  { method: "GET", path: "/api/audit", desc: "Index audit: deterministic evidence for an AI review — impossible dates, one-day sources, coverage holes, stale sources, outlier values." },
-  { method: "POST", path: "/api/store/migrate", body: `{"dryRun":true}`, desc: "Move the store to the sync-safe app-data dir (hash-verified; restart after). Omit dryRun to migrate." },
-  { method: "GET", path: "/api/onboarding", desc: "The live setup checklist: every step (account → key → capture → sources → schedules → backups → channels → migrate) with its exact CLI / MCP / API call and a done flag. Agents start here." },
-  { method: "GET", path: "/api/backup", desc: "Off-site backup status: GitHub snapshot branch + encrypted Google Drive archive — schedule, last run, last error per target, plus the live Drive upload job. Backups are data going OUT: neither target is a source, so neither appears in /api/sources or /api/pipeline." },
-  { method: "POST", path: "/api/backup", body: `{"target":"github"}`, desc: "Run a backup now: github pushes the record snapshot branch (oversized files excluded loudly); drive encrypts the whole store and uploads one archive as a background job (202 — poll GET for its phase), rotating old ones. Add \"schedule\":\"daily|off\" to only set the cadence sync --due sweeps. target restore + confirm:\"replace-record\" pulls the newest Drive archive INTO this store (record replaced + retired beside it, this instance's config kept) — the migration path onto a fresh instance." },
-  { method: "POST", path: "/api/import/{source}", body: `{"credential":"…"}`, desc: "Connect an API source: the key is TESTED against the real API first (only a working key is saved), then the sync runs as a background job (202 + job) that survives page reloads — poll GET /api/import/{source} for its phase/progress. Pass {\"test\": true} to probe a credential without saving anything." },
-  { method: "POST", path: "/api/oauth/{source}", body: `{"clientId":"…","clientSecret":"…"}`, desc: "Start the OAuth dance for an expiring-token source (spotify, gcal, fitbit, strava): saves your provider app's credentials and returns the authorize URL. The provider redirects to GET /api/oauth/callback, which stores the tokens; syncs then refresh them automatically. GET /api/import/{source} carries each source's credentialHelp guide + oauth state." },
-  { method: "GET", path: "/api/automations", desc: "Browser-import recipes. POST saves one; POST /api/automations/run replays it; DELETE removes it." },
-  { method: "GET", path: "/api/skills", desc: "Mentor skills. POST adds or edits one (POST {\"restoreDefaults\":true} un-hides deleted built-ins); DELETE removes it (a built-in is hidden, restorable)." },
-  { method: "GET", path: "/api/sessions", desc: "Chat/therapy sessions with their synthesized insights + commitments. POST saves one; DELETE removes one." },
-  { method: "GET", path: "/api/voice/session", desc: "Mint a signed voice-session token (ElevenLabs/Gemini). POST /api/voice/memo lands a spoken memo; POST /api/voice/whisper manages local transcription models." },
-  { method: "GET", path: "/api/keys", desc: "The HTTP API bearer key (masked). POST rotates it; DELETE clears it. Cookie-only — a leaked bearer can't rotate itself." },
-  { method: "GET", path: "/api/graphs", desc: "Saved graph definitions. POST replaces the saved set." },
-  { method: "GET", path: "/api/embeddings", desc: "Semantic index status. POST reindexes from the record." },
-  { method: "GET", path: "/api/photos", desc: "Photo record status. POST imports a folder; POST /api/photos/search finds photos by description." },
-  { method: "GET", path: "/api/channels/{channel}", desc: "Is the telegram / slack bot wired up? The platform webhook POSTs here." },
-];
+/** Core HTTP endpoints — the ONE catalog, shared with the `GET /api` discovery
+ *  manifest so the human doc and the agent-facing manifest never drift. */
+const ENDPOINTS = API_CATALOG;
 
 /**
  * API tab: mint / rotate / revoke the instance bearer key and show how to call

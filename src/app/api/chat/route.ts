@@ -155,7 +155,9 @@ export async function POST(req: Request) {
       const text =
         opener ??
         `I'm your ${skill.name.toLowerCase()}. Add an AI key in Settings and I'll answer this ` +
-          `grounded in your real data. Until then, log with \`//\` and I'll keep your record building.`;
+          `grounded in your real data. For exact analysis without a key — date ranges, ` +
+          `multi-metric joins, raw rows — query the record directly (POST /api/query, ` +
+          `\`agentqs query\`, or the MCP query tool). Log with \`//\` and I'll keep your record building.`;
       for (const chunk of chunkText(text)) send({ t: "delta", v: chunk });
       send({
         t: "done",

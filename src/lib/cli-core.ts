@@ -15,6 +15,7 @@ import path from "path";
 import { activeLlm, effectiveProviders, readConfig, writeConfig, type AppConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
 import { openReadonly } from "./db";
+import { prepareSql } from "./query-async";
 import {
   appendInboxItem,
   applyDailyEdits,
@@ -140,16 +141,20 @@ export interface QueryResult {
 /** Read-only SQL over the rebuilt cache (daily / raw_inbox / sessions / search).
  *  SELECT-only — the query path never mutates the derived store. */
 export function query(sql: string, limit = 200): QueryResult {
-  const trimmed = sql.trim().replace(/;+\s*$/, "");
-  if (!/^(select|with)\b/i.test(trimmed)) {
-    throw new Error("Only read-only SELECT / WITH queries are allowed.");
-  }
+  const { sql: capped, limit: cap } = prepareSql(sql, limit);
   const file = dbPath();
   if (!fs.existsSync(file)) throw new Error("No cache yet — run `agentqs rebuild` first.");
   const db = openReadonly(file);
   try {
-    const capped = /\blimit\b/i.test(trimmed) ? trimmed : `${trimmed} LIMIT ${limit}`;
-    const rows = db.prepare(capped).all() as Record<string, unknown>[];
+    // Enforce the cap while reading, not via the appended LIMIT — a "limit" the regex
+    // saw in a subquery/alias skips the append, so `.all()` would materialize the
+    // whole table. Iterating stops at the ceiling regardless.
+    const stmt = db.prepare(capped);
+    const rows: Record<string, unknown>[] = [];
+    for (const r of stmt.iterate() as IterableIterator<Record<string, unknown>>) {
+      rows.push(r);
+      if (rows.length >= cap) break;
+    }
     const columns = rows.length ? Object.keys(rows[0]) : [];
     return { columns, rows, count: rows.length };
   } finally {
