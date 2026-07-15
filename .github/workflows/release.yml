@@ -19,6 +19,10 @@ on:
         description: "Extra tag to publish (e.g. edge). The digest is always tagged too."
         required: false
         default: "edge"
+      platforms:
+        description: "Target platforms. Default is amd64 only (the deploy target). Add arm64 for laptop use - it builds under QEMU emulation and is much slower."
+        required: false
+        default: "linux/amd64"
 
 env:
   REGISTRY: ghcr.io
@@ -53,13 +57,16 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      # amd64 for the VPS, arm64 so the same image runs on an Apple Silicon laptop.
-      # onnxruntime (the local embedder behind `recall`) has no musl build, which is
-      # why the Dockerfile is Debian - do not "optimize" it to alpine here.
+      # amd64 is the deploy target (the VPS). arm64 is opt-in via the
+      # workflow_dispatch `platforms` input - it builds under QEMU emulation, which
+      # for a native-heavy image (onnxruntime, the local embedder behind `recall`)
+      # is minutes-to-tens-of-minutes slower and can hang, so it does NOT gate a
+      # release. onnxruntime has no musl build, which is why the Dockerfile is
+      # Debian - do not "optimize" it to alpine here.
       - uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
