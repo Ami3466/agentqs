@@ -79,8 +79,6 @@ Text or voice, from the app, CLI or a channel. They land in your inbox - structu
 
 Slack and Telegram: log memos and ask your record questions from where you already are. They are capture channels, not scrapers - what you send the bot lands in your inbox, and your Slack history is never read. The Pipeline lists them under **Capture channels**, so a bot you haven't linked yet never looks like a broken data source.
 
-**Daily nudges** turn a channel around: schedule a message the app sends *you* at a local time - the classic one is an 8pm "How was your day?" - and your reply lands in your record like any other memo. Set them in Settings → Channels → Daily nudges, or `agentqs nudge add "How was your day?" --channel slack --target <id> --at 20:00`.
-
 ## Integrations / data pipelines
 
 **Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · WakaTime · YNAB · Readwise · Google (Calendar, Gmail) · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*
