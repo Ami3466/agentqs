@@ -69,6 +69,21 @@ export interface ChannelsConfig {
   replies?: Record<string, ChannelReplyPrefs>; // per-channel reply behaviour, keyed by channel id
 }
 
+/** A scheduled OUTBOUND message the app sends YOU on a channel at a local time —
+ *  e.g. an 8pm "How was your day?". Set up under Settings → Channels → Notifications;
+ *  the in-process scheduler sends each once a day (guard: lastSentDay in the record
+ *  timezone). */
+export interface Notification {
+  id: string;
+  channel: string; // "slack" | "telegram"
+  target: string; // channel id, or a user id for a DM
+  text: string; // the message body
+  atLocal: string; // "HH:MM" 24h, in the record timezone
+  enabled?: boolean; // default true
+  lastSentDay?: string; // YYYY-MM-DD (tz) — the once-per-day guard
+  lastError?: string | null; // last send failure
+}
+
 /** An OAuth2 app the user registered with a provider (client id + secret) plus
  *  the tokens the authorize dance minted. A refresh/access token here is a
  *  STORED CREDENTIAL — it makes the source connected, and disconnect deletes it. */
@@ -187,6 +202,7 @@ export interface AppConfig {
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
   hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)
+  notifications?: Notification[]; // scheduled outbound messages (daily "how was your day?")
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
   whoopCreds?: WhoopCreds; // WHOOP unofficial app login (base account): email + password + cached/rotated tokens
