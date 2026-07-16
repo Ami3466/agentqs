@@ -67,7 +67,6 @@ export const API_CATALOG: ApiEndpoint[] = [
   { method: "GET", path: "/api/photos", cli: "agentqs photos", mcp: "photos_status / photos_import / photos_search", desc: "Photo record status. POST imports a folder; POST /api/photos/search finds photos by description." },
   { method: "POST", path: "/api/settings", body: `{"timezone":"Asia/Jerusalem"}`, cli: "agentqs config set <key> <value>", mcp: "config_set", desc: "Instance config: provider/model/key, theme, and timezone. SET timezone on a hosted instance — the record buckets each day by it, and the server clock is not where the user lives. GET returns the public (masked) config." },
   { method: "GET", path: "/api/channels/{channel}", desc: "Is the telegram / slack bot wired up? The platform webhook POSTs here." },
-  { method: "GET", path: "/api/nudges", cli: "agentqs nudge", mcp: "nudge_list / nudge_save / nudge_test / nudge_remove", desc: "Scheduled OUTBOUND messages — a daily Slack/Telegram nudge the app sends YOU (e.g. an 8pm \"how was your day?\") at a local HH:MM. POST {channel,target,text,atLocal} saves one; POST {action:\"test\",id} sends it now; DELETE {id} removes it. A nudge is data going OUT: it touches no daily rows and your reply rides the normal inbound channel path into the record." },
 ];
 
 /** Capabilities that are deliberately NOT on the HTTP API, with the reason — so an

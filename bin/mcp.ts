@@ -659,56 +659,6 @@ export async function startMcpServer(): Promise<void> {
     async ({ date, windowDays }) => guard(() => core.photoContext(date, windowDays)),
   );
 
-  server.registerTool(
-    "nudge_list",
-    {
-      title: "List daily nudges",
-      description:
-        "Scheduled OUTBOUND messages the app sends you (Slack/Telegram) at a local time — e.g. an 8pm 'how was your day?'. Shows each nudge's time, target, and last-send status.",
-      inputSchema: {},
-    },
-    async () => guard(() => core.nudges()),
-  );
-
-  server.registerTool(
-    "nudge_save",
-    {
-      title: "Create or update a daily nudge",
-      description:
-        "Schedule an outbound message: `channel` (slack|telegram), `target` (a Slack channel/DM id like C0…/U0… or a Telegram chat id), `text`, and `atLocal` (24h HH:MM in the record timezone). The in-process scheduler sends it once a day; your reply rides the normal inbound channel path into the record. A nudge is data going OUT — it touches no daily rows and leaves no undo item.",
-      inputSchema: {
-        channel: z.enum(["slack", "telegram"]),
-        target: z.string(),
-        text: z.string(),
-        atLocal: z.string(),
-        id: z.string().optional(),
-        enabled: z.boolean().optional(),
-      },
-    },
-    async ({ channel, target, text, atLocal, id, enabled }) =>
-      guard(() => core.nudgeSave({ channel, target, text, atLocal, id, enabled })),
-  );
-
-  server.registerTool(
-    "nudge_test",
-    {
-      title: "Send a nudge now",
-      description: "Send a configured nudge immediately to verify the channel wiring. Does NOT consume today's scheduled slot.",
-      inputSchema: { id: z.string() },
-    },
-    async ({ id }) => guard(() => core.nudgeTest(id)),
-  );
-
-  server.registerTool(
-    "nudge_remove",
-    {
-      title: "Delete a daily nudge",
-      description: "Remove a scheduled outbound message by id.",
-      inputSchema: { id: z.string() },
-    },
-    async ({ id }) => guard(() => core.nudgeRemove(id)),
-  );
-
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // stderr is safe (stdout is the JSON-RPC channel).

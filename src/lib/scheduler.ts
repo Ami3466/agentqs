@@ -33,20 +33,6 @@ async function sweep(): Promise<void> {
   } catch (e) {
     console.warn(`agentqs scheduler sweep failed: ${(e as Error).message}`);
   }
-  // Outbound daily nudges ("how was your day?") ride the same sweep, isolated so a
-  // channel outage never stalls the sync sweep above.
-  try {
-    const { sweepNudges } = await import("./nudges");
-    const n = await sweepNudges();
-    if (n.sent.length || n.failed.length) {
-      console.log(
-        `agentqs nudges: ${n.sent.length} sent` +
-          (n.failed.length ? `, ${n.failed.length} failed (${n.failed.map((f) => f.id).join(", ")})` : ""),
-      );
-    }
-  } catch (e) {
-    console.warn(`agentqs nudge sweep failed: ${(e as Error).message}`);
-  }
 }
 
 /** Idempotent; called from instrumentation.ts once per server process. */

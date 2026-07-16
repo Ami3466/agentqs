@@ -60,26 +60,6 @@ export interface ColumnMergeRule {
   savedAt: string;
 }
 
-/**
- * A scheduled OUTBOUND message — a daily nudge the app sends TO you on a channel
- * (Slack / Telegram) at a local wall-clock time, e.g. an 8pm "how was your day?".
- * Data going OUT, so its schedule lives here in config (beside backups), NOT in
- * `sourceIntervals` (the cadence of data coming IN). The in-process scheduler
- * sweeps due nudges; your reply rides the normal inbound channel path, so it's
- * captured/answered like any other message.
- */
-export interface Nudge {
-  id: string; // slug
-  channel: string; // "slack" | "telegram" — a channel-registry adapter id
-  target: string; // where it posts: a channel id, or a user id for a DM
-  text: string; // the message body
-  atLocal: string; // "HH:MM" 24h, in the record timezone (recordTimeZone)
-  enabled?: boolean; // default true; false pauses without deleting
-  lastSentDay?: string; // YYYY-MM-DD (in tz) of the last send — the once-per-day guard
-  lastSentAt?: string; // ISO of the last successful send
-  lastError?: string | null; // last send failure (channel not configured, API error)
-}
-
 /** Channel links set from Settings (fall back to process.env when unset). */
 export interface ChannelsConfig {
   telegramBotToken?: string;
@@ -207,7 +187,6 @@ export interface AppConfig {
   sourceSyncedAt?: Record<string, string>; // per-source last-sync ISO (Tier-1 plugins)
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
   hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)
-  nudges?: Nudge[]; // scheduled outbound messages (daily "how was your day?" etc.)
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
   whoopCreds?: WhoopCreds; // WHOOP unofficial app login (base account): email + password + cached/rotated tokens
