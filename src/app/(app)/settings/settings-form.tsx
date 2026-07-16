@@ -1222,6 +1222,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         skills={skills}
         providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
       />
+      <NotificationsPanel tzResolved={config.timezoneResolved} />
       </>
       ) : null}
 
@@ -1986,6 +1987,171 @@ function ChannelCard({
           </p>
         )}
       </div>
+      </div>
+    </Section>
+  );
+}
+
+interface NotificationRow {
+  id: string;
+  channel: string;
+  target: string;
+  text: string;
+  atLocal: string;
+  enabled?: boolean;
+  lastSentDay?: string;
+  lastError?: string | null;
+}
+
+/**
+ * Notifications — scheduled OUTBOUND messages the app sends you on a channel at a
+ * local time (e.g. 8pm "How was your day?"). Set a time + message, add as many as
+ * you like. The list is derived from GET /api/notifications so it survives reload.
+ */
+function NotificationsPanel({ tzResolved }: { tzResolved: string }) {
+  const [rows, setRows] = useState<NotificationRow[]>([]);
+  const [channel, setChannel] = useState("slack");
+  const [target, setTarget] = useState("");
+  const [text, setText] = useState("How was your day?");
+  const [at, setAt] = useState("20:00");
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState("");
+  const [flash, setFlash] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications", { cache: "no-store" });
+      if (res.ok) setRows(((await res.json()).notifications as NotificationRow[]) ?? []);
+    } catch {
+      /* keep the last-known list */
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function note(m: string) {
+    setFlash(m);
+    setTimeout(() => setFlash(""), 2500);
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel, target: target.trim(), text: text.trim(), atLocal: at }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return note(body.error || "Could not save.");
+      setTarget("");
+      await load();
+      note(`Saved — sends daily at ${at}.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function test(id: string) {
+    setTesting(id);
+    try {
+      const res = await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "test", id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      await load();
+      note(res.ok ? "Sent — check the channel." : body.error || "Send failed.");
+    } finally {
+      setTesting("");
+    }
+  }
+
+  async function remove(id: string) {
+    const res = await fetch("/api/notifications", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (res.ok) {
+      await load();
+      note("Removed.");
+    }
+  }
+
+  return (
+    <Section
+      title="Notifications"
+      icon={Send}
+      desc="A message the app sends YOU on a channel each day at a local time — e.g. an 8pm “How was your day?”. Your reply lands in your record like any other."
+      action={rows.length ? <Badge>{rows.length}</Badge> : undefined}
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Channel">
+            <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
+              <option value="slack">Slack</option>
+              <option value="telegram">Telegram</option>
+            </Select>
+          </Field>
+          <Field label="Target" hint="Slack channel/DM id (C0…/U0…) or Telegram chat id">
+            <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="C0123456789" className="font-mono" />
+          </Field>
+          <Field label={`Time (${tzResolved})`}>
+            <Input type="time" value={at} onChange={(e) => setAt(e.target.value)} />
+          </Field>
+          <Field label="Message">
+            <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="How was your day?" />
+          </Field>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button onClick={save} disabled={busy || !target.trim() || !text.trim()}>
+            {busy ? <Spinner width={14} height={14} className="animate-spin" /> : <Plus width={14} height={14} />}
+            Add notification
+          </Button>
+          {flash ? <span className="text-xs text-muted-fg">{flash}</span> : null}
+        </div>
+
+        {rows.length ? (
+          <div className="scrollbar-thin max-h-64 space-y-1.5 overflow-y-auto border-t border-border pt-3">
+            {rows.map((n) => (
+              <div key={n.id} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    n.enabled === false ? "bg-muted-fg/50" : n.lastError ? "bg-red-500" : "bg-accent",
+                  )}
+                  aria-hidden
+                />
+                <div
+                  className="min-w-0 flex-1 truncate text-[13px] text-fg"
+                  title={
+                    `${n.atLocal} · ${n.channel} → ${n.target}\n${n.text}` +
+                    (n.lastSentDay ? `\nLast sent: ${n.lastSentDay}` : "") +
+                    (n.lastError ? `\nError: ${n.lastError}` : "")
+                  }
+                >
+                  <span className="font-mono tabular-nums text-muted-fg">{n.atLocal}</span>{" "}
+                  <span className="text-muted-fg">{n.channel}→{n.target}</span> {n.text}
+                  {n.lastError ? <span className="text-red-500"> · error</span> : null}
+                </div>
+                <Button variant="ghost" onClick={() => test(n.id)} disabled={testing === n.id} className="shrink-0">
+                  {testing === n.id ? <Spinner width={13} height={13} className="animate-spin" /> : "Send now"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => remove(n.id)}
+                  aria-label={`Remove ${n.id}`}
+                  className="shrink-0 rounded-md p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-red-500"
+                >
+                  <Trash width={14} height={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     </Section>
   );
