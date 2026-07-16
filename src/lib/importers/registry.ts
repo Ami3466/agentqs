@@ -21,6 +21,7 @@ import { wakatimePlugin } from "./wakatime";
 import { ynabPlugin } from "./ynab";
 import { readwisePlugin } from "./readwise";
 import { gdriveBackupPlugin } from "./gdrive-backup";
+import { driveImportPlugin } from "./drive-import";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
@@ -64,13 +65,17 @@ export const PLUGINS: ImporterPlugin[] = [
   // stays out of the pipeline: iterate SOURCE_PLUGINS whenever you mean "the
   // sources we pull data from".
   gdriveBackupPlugin,
+  // Also NOT a source: the read-on-request Drive IMPORT integration. Registry entry
+  // buys it the OAuth dance / token refresh; `credentialOnly` keeps it out of the
+  // pipeline. Its data is pulled explicitly (`agentqs drive pull`), never synced.
+  driveImportPlugin,
 ];
 
-/** The DATA SOURCES — every plugin except the backup targets. The pipeline is
- *  data coming IN; a backup is data going OUT. Anything listing, syncing or
- *  scheduling sources iterates THIS, never PLUGINS (which also carries the
- *  credential-only backup targets). */
-export const SOURCE_PLUGINS: ImporterPlugin[] = PLUGINS.filter((p) => !p.backupTarget);
+/** The DATA SOURCES — every plugin except the backup targets and read-only tools.
+ *  The pipeline is data coming IN on a schedule; a backup is data going OUT, and a
+ *  credential-only tool (Drive import) is read on request. Anything listing, syncing
+ *  or scheduling sources iterates THIS, never PLUGINS (which also carries those). */
+export const SOURCE_PLUGINS: ImporterPlugin[] = PLUGINS.filter((p) => !p.backupTarget && !p.credentialOnly);
 
 export function pluginById(id: string): ImporterPlugin | undefined {
   return PLUGINS.find((p) => p.id === id);

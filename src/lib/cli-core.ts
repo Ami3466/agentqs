@@ -68,12 +68,20 @@ import { noteSyncOutcome, type JobProgress } from "./sync-jobs";
 import { googlePluginOn } from "./google";
 import { recordTimeZone } from "./importers/plugin";
 import { beginOAuth, freshOAuthToken, oauthRedirectUri, resolveSyncCredentialFresh } from "./oauth";
+import {
+  driveImportConfig,
+  listDriveFolder,
+  pullDriveFile,
+  resolveDriveFile,
+  setDriveImportFolder,
+} from "./drive-import";
 import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
 import { readBackfillState, recordSyncRun, writeBackfillState } from "./sync-runs";
 import { pipelineReport } from "./pipeline";
+import { buildCoverage } from "./coverage";
 import { doctorReport, migrateStore } from "./store-doctor";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, csvLossText, notifyCsvLoss, structurePending } from "./structure-run";
@@ -306,6 +314,12 @@ export function sources() {
  *  scheduler presence, last run outcome and landed data per source. */
 export function pipeline() {
   return pipelineReport();
+}
+
+/** The record's shape: every source with total rows, day-span and a per-year
+ *  histogram, plus the year axis and totals. Powers the Overview heatmap. */
+export function coverage() {
+  return buildCoverage();
 }
 
 /** Store health: sync-engine domain, evicted files, conflict twins, split store. */
@@ -574,6 +588,9 @@ export function setInterval(id: string, interval: string): { id: string; interva
       `${id} is a backup target, not a data source — set its cadence with \`agentqs backup drive --schedule ${interval}\` ` +
         `(API: POST /api/backup {"target":"drive","schedule":"${interval}"}).`,
     );
+  }
+  if (pluginInstanceById(id)?.plugin.credentialOnly) {
+    throw new Error(`${id} is read-on-request, not a scheduled source — pull it with \`agentqs drive pull <file>\`.`);
   }
   const cfg = requireConfig();
   cfg.sourceIntervals = { ...(cfg.sourceIntervals ?? {}), [id]: interval };
@@ -1074,6 +1091,12 @@ export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
     throw new Error(
       `${opts.id} is a backup target, not a data source — run \`agentqs backup drive\` ` +
         '(API: POST /api/backup {"target":"drive"}).',
+    );
+  }
+  if (pluginInstanceById(opts.id)?.plugin.credentialOnly) {
+    throw new Error(
+      `${opts.id} is read-on-request, not a synced source — run \`agentqs drive pull <file>\` ` +
+        "(API: POST /api/drive/pull).",
     );
   }
   // Every attempt lands in the run ledger AND the job ledger — success and failure —
@@ -1584,6 +1607,89 @@ async function driveCredential(): Promise<string> {
 export async function backupDrive(): Promise<import("./backup").DriveBackupResult> {
   const { runDriveBackup } = await import("./backup");
   return runDriveBackup({ credential: await driveCredential() });
+}
+
+// ---- Google Drive IMPORT (read-on-request) ------------------------------------
+//
+// The read sibling of the Drive BACKUP above: a folder you fill, read only when a
+// question needs it. Nothing lands in the record — these are pure reads, like
+// `query`. The brain is src/lib/drive-import.ts; here we just mint a fresh token
+// from the `drive_import` grant and call it.
+
+/** A fresh drive.readonly access token from the stored `drive_import` grant.
+ *  Absent grant = not connected: no folder can be read. */
+async function driveImportCredential(): Promise<string> {
+  const inst = pluginInstanceById("drive_import");
+  const credential = inst
+    ? await resolveSyncCredentialFresh(inst.plugin, undefined, readConfig(), inst.instanceId)
+    : undefined;
+  if (!credential) {
+    throw new Error(
+      "Google Drive import isn't connected — Settings → Data → Drive import, or " +
+        "`agentqs source authorize drive_import --client-id <id> --client-secret <secret>`.",
+    );
+  }
+  return credential;
+}
+
+/** Where the raw-import folder points, and whether the grant is connected — the
+ *  panel derives its state from THIS (survives reload), never one-shot UI state. */
+export function driveImportStatus() {
+  const inst = pluginInstanceById("drive_import");
+  const cfg = readConfig();
+  const grant = cfg?.sourceOAuth?.["drive_import"];
+  const connected = Boolean(grant?.refreshToken || grant?.accessToken);
+  const folder = driveImportConfig(cfg);
+  return {
+    connected,
+    folderId: folder.folderId ?? null,
+    folderName: folder.folderName ?? null,
+    name: inst ? inst.plugin.name : "Google Drive import",
+  };
+}
+
+/** Point agentqs at a folder to read (id, or "" to clear). */
+export function driveFolderSet(folderId: string, folderName?: string) {
+  return setDriveImportFolder(folderId, folderName);
+}
+
+/** List a Drive folder's files (the manifest). Empty `folderId` lists the account's
+ *  top-level folders so the user can find the one to point at; otherwise defaults to
+ *  the configured folder. */
+export async function driveList(folderId?: string) {
+  const target = folderId ?? driveImportConfig().folderId ?? "";
+  const token = await driveImportCredential();
+  const files = await listDriveFolder(token, target, fetch);
+  return { folderId: target || null, count: files.length, files };
+}
+
+/** Pull ONE file's content on request. `file` is a Drive file id, or a name /
+ *  substring matched within the configured folder. Returns the extracted text (or a
+ *  note for binary / oversize files) — nothing is written to the record. */
+export async function drivePull(file: string) {
+  const token = await driveImportCredential();
+  const trimmed = file.trim();
+  if (!trimmed) throw new Error("Name a file to pull (id, name, or a unique substring).");
+  // A Drive id is a long token with no spaces; try it directly, and fall back to
+  // resolving a name within the configured folder.
+  const folderId = driveImportConfig().folderId ?? "";
+  if (!folderId && !/^[\w-]{20,}$/.test(trimmed)) {
+    throw new Error("No folder is set — pass a Drive file id, or set a folder first (Settings → Data → Drive import).");
+  }
+  if (/^[\w-]{20,}$/.test(trimmed) && !folderId) {
+    return pullDriveFile(token, trimmed, fetch);
+  }
+  const files = await listDriveFolder(token, folderId, fetch);
+  const hit = resolveDriveFile(files, trimmed);
+  if ("candidates" in hit) {
+    const names = hit.candidates.map((c) => c.name).join(", ");
+    throw new Error(
+      hit.candidates.length
+        ? `"${trimmed}" is ambiguous — matches: ${names}. Pass a file id or an exact name.`
+        : `No file matching "${trimmed}" in the folder.`,
+    );
+  }
+  return pullDriveFile(token, hit.file.id, fetch, hit.file);
 }
 
 /** Decrypt + unpack an archive — into a FRESH directory (`out`), or with

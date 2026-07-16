@@ -285,6 +285,9 @@ export async function completeOAuth(
         if (!latest.backup?.drive?.interval) {
           latest.backup = { ...(latest.backup ?? {}), drive: { ...(latest.backup?.drive ?? {}), interval: "daily" } };
         }
+      } else if (inst.plugin.credentialOnly) {
+        // Read-on-request: no cadence. Connecting it grants read access; nothing
+        // syncs until the user explicitly pulls a file.
       } else if (!latest.sourceIntervals?.[pending.instanceId]) {
         latest.sourceIntervals = { ...(latest.sourceIntervals ?? {}), [pending.instanceId]: "daily" };
       }

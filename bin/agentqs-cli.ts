@@ -220,6 +220,32 @@ program
   });
 
 program
+  .command("coverage")
+  .description("the record's shape: every source with total rows, day-span and a per-year histogram")
+  .action(() => {
+    try {
+      out(core.coverage(), (r: any) => {
+        if (r.sources.length === 0) return "No data yet.";
+        const yy = r.years.map((y: number) => String(y).slice(2).padStart(2, " "));
+        const header = `${" ".repeat(24)}${yy.join(" ")}`;
+        const dot = (n: number) => (!n ? " ·" : n >= 1000 ? " █" : n >= 200 ? " ▓" : n >= 50 ? " ▒" : " ░");
+        const rows = r.sources.map((s: any) => {
+          const cells = r.years.map((y: number) => dot(s.byYear[String(y)] ?? 0)).join("");
+          return `${s.source.slice(0, 22).padEnd(24)}${cells}   ${s.rows.toLocaleString()} rows`;
+        });
+        return [
+          header,
+          ...rows,
+          "",
+          `${r.sources.length} sources · ${r.totalRows.toLocaleString()} rows · ${r.totalDays.toLocaleString()} days · ${r.span.first ?? "?"} → ${r.span.last ?? "?"}`,
+        ].join("\n");
+      });
+    } catch (e) {
+      die(e);
+    }
+  });
+
+program
   .command("doctor")
   .description("store health: sync-engine exposure, evicted files, conflict twins, split stores")
   .action(() => {
@@ -832,6 +858,84 @@ backup
         "members" in d
           ? `Restored ${d.archive || "archive"} → ${d.out} (${(d.members as string[]).join(", ")}). Point AGENTQS_DATA_DIR there to use it.`
           : `Restored ${d.archive} into the live store — ${d.dailyRows} daily rows rebuilt${d.retired ? `; previous record retired at ${d.retired}` : ""}.`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+// ---- drive import (read raw files from a Drive folder on request) ----------
+const drive = program
+  .command("drive")
+  .description("read raw files (emails, messages, exports) from a Google Drive folder ON REQUEST — nothing is synced into the record");
+drive
+  .command("status")
+  .description("is Drive import connected, and which folder it reads")
+  .action(() => {
+    try {
+      out(core.driveImportStatus(), (d) =>
+        `${d.connected ? "connected" : "not connected — `agentqs source authorize drive_import --client-id <id> --client-secret <secret>`"}` +
+          `, folder ${d.folderId ? `${d.folderName ?? d.folderId} (${d.folderId})` : "not set — `agentqs drive folder <id>`"}`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+drive
+  .command("folder [id]")
+  .description("point agentqs at a folder to read (its Drive folder id); omit id to see your top-level folders; --clear to unset")
+  .option("--name <label>", "a label for the folder (what it is called in Drive)")
+  .option("--clear", "stop reading any folder (leaves the connection intact)")
+  .action(async (id: string | undefined, opts: { name?: string; clear?: boolean }) => {
+    try {
+      if (opts.clear) {
+        out(core.driveFolderSet("", undefined), () => "Folder cleared.");
+        return;
+      }
+      if (!id) {
+        // No id: list the account's top-level folders so the user can copy one.
+        const r = await core.driveList("");
+        out(r, (d) =>
+          d.files
+            .filter((f: { isFolder: boolean }) => f.isFolder)
+            .map((f: { id: string; name: string }) => `${f.id}  ${f.name}`)
+            .join("\n") || "No folders found.",
+        );
+        return;
+      }
+      out(core.driveFolderSet(id, opts.name), (d) => `Folder set: ${d.folderName ?? d.folderId}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+drive
+  .command("list [folderId]")
+  .description("list the files in the folder (the manifest) — defaults to the configured folder")
+  .action(async (folderId: string | undefined) => {
+    try {
+      const r = await core.driveList(folderId);
+      out(r, (d) =>
+        d.files
+          .map(
+            (f: { isFolder: boolean; name: string; size?: number; id: string }) =>
+              `${f.isFolder ? "[dir] " : ""}${f.name}${f.size ? `  (${Math.round(f.size / 1024)} KB)` : ""}  ${f.id}`,
+          )
+          .join("\n") || "Folder is empty.",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+drive
+  .command("pull <file...>")
+  .description("read ONE file's content on request (a Drive file id, or a name / substring within the folder)")
+  .action(async (words: string[]) => {
+    try {
+      const r = await core.drivePull(words.join(" "));
+      out(r, (d) =>
+        d.text != null
+          ? `${d.name} (${d.mimeType}, ${d.bytes} bytes)${d.truncated ? " — TRUNCATED" : ""}\n\n${d.text}`
+          : `${d.name} (${d.mimeType}) — ${d.note ?? "no text"}`,
       );
     } catch (e) {
       die(e);

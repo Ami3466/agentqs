@@ -291,6 +291,18 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [driveSetupOpen, setDriveSetupOpen] = useState(false);
   const [driveClientId, setDriveClientId] = useState("");
   const [driveClientSecret, setDriveClientSecret] = useState("");
+  // Drive IMPORT (read-on-request) — its own drive.readonly grant + a folder to read.
+  const [driveImp, setDriveImp] = useState<{
+    connected: boolean;
+    folderId: string | null;
+    folderName: string | null;
+  } | null>(null);
+  const [driveImpMsg, setDriveImpMsg] = useState("");
+  const [driveImpBusy, setDriveImpBusy] = useState(false);
+  const [driveImpClientId, setDriveImpClientId] = useState("");
+  const [driveImpClientSecret, setDriveImpClientSecret] = useState("");
+  const [driveImpFolder, setDriveImpFolder] = useState("");
+  const [driveImpFolderName, setDriveImpFolderName] = useState("");
   const ghOn = Boolean(backup?.github.configured) && backup?.github.interval !== "off";
   const driveOn = Boolean(backup?.drive.connected) && backup?.drive.interval !== "off";
   const [voiceProvider, setVoiceProvider] = useState(config.voice.provider);
@@ -393,6 +405,74 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
     void loadBackup();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Drive-import status (connected + folder) lives on GET /api/drive; refetched
+  // quietly after an action so the panel derives from the record, not one-shot state.
+  const loadDriveImport = () =>
+    fetch("/api/drive")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { connected: boolean; folderId: string | null; folderName: string | null } | null) => {
+        if (!d) return;
+        setDriveImp(d);
+        setDriveImpFolder((v) => v || d.folderId || "");
+        setDriveImpFolderName((v) => v || d.folderName || "");
+      })
+      .catch(() => {});
+  useEffect(() => {
+    void loadDriveImport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Start the read-only OAuth dance for Drive import (its own drive.readonly grant). */
+  async function connectDriveImport() {
+    setDriveImpBusy(true);
+    setDriveImpMsg("");
+    try {
+      const res = await fetch("/api/oauth/drive_import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: driveImpClientId.trim(),
+          clientSecret: driveImpClientSecret.trim(),
+          origin: window.location.origin,
+        }),
+      });
+      const r = await res.json();
+      if (!res.ok || !r.authorizeUrl) {
+        setDriveImpMsg(r.error || "Could not start the Google authorization.");
+        return;
+      }
+      window.location.href = r.authorizeUrl;
+    } catch {
+      setDriveImpMsg("Could not start the Google authorization.");
+    } finally {
+      setDriveImpBusy(false);
+    }
+  }
+
+  /** Point agentqs at a folder to read (or clear it with an empty id). */
+  async function saveDriveFolder() {
+    setDriveImpBusy(true);
+    setDriveImpMsg("");
+    try {
+      const res = await fetch("/api/drive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId: driveImpFolder.trim(), folderName: driveImpFolderName.trim() || undefined }),
+      });
+      const r = await res.json();
+      if (!res.ok) {
+        setDriveImpMsg(r.error || "Could not save the folder.");
+        return;
+      }
+      setDriveImpMsg(driveImpFolder.trim() ? "Folder set." : "Folder cleared.");
+      void loadDriveImport();
+    } catch {
+      setDriveImpMsg("Could not save the folder.");
+    } finally {
+      setDriveImpBusy(false);
+    }
+  }
 
   // A running Drive upload is polled quietly (never a loading flag — the panel
   // the user is in must not unmount), so the row shows its phase live and lands
@@ -1419,6 +1499,87 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
             {backupMsg ? <p className="mt-2 text-xs text-muted-fg">{backupMsg}</p> : null}
           </Field>
         </div>
+      </Section>
+
+      {/* Drive import — read raw files on request (NOT a synced source) */}
+      <Section
+        title="Drive import"
+        icon={GoogleDrive}
+        desc="Read raw files (emails, messages, exports) from a Google Drive folder ON REQUEST. Nothing is synced into the record — agentqs reads a file only when a question needs it. Read-only access, its own grant."
+      >
+        <Field label="Folder">
+          <div className="rounded-lg border border-border">
+            <div className="px-3 py-2.5">
+              <div className="flex items-center gap-3">
+                <GoogleDrive width={18} height={18} className="shrink-0 text-fg" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-fg">Google Drive (read-on-request)</p>
+                  <p className="truncate text-xs text-muted-fg">
+                    {driveImp?.connected
+                      ? driveImp.folderId
+                        ? `reading ${driveImp.folderName || driveImp.folderId}`
+                        : "connected — pick a folder below"
+                      : "not connected — authorize read-only access"}
+                  </p>
+                </div>
+              </div>
+              {driveImp?.connected ? (
+                <div className="mt-2.5 flex items-center gap-2">
+                  <Input
+                    value={driveImpFolder}
+                    onChange={(e) => setDriveImpFolder(e.target.value)}
+                    placeholder="Drive folder ID"
+                    className="min-w-0 flex-1"
+                    title="The folder's Drive ID (from its URL: drive.google.com/drive/folders/<ID>). agentqs lists and pulls files from here."
+                  />
+                  <Input
+                    value={driveImpFolderName}
+                    onChange={(e) => setDriveImpFolderName(e.target.value)}
+                    placeholder="Label (optional)"
+                    className="w-36 shrink-0"
+                  />
+                  <Button
+                    variant="ghost"
+                    className="shrink-0"
+                    disabled={driveImpBusy}
+                    onClick={() => void saveDriveFolder()}
+                  >
+                    {driveImpFolder.trim() ? "Save" : "Clear"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-2.5 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={driveImpClientId}
+                      onChange={(e) => setDriveImpClientId(e.target.value)}
+                      placeholder="Google OAuth Client ID"
+                      className="min-w-0 flex-1"
+                    />
+                    <Input
+                      value={driveImpClientSecret}
+                      onChange={(e) => setDriveImpClientSecret(e.target.value)}
+                      type="password"
+                      placeholder="Client Secret"
+                      className="w-36 shrink-0"
+                    />
+                    <Button
+                      variant="ghost"
+                      className="shrink-0"
+                      disabled={driveImpBusy || !driveImpClientId.trim() || !driveImpClientSecret.trim()}
+                      title="Reuse the same Google project as Drive backup — just add the drive.readonly scope on the consent screen. Read-only: nothing is written to your Drive."
+                      onClick={() => void connectDriveImport()}
+                    >
+                      Authorize
+                    </Button>
+                  </div>
+                  <CopyRow label={`Redirect URI: ${origin}/api/oauth/callback`} code={`${origin}/api/oauth/callback`} />
+                </div>
+              )}
+            </div>
+          </div>
+          {driveImpMsg ? <p className="mt-2 text-xs text-muted-fg">{driveImpMsg}</p> : null}
+        </Field>
       </Section>
 
       {/* Structure (the pending inbox) */}

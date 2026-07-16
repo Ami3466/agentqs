@@ -85,6 +85,17 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    "coverage",
+    {
+      title: "Record coverage map",
+      description:
+        "The shape of the whole record: every source with total rows, distinct days, date span, and a per-year row histogram, plus the year axis and record totals. Use it to learn what streams exist and how far back each goes before querying.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.coverage()),
+  );
+
+  server.registerTool(
     "doctor",
     {
       title: "Store health check",
@@ -164,6 +175,30 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { file: z.string().optional(), text: z.string().optional(), name: z.string().optional() },
     },
     async ({ file, text, name }) => guard(() => core.importRaw({ file, text, name })),
+  );
+
+  server.registerTool(
+    "drive_list",
+    {
+      title: "List a Google Drive folder",
+      description:
+        "The manifest of the raw-import folder (emails, messages, exports the user drops in Drive): file names, ids, sizes, dates. " +
+        "Read-only — nothing is synced into the record. Omit folderId for the configured folder. Use this to find a file, then drive_pull it.",
+      inputSchema: { folderId: z.string().optional() },
+    },
+    async ({ folderId }) => guard(() => core.driveList(folderId)),
+  );
+
+  server.registerTool(
+    "drive_pull",
+    {
+      title: "Pull one Drive file's content",
+      description:
+        "Read ONE raw file from the Drive import folder ON REQUEST — its text comes back for you to reason over; nothing lands in the record. " +
+        "`file` is a Drive file id, or a name / unique substring within the folder. Binary and oversize files return a note, not bytes.",
+      inputSchema: { file: z.string() },
+    },
+    async ({ file }) => guard(() => core.drivePull(file)),
   );
 
   server.registerTool(
