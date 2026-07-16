@@ -195,6 +195,6 @@ Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a s
 
 ## License
 
-**Free to use. Not for sale.**
+**Free to use, including inside a company. Not for resale.**
 
-agentqs is [MIT with the Commons Clause](LICENSE): use it, self-host it, change it, share it. You may **not** sell it or offer it as a paid product or service, including paid hosting or support built on it.
+agentqs is [MIT with the Commons Clause](LICENSE): use it, self-host it, change it for your own needs, and share it freely - personally or commercially. You may **not** sell it: no reselling it (changed or not), no embedding it in a product or service you charge for, and no offering it as paid hosting or support. Running it for yourself or inside your organization is fine; turning it into someone's paid product is not.
