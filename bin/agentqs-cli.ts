@@ -613,6 +613,81 @@ automation
     }
   });
 
+// ---- nudge (scheduled outbound messages: daily "how was your day?") --------
+const nudge = program
+  .command("nudge")
+  .description("scheduled outbound messages — a daily Slack/Telegram nudge the app sends you");
+
+nudge
+  .command("list", { isDefault: true })
+  .description("list your daily nudges + last-send status")
+  .action(() => {
+    try {
+      out(core.nudges(), (rows: any[]) =>
+        rows.length
+          ? rows
+              .map(
+                (n) =>
+                  `${n.enabled === false ? "○" : n.lastError ? "✗" : "●"} ${n.id.padEnd(18)} ${n.atLocal} ${n.channel}→${n.target}  ${JSON.stringify(n.text)}` +
+                  (n.lastSentDay ? `  (last ${n.lastSentDay})` : "") +
+                  (n.lastError ? `  ERR: ${n.lastError}` : ""),
+              )
+              .join("\n")
+          : "(no nudges — add one with `agentqs nudge add`)",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+nudge
+  .command("add <text...>")
+  .description('create/update a nudge, e.g. nudge add "How was your day?" --channel slack --target C0… --at 20:00')
+  .requiredOption("--channel <c>", "slack | telegram")
+  .requiredOption("--target <t>", "Slack channel/DM id (C0…/U0…) or Telegram chat id")
+  .option("--at <hhmm>", "local send time, 24h HH:MM (record timezone)", "20:00")
+  .option("--id <id>", "explicit id (default: <channel>-<time>)")
+  .option("--disabled", "create it paused (enable later by re-adding without --disabled)")
+  .action((text: string[], opts: any) => {
+    try {
+      out(
+        core.nudgeSave({
+          channel: opts.channel,
+          target: opts.target,
+          text: text.join(" "),
+          atLocal: opts.at,
+          id: opts.id,
+          enabled: opts.disabled ? false : true,
+        }),
+        (d) => `Saved nudge "${d.id}": ${d.channel}→${d.target} at ${d.atLocal}. Verify now: agentqs nudge test ${d.id}`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+nudge
+  .command("test <id>")
+  .description("send a nudge right now to verify wiring (does not consume today's slot)")
+  .action(async (id: string) => {
+    try {
+      out(await core.nudgeTest(id), (d) => `Sent "${d.id}" now → ${d.channel}:${d.target}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+nudge
+  .command("remove <id>")
+  .description("delete a nudge")
+  .action((id: string) => {
+    try {
+      out(core.nudgeRemove(id), (d) => (d.removed ? `Removed nudge ${d.id}.` : `No nudge "${d.id}".`));
+    } catch (e) {
+      die(e);
+    }
+  });
+
 // ---- import (escape hatch) + structure ------------------------------------
 program
   .command("import <path>")

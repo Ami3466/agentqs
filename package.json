@@ -51,6 +51,7 @@
     "jobs:test": "tsx scripts/sync-jobs-test.ts",
     "voice:test": "tsx scripts/voice-memo.ts",
     "channels:test": "tsx scripts/channels.ts",
+    "nudge:test": "tsx scripts/nudges-test.ts",
     "semantic:test": "tsx scripts/embeddings.ts",
     "flags:test": "tsx scripts/auto-flags.ts",
     "photos:test": "tsx scripts/photos.ts",

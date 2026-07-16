@@ -98,6 +98,14 @@ import {
 } from "./automation";
 import { runAutomation, type AutomationRunResult } from "./automation-run";
 import type { AutomationCreds, PublicAutomation } from "./automation-types";
+import {
+  listNudges,
+  removeNudge,
+  testNudge,
+  upsertNudge,
+  type NudgeInput,
+} from "./nudges";
+import type { Nudge } from "./config";
 import { composeReply, type ComposedReply } from "./reply";
 import { listSkills, removeSkill, restoreBuiltinSkills, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
 import { isProvider } from "./models";
@@ -1005,6 +1013,28 @@ export async function automationRun(opts: { id: string; headed?: boolean }): Pro
 export function automationRemove(id: string): { id: string; removed: boolean; dailyRows: number } {
   if (!isAutomation(id)) throw new Error(`No automation "${id}".`);
   return disconnectSource(id);
+}
+
+// ---- nudges (scheduled outbound messages: daily "how was your day?") ----------
+
+/** Every configured daily nudge with its schedule state. */
+export function nudges(): Nudge[] {
+  return listNudges();
+}
+
+/** Create or update a nudge (channel + target + text + local HH:MM time). */
+export function nudgeSave(input: NudgeInput): Nudge {
+  return upsertNudge(input);
+}
+
+/** Remove a nudge by id. */
+export function nudgeRemove(id: string): { id: string; removed: boolean } {
+  return removeNudge(id);
+}
+
+/** Send a nudge right now to verify wiring — does NOT consume today's slot. */
+export async function nudgeTest(id: string): Promise<Nudge> {
+  return testNudge(id);
 }
 
 export interface SyncResult {
