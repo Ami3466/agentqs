@@ -139,6 +139,7 @@ const TABS: { id: string; label: string; icon: IconComponent }[] = [
   { id: "models", label: "Models", icon: Sparkles },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "channels", label: "Channels", icon: Send },
+  { id: "agent", label: "Agent", icon: Cpu },
   { id: "skills", label: "Skills", icon: Wand },
   { id: "data", label: "Data", icon: DataIcon },
   { id: "api", label: "API", icon: Key },
@@ -1306,6 +1307,8 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
       </>
       ) : null}
 
+      {tab === "agent" ? <RulesPanel tzResolved={config.timezoneResolved} /> : null}
+
       {tab === "data" ? (
       <>
       {/* Data */}
@@ -2162,6 +2165,260 @@ interface NotificationRow {
   enabled?: boolean;
   lastSentDay?: string;
   lastError?: string | null;
+}
+
+type RuleTriggerUi =
+  | { kind: "time"; atLocal: string }
+  | { kind: "threshold"; source: string; metric: string; op: string; value: number };
+type RuleActionUi = { kind: "text"; text: string } | { kind: "brief"; prompt: string };
+interface RuleRow {
+  id: string;
+  channel: string;
+  target: string;
+  when: RuleTriggerUi;
+  then: RuleActionUi;
+  enabled?: boolean;
+  lastFiredDay?: string;
+  lastError?: string | null;
+}
+
+function describeRuleRow(r: RuleRow): { when: string; then: string } {
+  const when =
+    r.when.kind === "time"
+      ? `at ${r.when.atLocal}`
+      : `${r.when.source}.${r.when.metric} ${r.when.op} ${r.when.value}`;
+  const then = r.then.kind === "text" ? `“${r.then.text}”` : `AI brief: ${r.then.prompt}`;
+  return { when, then };
+}
+
+/**
+ * Agent rules — "when X → message me". A superset of Notifications: the trigger can
+ * be a clock time OR a data threshold (a plain compare, no AI), and the action can be
+ * a fixed line OR an AI brief (a prompt handed to the grounded agent). Derived from
+ * GET /api/rules so it survives reload. Connect the channel under Channels first.
+ */
+function RulesPanel({ tzResolved }: { tzResolved: string }) {
+  const [rows, setRows] = useState<RuleRow[]>([]);
+  const [channel, setChannel] = useState("slack");
+  const [target, setTarget] = useState("");
+  const [whenKind, setWhenKind] = useState<"time" | "threshold">("time");
+  const [at, setAt] = useState("20:00");
+  const [source, setSource] = useState("whoop");
+  const [metric, setMetric] = useState("resting_hr");
+  const [op, setOp] = useState(">");
+  const [value, setValue] = useState("55");
+  const [thenKind, setThenKind] = useState<"text" | "brief">("text");
+  const [text, setText] = useState("");
+  const [prompt, setPrompt] = useState("Recap my day in 3 lines from my record — highlights, one flag, one nudge.");
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState("");
+  const [flash, setFlash] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rules", { cache: "no-store" });
+      if (res.ok) setRows(((await res.json()).rules as RuleRow[]) ?? []);
+    } catch {
+      /* keep the last-known list */
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function note(m: string) {
+    setFlash(m);
+    setTimeout(() => setFlash(""), 2800);
+  }
+
+  function buildWhen(): RuleTriggerUi {
+    if (whenKind === "time") return { kind: "time", atLocal: at };
+    return { kind: "threshold", source: source.trim(), metric: metric.trim(), op, value: Number(value) };
+  }
+  function buildThen(): RuleActionUi {
+    return thenKind === "text" ? { kind: "text", text: text.trim() } : { kind: "brief", prompt: prompt.trim() };
+  }
+  const canSave =
+    !!target.trim() &&
+    (whenKind === "time" ? !!at : !!source.trim() && !!metric.trim() && value.trim() !== "" && Number.isFinite(Number(value))) &&
+    (thenKind === "text" ? !!text.trim() : !!prompt.trim());
+
+  async function save() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel, target: target.trim(), when: buildWhen(), then: buildThen() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return note(body.error || "Could not save.");
+      setTarget("");
+      await load();
+      note("Saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function test(id: string) {
+    setTesting(id);
+    try {
+      const res = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "test", id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      await load();
+      note(res.ok ? "Sent — check the channel." : body.error || "Send failed.");
+    } finally {
+      setTesting("");
+    }
+  }
+
+  async function remove(id: string) {
+    const res = await fetch("/api/rules", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (res.ok) {
+      await load();
+      note("Removed.");
+    }
+  }
+
+  return (
+    <Section
+      title="Agent rules"
+      icon={Cpu}
+      desc="When X → message me. X is a time (an evening brief) or a data line crossing (HR over 55, social over 60 min). The message is a fixed line, or an AI brief the agent writes from your record. Connect the channel under Channels first."
+      action={rows.length ? <Badge>{rows.length}</Badge> : undefined}
+    >
+      <div className="space-y-4">
+        {/* WHEN */}
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-fg">When</span>
+            <Select value={whenKind} onChange={(e) => setWhenKind(e.target.value as "time" | "threshold")} className="h-8 w-auto text-[13px]">
+              <option value="time">At a time</option>
+              <option value="threshold">A metric crosses</option>
+            </Select>
+          </div>
+          {whenKind === "time" ? (
+            <Field label={`Time (${tzResolved})`}>
+              <Input type="time" value={at} onChange={(e) => setAt(e.target.value)} className="max-w-[10rem]" />
+            </Field>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Field label="Source" hint="e.g. whoop, browser">
+                <Input value={source} onChange={(e) => setSource(e.target.value)} placeholder="whoop" className="font-mono text-[13px]" />
+              </Field>
+              <Field label="Metric" hint="e.g. resting_hr">
+                <Input value={metric} onChange={(e) => setMetric(e.target.value)} placeholder="resting_hr" className="font-mono text-[13px]" />
+              </Field>
+              <Field label="Is">
+                <Select value={op} onChange={(e) => setOp(e.target.value)}>
+                  <option value=">">over (&gt;)</option>
+                  <option value=">=">≥</option>
+                  <option value="<">under (&lt;)</option>
+                  <option value="<=">≤</option>
+                </Select>
+              </Field>
+              <Field label="Value">
+                <Input type="number" value={value} onChange={(e) => setValue(e.target.value)} placeholder="55" className="font-mono text-[13px]" />
+              </Field>
+            </div>
+          )}
+        </div>
+
+        {/* THEN */}
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-fg">Then send</span>
+            <Select value={thenKind} onChange={(e) => setThenKind(e.target.value as "text" | "brief")} className="h-8 w-auto text-[13px]">
+              <option value="text">A fixed line</option>
+              <option value="brief">An AI brief</option>
+            </Select>
+          </div>
+          {thenKind === "text" ? (
+            <Field label="Message">
+              <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Touch grass — an hour on social already." />
+            </Field>
+          ) : (
+            <Field label="Prompt" hint="Handed to the grounded agent; its reply is sent. Costs a token per fire.">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={2}
+                className="w-full resize-y rounded-lg border border-border bg-card px-3 py-2 text-[13px] text-fg placeholder:text-muted-fg focus:border-accent focus:outline-none"
+              />
+            </Field>
+          )}
+        </div>
+
+        {/* WHERE */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Channel">
+            <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
+              <option value="slack">Slack</option>
+              <option value="telegram">Telegram</option>
+            </Select>
+          </Field>
+          <Field label="Target" hint="Slack channel/DM id (C0…/U0…) or Telegram chat id">
+            <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="C0123456789" className="font-mono" />
+          </Field>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button onClick={save} disabled={busy || !canSave}>
+            {busy ? <Spinner width={14} height={14} className="animate-spin" /> : <Plus width={14} height={14} />}
+            Add rule
+          </Button>
+          {flash ? <span className="text-xs text-muted-fg">{flash}</span> : null}
+        </div>
+
+        {rows.length ? (
+          <div className="scrollbar-thin max-h-64 space-y-1.5 overflow-y-auto border-t border-border pt-3">
+            {rows.map((r) => {
+              const d = describeRuleRow(r);
+              return (
+                <div key={r.id} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      r.enabled === false ? "bg-muted-fg/50" : r.lastError ? "bg-red-500" : "bg-accent",
+                    )}
+                    aria-hidden
+                  />
+                  <div
+                    className="min-w-0 flex-1 truncate text-[13px] text-fg"
+                    title={`${d.when} → ${d.then}\n${r.channel} → ${r.target}` + (r.lastFiredDay ? `\nLast fired: ${r.lastFiredDay}` : "") + (r.lastError ? `\nError: ${r.lastError}` : "")}
+                  >
+                    <span className="text-muted-fg">{d.when}</span> → {d.then}
+                    <span className="text-muted-fg"> · {r.channel}→{r.target}</span>
+                    {r.lastError ? <span className="text-red-500"> · error</span> : null}
+                  </div>
+                  <Button variant="ghost" onClick={() => test(r.id)} disabled={testing === r.id} className="shrink-0">
+                    {testing === r.id ? <Spinner width={13} height={13} className="animate-spin" /> : "Test"}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => remove(r.id)}
+                    aria-label={`Remove ${r.id}`}
+                    className="shrink-0 rounded-md p-1.5 text-muted-fg transition-colors hover:bg-muted hover:text-red-500"
+                  >
+                    <Trash width={14} height={14} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  );
 }
 
 /**

@@ -20,7 +20,7 @@ export interface NotificationInput {
 }
 
 /** Minutes since local midnight for `at` in `tz` (0–1439), or NaN on a bad tz. */
-function localMinutes(at: Date, tz: string): number {
+export function localMinutes(at: Date, tz: string): number {
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: tz,
@@ -37,7 +37,7 @@ function localMinutes(at: Date, tz: string): number {
 }
 
 /** "HH:MM" → minutes since midnight, or null if malformed / out of range. */
-function parseAtLocal(atLocal: string): number | null {
+export function parseAtLocal(atLocal: string): number | null {
   const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(atLocal || "");
   if (!m) return null;
   const h = Number(m[1]);

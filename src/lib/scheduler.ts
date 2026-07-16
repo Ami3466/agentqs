@@ -44,6 +44,18 @@ async function sweep(): Promise<void> {
   } catch (e) {
     console.warn(`agentqs notification sweep failed: ${(e as Error).message}`);
   }
+  // Agent rules (time + data-threshold triggers) ride the same sweep, isolated too.
+  // 15-min cadence = the resolution of any threshold alert; a threshold is only as
+  // live as the importer behind the metric.
+  try {
+    const { sweepRules } = await import("./rules");
+    const r = await sweepRules();
+    if (r.fired.length || r.failed.length) {
+      console.log(`agentqs rules: ${r.fired.length} fired, ${r.failed.length} failed`);
+    }
+  } catch (e) {
+    console.warn(`agentqs rule sweep failed: ${(e as Error).message}`);
+  }
 }
 
 /** Idempotent; called from instrumentation.ts once per server process. */
