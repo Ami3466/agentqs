@@ -34,6 +34,7 @@ export const skillSnip = (b: string, k: string) =>
     '- Connect a source: POST /api/import/<id> {"credential"} (tested before saved; syncs as a background job — poll GET). OAuth source: POST /api/oauth/<id> {"clientId","clientSecret"}.',
     '- Data quality: POST /api/scan {} → findings; apply one with POST /api/structure {"id":"<notificationId>"}.',
     '- Backups: GET /api/backup · POST /api/backup {"target":"github"|"drive"} · migrate onto a fresh instance: {"target":"restore","confirm":"replace-record"}.',
+    '- Raw files on request: the user keeps emails/messages/exports in a Google Drive folder. GET /api/drive/list to see them (manifest, nothing synced), then POST /api/drive/pull {"file":"<id | name>"} to read ONE file\'s text and reason over it. Pull only when a question needs it; the content never lands in the record.',
     '- Skills (chat personas): GET /api/skills · push one: POST /api/skills {"name","system","blurb"?,"id"?} (send an agent SKILL.md body as "system"; built-in ids mentor·therapist·coach are reserved) · remove: DELETE /api/skills?id=<id>.',
   ].join("\n");
 

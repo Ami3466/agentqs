@@ -144,6 +144,15 @@ export interface ImporterPlugin {
    * separate, ordinary source plugin.
    */
   backupTarget?: boolean;
+  /**
+   * NOT a data source and NOT a backup — a READ-ON-REQUEST integration (Drive
+   * import) that rides this contract ONLY for the credential machinery (OAuth
+   * dance, token refresh, `source test`). Like a backup target it never appears in
+   * the Pipeline and never auto-syncs, so it too is filtered out of SOURCE_PLUGINS;
+   * unlike one it has no `config.backup.*` cadence — its data is pulled explicitly
+   * (`agentqs drive pull`), never on a schedule. Its `fetch()` throws.
+   */
+  credentialOnly?: boolean;
   /** Whether a credential is required to sync (all Tier-1 APIs need one). */
   requiresCredential: boolean;
   credentialLabel: string; // "RescueTime API key" | "OAuth access token"

@@ -221,6 +221,10 @@ export interface AppConfig {
   autoStructure?: boolean; // structure new captures immediately, skipping the pending inbox (default false)
   columnMerges?: ColumnMergeRule[]; // accepted duplicate-column merges, re-applied on every import (column scanner)
   backup?: BackupConfig; // off-site backups: GitHub snapshot branch + encrypted Drive archive
+  /** The Drive folder agentqs reads on request (raw emails/messages/exports you
+   *  drop there). Data coming IN, on demand — kept OUT of `backup` (data going
+   *  OUT). See src/lib/drive-import.ts. */
+  driveImport?: import("./drive-import").DriveImportConfig;
   /** Which Google products are switched on ("calendar", "gmail.inbox", …). One
    *  Google key, a tree of products the user ticks; absent → calendar only (what
    *  "Google" meant before the tree existed). See src/lib/google.ts. */

@@ -51,6 +51,10 @@ Better on the cloud: it needs to be live for the Slack and Telegram integrations
   </tr>
 </table>
 
+### Overview
+
+The whole record at a glance: a source × year heatmap of every stream you have - how far back each goes, and where the holes are. Click any cell to open the Journal filtered to that source. Same map over the API (`GET /api/coverage`), the CLI (`agentqs coverage`), and the `coverage` MCP tool.
+
 ### Journal
 
 One daily record of everything: sleep, steps, mood, focus, screen time, workouts, commits - plain CSVs you own, as a table or a timeline. **Scan data** keeps it clean: duplicate columns merge, dead columns drop, messy values get fixed. One click each, all undoable. `agentqs audit` hands your AI agent the evidence for a deeper review - impossible dates, coverage holes, sources gone quiet, outlier values.
@@ -191,6 +195,7 @@ Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a s
 
 - **Private by default.** Data stays in your data directory. Model calls only get what you ask to send.
 - **Off-site backups built in.** `agentqs backup github --remote <url>` pushes a snapshot of your plain-text record to a private repo (files past GitHub's size limit are excluded and named, never silently dropped), and `agentqs backup drive` uploads the whole store as one AES-256-GCM-encrypted archive to your Google Drive on a schedule (`--schedule daily|off`, or the switches in Settings → Data) - `agentqs backup restore` brings either back. Backups are where your data is *kept*, not where it comes from: Google Drive here is a destination, so it never shows up among your data sources.
+- **Raw files on request, from Drive.** For raw content the record deliberately never stores (emails, whole message threads, PDFs), keep it in a Google Drive folder and point agentqs at it in Settings → Data → Drive import. `agentqs drive list` shows what's there and `agentqs drive pull <file>` reads one file's text on demand - nothing is synced into your record, and the chat agent pulls a file only when a question needs it. Read-only access, a separate grant from the backup one.
 - **Token use is explicit.** Capture and search are local. AI runs only when you chat, structure prose, or run a channel - CLI-agent workflows skip it entirely.
 
 ## License
