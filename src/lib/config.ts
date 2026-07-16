@@ -84,6 +84,44 @@ export interface Notification {
   lastError?: string | null; // last send failure
 }
 
+/**
+ * An AGENT RULE — "when X, message me on a channel". The generalization of a
+ * Notification: the trigger can be a clock time OR a data threshold, and the action
+ * can be a fixed line OR an AI brief (Claude reads your record and writes it). Set
+ * under Settings → Agent; the in-process scheduler evaluates each on every sweep.
+ *
+ * Threshold rules need NO AI — the condition is a plain numeric compare against your
+ * record (e.g. resting_hr > 55). AI is only spent when the ACTION is a brief.
+ */
+export type RuleTrigger =
+  | { kind: "time"; atLocal: string } // "HH:MM" 24h, record timezone
+  | {
+      kind: "threshold";
+      source: string; // daily source, e.g. "whoop", "browser"
+      metric: string; // daily metric, e.g. "resting_hr", "social_minutes"
+      op: ">" | ">=" | "<" | "<="; // comparison against `value`
+      value: number; // the line the metric must cross
+    };
+
+export type RuleAction =
+  | { kind: "text"; text: string } // fixed message body
+  | { kind: "brief"; prompt: string }; // hand this prompt to the grounded agent, send its reply
+
+export interface Rule {
+  id: string;
+  channel: string; // "slack" | "telegram"
+  target: string; // channel id, or a user id for a DM
+  when: RuleTrigger;
+  then: RuleAction;
+  enabled?: boolean; // default true
+  lastFiredDay?: string; // YYYY-MM-DD (tz) — once-per-day guard (both trigger kinds)
+  lastError?: string | null; // last send/eval failure
+  /** Threshold edge state: false while the condition is still true (already fired),
+   *  re-armed to true when it drops back — so "HR high" fires on each new spike, not
+   *  every sweep. Absent = armed. Unused by time rules. */
+  armed?: boolean;
+}
+
 /** An OAuth2 app the user registered with a provider (client id + secret) plus
  *  the tokens the authorize dance minted. A refresh/access token here is a
  *  STORED CREDENTIAL — it makes the source connected, and disconnect deletes it. */
@@ -203,6 +241,7 @@ export interface AppConfig {
   customSkills?: Skill[]; // user-authored mentor personas (CLI/API/MCP add-mentor); merged with built-ins
   hiddenSkills?: string[]; // built-in persona ids the user deleted (restorable from Settings)
   notifications?: Notification[]; // scheduled outbound messages (daily "how was your day?")
+  rules?: Rule[]; // agent rules — "when X (time or threshold) → message me (text or AI brief)"
   automations?: AutomationRecipe[]; // browser-automation import recipes (sources with no API)
   automationCreds?: Record<string, AutomationCreds>; // per-automation secrets, kept out of the recipe
   whoopCreds?: WhoopCreds; // WHOOP unofficial app login (base account): email + password + cached/rotated tokens

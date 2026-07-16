@@ -107,6 +107,7 @@ import {
 import { runAutomation, type AutomationRunResult } from "./automation-run";
 import type { AutomationCreds, PublicAutomation } from "./automation-types";
 import { composeReply, type ComposedReply } from "./reply";
+import { listRules, removeRule, testRule, upsertRule, type RuleInput } from "./rules";
 import { listSkills, removeSkill, restoreBuiltinSkills, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
 import { isProvider } from "./models";
 import {
@@ -168,6 +169,24 @@ export function query(sql: string, limit = 200): QueryResult {
   } finally {
     db.close();
   }
+}
+
+// ---- agent rules ----------------------------------------------------------
+
+/** "When X → message me." X is a clock time or a data threshold (a plain numeric
+ *  compare, no AI); the message is a fixed line or an AI brief. The Settings Agent
+ *  tab, /api/rules, the CLI and the MCP tool are all thin faces over these four. */
+export function rulesList() {
+  return { rules: listRules() };
+}
+export function rulesUpsert(input: RuleInput) {
+  return { rule: upsertRule(input), rules: listRules() };
+}
+export function rulesRemove(id: string) {
+  return { ...removeRule(id), rules: listRules() };
+}
+export async function rulesTest(id: string) {
+  return { ok: true, rule: await testRule(id) };
 }
 
 // ---- journal --------------------------------------------------------------

@@ -694,6 +694,59 @@ export async function startMcpServer(): Promise<void> {
     async ({ date, windowDays }) => guard(() => core.photoContext(date, windowDays)),
   );
 
+  // ---- agent rules: "when X → message me" ----------------------------------
+  const ruleTrigger = z.union([
+    z.object({ kind: z.literal("time"), atLocal: z.string().describe("HH:MM 24h, record timezone") }),
+    z.object({
+      kind: z.literal("threshold"),
+      source: z.string().describe("daily source, e.g. whoop, browser"),
+      metric: z.string().describe("daily metric, e.g. resting_hr, social_minutes"),
+      op: z.enum([">", ">=", "<", "<="]),
+      value: z.number(),
+    }),
+  ]);
+  const ruleAction = z.union([
+    z.object({ kind: z.literal("text"), text: z.string() }),
+    z.object({ kind: z.literal("brief"), prompt: z.string().describe("handed to the grounded agent; its reply is sent") }),
+  ]);
+
+  server.registerTool(
+    "rules_list",
+    { title: "List agent rules", description: "Every rule: trigger (time or data threshold), action (text or AI brief), channel, and last-fired state.", inputSchema: {} },
+    async () => guard(() => core.rulesList()),
+  );
+
+  server.registerTool(
+    "rule_upsert",
+    {
+      title: "Add or update an agent rule",
+      description:
+        "Create/update a rule that messages the user on a channel when a trigger fires. Trigger = a clock time OR a numeric threshold on a daily metric (evaluated with a plain compare, NO AI — e.g. whoop.resting_hr > 55). Action = a fixed text line OR an AI brief (a prompt handed to the grounded agent). Slack/Telegram target is the channel/DM id.",
+      inputSchema: {
+        id: z.string().optional().describe("omit to derive one; pass to edit an existing rule"),
+        channel: z.enum(["slack", "telegram"]),
+        target: z.string().describe("Slack channel/DM id (C0…/U0…) or Telegram chat id"),
+        when: ruleTrigger,
+        then: ruleAction,
+        enabled: z.boolean().optional(),
+      },
+    },
+    async ({ id, channel, target, when, then, enabled }) =>
+      guard(() => core.rulesUpsert({ id, channel, target, when, then, enabled })),
+  );
+
+  server.registerTool(
+    "rule_remove",
+    { title: "Delete an agent rule", description: "Remove a rule by id.", inputSchema: { id: z.string() } },
+    async ({ id }) => guard(() => core.rulesRemove(id)),
+  );
+
+  server.registerTool(
+    "rule_test",
+    { title: "Fire an agent rule now", description: "Send a rule's message immediately, ignoring its trigger and without consuming today's slot — verifies the channel + (for a brief) the agent output.", inputSchema: { id: z.string() } },
+    async ({ id }) => guard(() => core.rulesTest(id)),
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // stderr is safe (stdout is the JSON-RPC channel).

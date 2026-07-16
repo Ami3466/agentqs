@@ -83,6 +83,8 @@ Text or voice, from the app, CLI or a channel. They land in your inbox - structu
 
 Slack and Telegram: log memos and ask your record questions from where you already are. They are capture channels, not scrapers - what you send the bot lands in your inbox, and your Slack history is never read. The Pipeline lists them under **Capture channels**, so a bot you haven't linked yet never looks like a broken data source.
 
+**Agent rules** (Settings → Agent) message you the other way: *when X, ping me*. X is a time (an 8pm evening brief) or a data line crossing (resting HR over 55, social over 60 min today) - the threshold is a plain compare over your record, no AI. The message is a fixed line, or an AI brief the agent writes from your day. The in-app scheduler checks every 15 minutes, so an alert is as fresh as the source behind its metric. Set them in the app, from the CLI (`agentqs rules add`), or let the agent add its own via MCP.
+
 ## Integrations / data pipelines
 
 **Connect by API or OAuth** - GitHub · Whoop · Oura · Fitbit · Withings · Strava · RescueTime · Toggl Track · Todoist · WakaTime · YNAB · Readwise · Google (Calendar, Gmail) · Spotify · Last.fm · Deezer · Trakt · Notion · Swarm · Mastodon · Granola\*

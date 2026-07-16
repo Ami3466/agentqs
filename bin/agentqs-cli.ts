@@ -1165,4 +1165,81 @@ function journalHuman(d: any, wide: boolean): string {
     .join("\n");
 }
 
+// ---- rules ----------------------------------------------------------------
+// "When X → message me." X = a clock time (--at) or a data threshold (--when);
+// the message = a fixed line (--text) or an AI brief (--brief).
+const rules = program.command("rules").description('agent rules: "when X → message me" on a channel');
+
+function parseThreshold(expr: string): { source: string; metric: string; op: ">" | ">=" | "<" | "<="; value: number } {
+  const m = /^([a-z0-9_]+)\.([a-z0-9_.]+)\s*(>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)$/i.exec(expr.trim());
+  if (!m) throw new Error(`Bad --when "${expr}". Use e.g. "whoop.resting_hr > 55".`);
+  return { source: m[1], metric: m[2], op: m[3] as ">" | ">=" | "<" | "<=", value: Number(m[4]) };
+}
+
+rules
+  .command("list", { isDefault: true })
+  .description("list every rule and its state")
+  .action(() => {
+    try {
+      out(core.rulesList(), (d: any) =>
+        d.rules.length
+          ? d.rules
+              .map((r: any) => {
+                const when = r.when.kind === "time" ? r.when.atLocal : `${r.when.source}.${r.when.metric} ${r.when.op} ${r.when.value}`;
+                const then = r.then.kind === "text" ? `"${r.then.text}"` : `brief: ${r.then.prompt}`;
+                const state = r.enabled === false ? " [off]" : r.lastError ? " [error]" : "";
+                return `${r.id}${state}\n  ${when} → ${then}  (${r.channel}→${r.target})`;
+              })
+              .join("\n")
+          : "(no rules yet)",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+rules
+  .command("add")
+  .description('add/update a rule: --at HH:MM OR --when "src.metric > N", with --text OR --brief')
+  .requiredOption("--target <id>", "Slack channel/DM id or Telegram chat id")
+  .option("--channel <name>", "slack | telegram", "slack")
+  .option("--at <HH:MM>", "time trigger (24h, record timezone)")
+  .option("--when <expr>", 'threshold trigger, e.g. "whoop.resting_hr > 55"')
+  .option("--text <message>", "send this fixed line")
+  .option("--brief <prompt>", "hand this prompt to the grounded agent, send its reply")
+  .option("--id <id>", "id to edit an existing rule")
+  .action((opts) => {
+    try {
+      if (!opts.at === !opts.when) throw new Error("Pass exactly one of --at or --when.");
+      if (!opts.text === !opts.brief) throw new Error("Pass exactly one of --text or --brief.");
+      const when = opts.at ? ({ kind: "time", atLocal: opts.at } as const) : ({ kind: "threshold", ...parseThreshold(opts.when) } as const);
+      const then = opts.text ? ({ kind: "text", text: opts.text } as const) : ({ kind: "brief", prompt: opts.brief } as const);
+      out(core.rulesUpsert({ id: opts.id, channel: opts.channel, target: opts.target, when, then }), (d: any) => `Saved rule ${d.rule.id}.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+rules
+  .command("test <id>")
+  .description("fire a rule now (ignores the trigger, doesn't consume today's slot)")
+  .action(async (id: string) => {
+    try {
+      out(await core.rulesTest(id), () => "Sent — check the channel.");
+    } catch (e) {
+      die(e);
+    }
+  });
+
+rules
+  .command("remove <id>")
+  .description("delete a rule")
+  .action((id: string) => {
+    try {
+      out(core.rulesRemove(id), (d: any) => (d.removed ? `Removed ${d.id}.` : `No rule "${d.id}".`));
+    } catch (e) {
+      die(e);
+    }
+  });
+
 program.parseAsync(process.argv).catch(die);
