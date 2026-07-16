@@ -15,6 +15,13 @@ on:
   push:
     branches: ["main"]
     tags: ["v*"]
+    # Docs-only pushes don't change the image, so they don't rebuild it. A version
+    # tag is a deliberate release - if you ever tag a docs-only commit, run the
+    # workflow manually (workflow_dispatch) to publish it.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       tag:
