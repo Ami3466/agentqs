@@ -232,6 +232,9 @@ export const slackAdapter: ChannelAdapter = {
         target: channelId,
         userId: String(m.user ?? ""),
         text: String(m.text).trim(),
+        // Slack's ts IS the send time (epoch seconds.micros) — keep it, so a
+        // backfilled week of messages keeps its real days.
+        at: new Date(Number(m.ts) * 1000).toISOString(),
       }));
 
     return {

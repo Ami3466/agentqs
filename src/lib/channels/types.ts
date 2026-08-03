@@ -20,6 +20,10 @@ export interface InboundMessage {
   target: string; // where the reply goes (chat id / channel id)
   userId: string; // sender id (provenance / logging)
   text: string; // the message text
+  /** When the platform says it was SENT (ISO). A pulled backlog is history: dating
+   *  it "now" would file a week-old entry under today and, once structured, write
+   *  the daily row on the wrong day. Absent for a live push (now IS the send time). */
+  at?: string;
 }
 
 /** The verdict of parsing+verifying one raw webhook request. Exactly one of

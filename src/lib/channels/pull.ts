@@ -84,7 +84,14 @@ export async function pullChannel(
   // so a message that arrived both ways is stored once. appendInboxItems skips ids
   // it already holds and tells us how many it actually added.
   const { items, added } = appendInboxItems(
-    messages.map((m) => ({ id: m.eventId, text: m.text, source: adapter.id, kind: "text" as const })),
+    messages.map((m) => ({
+      id: m.eventId,
+      text: m.text,
+      source: adapter.id,
+      kind: "text" as const,
+      // Dated when it was SENT, not when we happened to collect it.
+      ...(m.at ? { ts: m.at } : {}),
+    })),
     { recordDir: rDir },
   );
   if (items.length) landInboxCaptures(items, opts);
