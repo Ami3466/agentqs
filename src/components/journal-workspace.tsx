@@ -31,8 +31,13 @@ type TypeFilter = "all" | "memos" | "sessions" | `src:${string}` | `met:${string
 /** The two windows the Journal asks for. Also the cache keys, so the recent window
  *  and the full history are remembered separately instead of clobbering each
  *  other — a lifetime record is megabytes and must never be refetched per tab. */
-const JOURNAL_WINDOW = "/api/journal?days=180";
-const JOURNAL_ALL = "/api/journal?days=all";
+const PAGE_DAYS = 180;
+const JOURNAL_WINDOW = `/api/journal?days=${PAGE_DAYS}`;
+/** One page older than `before`. "Load full history" used to be a single
+ *  `days=all` request, which serializes the ENTIRE grid — 13MB on this record, 40MB
+ *  on a million-cell one — to show fifty more rows. It now walks back a page at a
+ *  time, so the wait is bounded and the table keeps rendering between pages. */
+const journalPage = (before: string) => `/api/journal?days=${PAGE_DAYS}&before=${encodeURIComponent(before)}`;
 
 /** Dev recompiles briefly 404 API routes (see next.config.mjs watchOptions note),
  * and one failed fetch used to leave the Journal on "Loading…" forever. Retry a
@@ -169,22 +174,15 @@ export function JournalWorkspace() {
 
   const [loadError, setLoadError] = useState(false);
 
-  // Read the current deep link inside load() without recreating it — a
-  // deep-linked filter is a whole-record question, so fetch full history
-  // up front instead of a throwaway 180-day window.
-  const urlSourceRef = useRef(urlSource);
-  urlSourceRef.current = urlSource;
-
   const load = useCallback(async () => {
-    const all = Boolean(urlSourceRef.current);
-    const url = all ? JOURNAL_ALL : JOURNAL_WINDOW;
+    // Always the first page. A deep-linked filter is still a whole-record question,
+    // but answering it no longer means downloading the whole record up front: this
+    // page renders immediately and `needsFull` pages the rest in behind it.
+    const url = JOURNAL_WINDOW;
     // Cached from a previous visit → render it NOW and refresh underneath. Only a
     // cold start shows a loading state; switching tabs never does.
     const seed = peekCache<JournalData>(url);
-    if (seed) {
-      setData(seed);
-      if (all) setFullHistory(true);
-    }
+    if (seed) setData(seed);
     setLoading(!seed);
     setLoadError(false);
     const [d, v] = await Promise.all([
@@ -196,7 +194,7 @@ export function JournalWorkspace() {
     if (d) {
       setData(d);
       primeCache(url, d);
-      if (all) setFullHistory(true);
+      setFullHistory(!d.hasMore);
     }
     setViews(v?.views ?? []);
     // A failed refresh over data already on screen is not an empty Journal.
@@ -208,15 +206,34 @@ export function JournalWorkspace() {
     void load();
   }, [load]);
 
+  /** Walk back through the record a page at a time, appending as each lands, until
+   *  there is nothing older. Bounded work per request instead of one giant one, and
+   *  the rows already on screen stay interactive throughout. */
   const loadFullHistory = useCallback(async () => {
     setLoadingFull(true);
     try {
-      const d = await fetchJournalRetrying(JOURNAL_ALL);
-      if (d) {
-        setData(d);
-        primeCache(JOURNAL_ALL, d);
-        setFullHistory(true);
+      for (let guard = 0; guard < 200; guard++) {
+        // Read the cursor off the latest state rather than a captured copy, so
+        // successive pages chain correctly.
+        let cursor = "";
+        setData((cur) => {
+          cursor = cur?.oldest ?? "";
+          return cur;
+        });
+        if (!cursor) break;
+        const page = await fetchJournalRetrying(journalPage(cursor));
+        if (!page) break;
+        let done = false;
+        setData((cur) => {
+          if (!cur) return page;
+          const seen = new Set(cur.days.map((d) => d.date));
+          const merged = [...cur.days, ...page.days.filter((d) => !seen.has(d.date))];
+          done = !page.hasMore;
+          return { ...cur, days: merged, hasMore: page.hasMore, oldest: page.oldest ?? cur.oldest };
+        });
+        if (done) break;
       }
+      setFullHistory(true);
     } finally {
       setLoadingFull(false);
     }
@@ -228,7 +245,7 @@ export function JournalWorkspace() {
    * One auto attempt only: a failed days=all fetch must NOT relaunch itself
    * forever (needsFull would stay true) — the table's manual button remains. */
   const fullAttempted = useRef(false);
-  const windowed = !!data && !fullHistory && data.days.length < data.totalDays;
+  const windowed = !!data && !fullHistory && (data.hasMore || data.days.length < data.totalDays);
   const oldestLoaded = data?.days.length ? data.days[data.days.length - 1].date : "";
   const needsFull =
     windowed &&
@@ -246,7 +263,7 @@ export function JournalWorkspace() {
    * flipping `loading`, so the Table — and the scanner's result panel — stay
    * mounted. */
   const reload = useCallback(async () => {
-    const d = await fetchJournalRetrying(fullHistory ? "/api/journal?days=all" : "/api/journal?days=180");
+    const d = await fetchJournalRetrying(JOURNAL_WINDOW);
     if (d) setData(d);
   }, [fullHistory]);
 

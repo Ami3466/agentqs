@@ -31,7 +31,11 @@ const WARM_URLS = [
   "/api/coverage",
   "/api/sources",
   "/api/log",
-  "/api/graphs/series",
+  // The picker's key+label list, NOT every plottable line. Warming the unfiltered
+  // series meant prefetching 11MB on a million-cell record — for a tab the user
+  // might never open — which is worse than the cold load it was meant to avoid.
+  // Graphs asks for the numbers of the lines it actually draws once it mounts.
+  "/api/graphs/series?catalog=1",
   "/api/journal?days=180",
 ];
 

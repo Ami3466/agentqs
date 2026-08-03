@@ -80,9 +80,21 @@ export interface JournalData {
   totalDays: number;
   totalCells: number; // non-empty daily cells across the visible (up-to-today) days
   totalEvents: number; // event-layer rows (activity, browsing, plays) — the bulk of a lifetime record
+  /** Older days exist beyond this page — ask again with `before = oldest`. */
+  hasMore: boolean;
+  /** The oldest date in THIS page: the cursor for the next one. */
+  oldest: string | null;
 }
 
-const EMPTY: JournalData = { metrics: [], days: [], totalDays: 0, totalCells: 0, totalEvents: 0 };
+const EMPTY: JournalData = {
+  metrics: [],
+  days: [],
+  totalDays: 0,
+  totalCells: 0,
+  totalEvents: 0,
+  hasMore: false,
+  oldest: null,
+};
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -104,6 +116,12 @@ export interface ReadJournalOptions {
    *  response froze the Journal page, so windowing is the default. `metrics`,
    *  `totalDays` and `totalCells` always describe the FULL history. */
   days?: number | "all";
+  /** Page cursor: return only days STRICTLY OLDER than this date. With `days`, this
+   *  is what makes the Journal pageable — the client asks for a screenful, then asks
+   *  again from the oldest date it holds. Without it the only way to reach 2015 was
+   *  `days=all`, which serializes the entire grid (40MB on a million-cell record)
+   *  to show fifty rows. */
+  before?: string;
   /** Blank the text of every cell (the Graphs payload — it only reads numbers,
    *  and the text is megabytes of journal writing). */
   numericOnly?: boolean;
@@ -130,7 +148,7 @@ const MEMO_MAX_ENTRIES = 8;
 /** The identity of a journal read: same key + same cache stamp → same answer. */
 export function journalKey(opts: ReadJournalOptions = {}): string {
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
-  return `${opts.file ?? dbPath()}|${opts.days ?? "all"}|${opts.numericOnly ? 1 : 0}|${today}`;
+  return `${opts.file ?? dbPath()}|${opts.days ?? "all"}|${opts.before ?? ""}|${opts.numericOnly ? 1 : 0}|${today}`;
 }
 
 /** Pivot the rebuilt cache into per-day records + column metadata for the Journal.
@@ -184,13 +202,17 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
       )
       .all(today) as Array<{ source: string; metric: string; nonNumeric: number }>;
 
-    // Resolve the window's start date from the N most recent days with data.
+    // Resolve the window: the N most recent days with data, older than the cursor.
+    // `before` is EXCLUSIVE so paging can't repeat or skip a day at the seam.
+    const ceiling = opts.before && opts.before < today ? opts.before : today;
+    const exclusive = Boolean(opts.before) && opts.before! <= today;
+    const cmpOp = exclusive ? "<" : "<=";
     let minDate = "0000-00-00";
     if (windowDays === 0) minDate = "9999-99-99";
     else if (typeof windowDays === "number" && Number.isFinite(windowDays)) {
       const recent = db
-        .prepare("SELECT DISTINCT date FROM daily WHERE date <= ? ORDER BY date DESC LIMIT ?")
-        .all(today, Math.max(1, Math.floor(windowDays))) as Array<{ date: string }>;
+        .prepare(`SELECT DISTINCT date FROM daily WHERE date ${cmpOp} ? ORDER BY date DESC LIMIT ?`)
+        .all(ceiling, Math.max(1, Math.floor(windowDays))) as Array<{ date: string }>;
       minDate = recent.length ? recent[recent.length - 1].date : "9999-99-99";
     }
 
@@ -199,9 +221,15 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
       : (db
           .prepare(
             `SELECT date, source, metric, ${opts.numericOnly ? "''" : "value_text"} AS text, value_num AS num
-             FROM daily WHERE date <= ? AND date >= ? ORDER BY date, source, metric`,
+             FROM daily WHERE date ${cmpOp} ? AND date >= ? ORDER BY date, source, metric`,
           )
-          .all(today, minDate) as { date: string; source: string; metric: string; text: string; num: number | null }[]);
+          .all(ceiling, minDate) as { date: string; source: string; metric: string; text: string; num: number | null }[]);
+
+    // Is there anything older than this page? One indexed lookup, not a count.
+    const hasMore =
+      minDate === "9999-99-99" || minDate === "0000-00-00"
+        ? false
+        : Boolean(db.prepare("SELECT 1 FROM daily WHERE date < ? LIMIT 1").get(minDate));
 
     const sessionsRaw = db
       .prepare(
@@ -270,7 +298,7 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
 
     for (const s of sessionsRaw) {
       const date = s.date || s.startedAt.slice(0, 10);
-      if (!date || date < minDate) continue;
+      if (!date || date < minDate || (exclusive && date >= ceiling)) continue;
       ensure(date).sessions.push({
         id: s.id,
         date,
@@ -288,7 +316,7 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
       // the Inbox panel and the Log, never on the Journal as memos.
       if (it.kind === "notification") continue;
       const date = (it.ts || "").slice(0, 10);
-      if (!date || date < minDate) continue;
+      if (!date || date < minDate || (exclusive && date >= ceiling)) continue;
       ensure(date).memos.push({
         id: it.id,
         ts: it.ts,
@@ -300,7 +328,7 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
     }
 
     for (const e of eventCounts) {
-      if (!e.date || e.date < minDate) continue;
+      if (!e.date || e.date < minDate || (exclusive && e.date >= ceiling)) continue;
       ensure(e.date).eventCount = e.count;
     }
 
@@ -309,7 +337,15 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
       .filter((d) => d.date <= today) // hide future-dated events
       .sort((a, b) => cmp(b.date, a.date)); // newest first
 
-    return { metrics, days: ordered, totalDays: totals.days, totalCells: totals.cells, totalEvents };
+    return {
+      metrics,
+      days: ordered,
+      totalDays: totals.days,
+      totalCells: totals.cells,
+      totalEvents,
+      hasMore,
+      oldest: ordered.length ? ordered[ordered.length - 1].date : null,
+    };
   } catch {
     return EMPTY; // stale/older schema
   } finally {

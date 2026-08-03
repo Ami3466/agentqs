@@ -20,8 +20,17 @@ export async function GET(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const url = new URL(req.url);
+  // ?catalog=1 → keys + labels, no numbers (what the picker needs).
+  // ?keys=a,b  → numbers for just those lines (what a chart needs).
+  // Neither → every line, the original behaviour, kept so an older client still works.
+  const catalogOnly = url.searchParams.get("catalog") === "1";
+  const keys = (url.searchParams.get("keys") || "").split(",").map((k) => k.trim()).filter(Boolean);
   try {
-    return cachedJson(req, () => readGraphSeries(), [new Date().toISOString().slice(0, 10)]);
+    return cachedJson(req, () => readGraphSeries({ keys, catalogOnly }), [
+      catalogOnly ? "catalog" : keys.join(","),
+      new Date().toISOString().slice(0, 10),
+    ]);
   } catch (e) {
     return apiError(e);
   }

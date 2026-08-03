@@ -90,6 +90,13 @@ CREATE VIRTUAL TABLE search USING fts5(
  * ride SCHEMA_VERSION and force a full rebuild (which re-reads the whole record —
  * minutes, and it blocks the server while it runs).
  *
+ * `daily_metric_catalog` is the column list every Journal read opens with: "which
+ * (source, metric) columns exist, and how many of each are non-numeric?". Grouping by
+ * (source, metric) had no index to lean on, so SQLite walked the whole daily table
+ * and built a temp B-tree — 414ms on a million-cell record, paid on EVERY read before
+ * a single row of data was fetched. Carrying date + value_num makes it index-only:
+ * 77ms, no temp B-tree.
+ *
  * `(source, date)` on both fact tables is what "what landed, per source?" needs —
  * the question every Pipeline row asks (`coverageBySource`). With only
  * `events(source)`, SQLite walked the index but still had to fetch all 1.5M rows
@@ -101,11 +108,12 @@ CREATE VIRTUAL TABLE search USING fts5(
 export const INDEX_SQL = `
 CREATE INDEX IF NOT EXISTS daily_source_date  ON daily(source, date);
 CREATE INDEX IF NOT EXISTS events_source_date ON events(source, date);
+CREATE INDEX IF NOT EXISTS daily_metric_catalog ON daily(source, metric, date, value_num);
 `;
 
 export type DB = Database.Database;
 
-const INDEX_NAMES = ["daily_source_date", "events_source_date"];
+const INDEX_NAMES = ["daily_source_date", "events_source_date", "daily_metric_catalog"];
 
 /** Bring an existing cache's indexes up to date — the migration for everyone whose
  *  DB was built by an older version, so nobody needs a full rebuild to get a

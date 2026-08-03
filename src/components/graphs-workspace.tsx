@@ -612,16 +612,20 @@ function GraphCard({
   );
 }
 
-/** Every plottable line, already aggregated: one date axis plus numbers. Its own
- *  cache key, so a revisit draws from memory instead of re-fetching the record. */
-const GRAPHS_SERIES = "/api/graphs/series";
+/** The picker's list: every plottable line's key and label, NO numbers. A few KB
+ *  whatever the record's size, so the tab can draw its controls immediately. */
+const GRAPHS_CATALOG = "/api/graphs/series?catalog=1";
+/** Numbers for the lines actually on screen. Fetching all of them instead cost 11MB
+ *  on a million-cell record to render two charts — past what Chrome will even file
+ *  in its HTTP cache, which is how this tab used to hang on its skeleton. */
+const seriesUrl = (keys: string[]) => `/api/graphs/series?keys=${encodeURIComponent([...keys].sort().join(","))}`;
 
 export function GraphsWorkspace() {
   const [data, setData] = useState<GraphSeriesData | null>(
-    () => peekCache<GraphSeriesData>(GRAPHS_SERIES) ?? null,
+    () => peekCache<GraphSeriesData>(GRAPHS_CATALOG) ?? null,
   );
   const [graphs, setGraphs] = useState<SavedGraph[]>([]);
-  const [loading, setLoading] = useState(() => peekCache<GraphSeriesData>(GRAPHS_SERIES) === undefined);
+  const [loading, setLoading] = useState(() => peekCache<GraphSeriesData>(GRAPHS_CATALOG) === undefined);
   const [saving, setSaving] = useState(false);
 
   const [loadError, setLoadError] = useState("");
@@ -633,15 +637,15 @@ export function GraphsWorkspace() {
     // skeleton FOREVER — and the biggest payload in the app is exactly the one that
     // rejects (Chrome answers a 15MB body it can't file with
     // net::ERR_CACHE_WRITE_FAILURE). A tab may show an error; it may never hang.
-    const [series, saved] = await Promise.all([
-      fetchCached<GraphSeriesData>(GRAPHS_SERIES).catch((e: Error) => {
+    const [catalog, saved] = await Promise.all([
+      fetchCached<GraphSeriesData>(GRAPHS_CATALOG).catch((e: Error) => {
         setLoadError(e.message || "Could not load the graph data.");
         return null;
       }),
       fetchCached<{ graphs: SavedGraph[] }>("/api/graphs").catch(() => ({ graphs: [] as SavedGraph[] })),
     ]);
     // Keep whatever is already drawn if the refresh came back empty.
-    if (series) setData(series);
+    if (catalog) setData(catalog);
     setGraphs(saved.graphs ?? []);
     setLoading(false);
   }, []);
@@ -652,6 +656,53 @@ export function GraphsWorkspace() {
 
   const series = useMemo(() => buildSeries(data), [data]);
   const [draft, setDraft] = useState<DraftGraph>(() => defaultDraft([]));
+
+  // Which lines are actually on screen: every saved graph's axes plus the draft's.
+  const neededKeys = useMemo(() => {
+    const want = new Set<string>();
+    for (const g of graphs) {
+      if (g.xKey) want.add(g.xKey);
+      if (g.yKey) want.add(g.yKey);
+    }
+    if (draft.xKey) want.add(draft.xKey);
+    if (draft.yKey) want.add(draft.yKey);
+    return [...want].sort();
+  }, [graphs, draft.xKey, draft.yKey]);
+
+  // …and pull just those, merging the numbers into the catalog we already hold. The
+  // catalog keeps every key (so the picker stays complete) while only the drawn
+  // lines carry points.
+  const fetchedFor = useRef("");
+  useEffect(() => {
+    if (!neededKeys.length) return;
+    const sig = neededKeys.join(",");
+    if (fetchedFor.current === sig) return;
+    fetchedFor.current = sig;
+    let alive = true;
+    void (async () => {
+      try {
+        const got = await fetchCached<GraphSeriesData>(seriesUrl(neededKeys));
+        if (!alive || !got.series.length) return;
+        setData((prev) => {
+          if (!prev) return got;
+          // The fetched page has its OWN date axis (only the days those lines
+          // touch), so its series are kept whole rather than reindexed onto the
+          // catalog's empty one.
+          const byKey = new Map(got.series.map((s) => [s.key, s]));
+          return {
+            dates: got.dates,
+            totalDays: prev.totalDays,
+            series: prev.series.map((s) => byKey.get(s.key) ?? { key: s.key, label: s.label, v: [] }),
+          };
+        });
+      } catch {
+        /* the catalog is already on screen; a failed points fetch leaves it drawn */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [neededKeys]);
 
   useEffect(() => {
     setDraft((prev) => {

@@ -56,6 +56,7 @@
     "channels:test": "tsx scripts/channels.ts",
     "capture:test": "NEXT_DIST_DIR=.next-e2e next build && NEXT_DIST_DIR=.next-e2e tsx scripts/capture-latency-test.ts",
     "pull:test": "tsx scripts/channel-pull-test.ts",
+    "paging:test": "tsx scripts/journal-paging-test.ts",
     "rules:test": "tsx scripts/rules-test.ts",
     "semantic:test": "tsx scripts/embeddings.ts",
     "flags:test": "tsx scripts/auto-flags.ts",

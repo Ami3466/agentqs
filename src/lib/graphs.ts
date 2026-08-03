@@ -42,18 +42,68 @@ const MEMO_MAX_AGE_MS = 60_000;
 
 /** Every numeric daily series plus the per-day counts the tab offers, straight
  *  from the cache. Memoized on the cache fingerprint like the other read views. */
-export function readGraphSeries(opts: { file?: string; today?: string } = {}): GraphSeriesData {
+export function readGraphSeries(
+  opts: { file?: string; today?: string; keys?: string[]; catalogOnly?: boolean } = {},
+): GraphSeriesData {
   const file = opts.file ?? dbPath();
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
   if (!fs.existsSync(file)) return EMPTY_SERIES;
   const key = `${file}|${today}`;
   const stamp = cacheStamp(file);
   const hit = memo.get(key);
-  if (hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS) return hit.data;
-  const data = computeGraphSeries(file, today);
-  memo.set(key, { stamp, at: Date.now(), data });
-  if (memo.size > 4) memo.delete(memo.keys().next().value as string);
-  return data;
+  const data =
+    hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS ? hit.data : computeGraphSeries(file, today);
+  if (data !== hit?.data) {
+    memo.set(key, { stamp, at: Date.now(), data });
+    if (memo.size > 4) memo.delete(memo.keys().next().value as string);
+  }
+  return projectSeries(data, opts);
+}
+
+/**
+ * Narrow the full series set to what the caller will actually draw.
+ *
+ * A record with fifty sources has ~300 plottable lines and thousands of days; sending
+ * all of them is 11MB to render two. But the picker still needs to KNOW the lines
+ * exist, so the two questions are answered separately: `catalogOnly` returns every
+ * key and label with no numbers (a few KB), and `keys` returns the numbers for just
+ * the lines on screen. Neither costs another query — the full set is computed once
+ * and memoized; this only decides how much of it crosses the wire.
+ */
+function projectSeries(
+  data: GraphSeriesData,
+  opts: { keys?: string[]; catalogOnly?: boolean },
+): GraphSeriesData {
+  if (opts.catalogOnly) {
+    return {
+      dates: [],
+      totalDays: data.totalDays,
+      series: data.series.map((s) => ({ key: s.key, label: s.label, v: [] })),
+    };
+  }
+  if (!opts.keys?.length) return data;
+  const want = new Set(opts.keys);
+  const series = data.series.filter((s) => want.has(s.key));
+  if (!series.length) return { dates: [], series: [], totalDays: data.totalDays };
+  // Keep only the dates the chosen series actually touch, and reindex onto them —
+  // otherwise one sparse metric would drag the whole 4,000-day axis along with it.
+  const used = new Set<number>();
+  for (const s of series) {
+    if (s.d) for (const i of s.d) used.add(i);
+    else for (let i = 0; i < s.v.length; i++) used.add(i);
+  }
+  const keep = [...used].sort((a, b) => a - b);
+  const remap = new Map(keep.map((oldIdx, newIdx) => [oldIdx, newIdx]));
+  return {
+    dates: keep.map((i) => data.dates[i]),
+    totalDays: data.totalDays,
+    series: series.map((s) => ({
+      key: s.key,
+      label: s.label,
+      d: (s.d ?? s.v.map((_, i) => i)).map((i) => remap.get(i)!),
+      v: [...s.v],
+    })),
+  };
 }
 
 function computeGraphSeries(file: string, today: string): GraphSeriesData {
