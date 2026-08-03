@@ -3,6 +3,7 @@ import { recordDir } from "../paths";
 import { readBackfillState, writeBackfillState } from "../sync-runs";
 import { recordDelivery } from "../channel-deliveries";
 import { channelEnv, getChannelAdapter } from "./registry";
+import type { ChannelEnv } from "./types";
 
 /**
  * PULL a channel's history into the record, on our own schedule.
@@ -38,17 +39,22 @@ export interface PullSummary {
   captured: number;
   /** Fetched but already held (arrived via the webhook, or an overlapping window). */
   duplicates: number;
-  cursor: string;
+  /** How many conversations were actually read this sweep. */
+  conversations: number;
+  /** Conversations that errored, with why — never silently dropped. */
+  failed: string[];
 }
 
-/** Where each channel's pull cursor lives — the same ledger source backfills use,
- *  so "how far has this got?" has one answer in one file. */
-function cursorKey(channelId: string): string {
-  return `channel-pull:${channelId}`;
+/** Where each conversation's pull cursor lives — the same ledger source backfills
+ *  use, so "how far has this got?" has one answer in one file. PER CONVERSATION:
+ *  one shared cursor across several would let the busiest one drag the others past
+ *  messages nobody had read yet. */
+function cursorKey(channelId: string, conversation = ""): string {
+  return conversation ? `channel-pull:${channelId}:${conversation}` : `channel-pull:${channelId}`;
 }
 
-export function pullCursor(channelId: string): string {
-  return readBackfillState(cursorKey(channelId)).cursor ?? "";
+export function pullCursor(channelId: string, conversation = ""): string {
+  return readBackfillState(cursorKey(channelId, conversation)).cursor ?? "";
 }
 
 /**
@@ -68,18 +74,31 @@ export async function pullChannel(
   if (!adapter.configured(env)) {
     throw new Error(`${adapter.label} is not connected — save its bot token in Settings → Channels.`);
   }
-  const from = pullChannelName(channelId, env);
-  if (!from) {
+  const targets = await resolveTargets(adapter, env);
+  if (!targets.length) {
     throw new Error(
-      `No ${adapter.label} conversation to pull. Set one in Settings → Channels (e.g. "daily-log") — ` +
-        "until then the bot only captures what is pushed to its webhook.",
+      `No ${adapter.label} conversation to pull. Set one in Settings → Channels — a channel name ` +
+        `("daily-log"), a comma-separated list, or "*" for every conversation the bot is in.`,
     );
   }
 
-  const since = pullCursor(channelId);
-  const { messages, cursor } = await adapter.pull({ env, channel: from, since });
-
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const messages: Awaited<ReturnType<NonNullable<typeof adapter.pull>>>["messages"] = [];
+  const cursors: Array<[string, string]> = [];
+  const failed: string[] = [];
+  // Each conversation is pulled and cursored independently: one that errors (the bot
+  // was removed, a scope is missing) must not stop the others or lose their place.
+  for (const t of targets) {
+    try {
+      const r = await adapter.pull!({ env, channel: t, since: pullCursor(channelId, t) });
+      messages.push(...r.messages);
+      cursors.push([t, r.cursor]);
+    } catch (e) {
+      failed.push(`${t}: ${(e as Error).message}`);
+    }
+  }
+  if (!cursors.length && failed.length) throw new Error(failed.join(" | "));
+  const from = targets.join(", ");
   // The SAME inbox append the webhook uses, keyed by the platform's own message id,
   // so a message that arrived both ways is stored once. appendInboxItems skips ids
   // it already holds and tells us how many it actually added.
@@ -96,18 +115,51 @@ export async function pullChannel(
   );
   if (items.length) landInboxCaptures(items, opts);
 
-  if (added > 0) recordDelivery(adapter.id, "captured", `pulled ${added} from #${from}`);
+  if (added > 0) recordDelivery(adapter.id, "captured", `pulled ${added} from ${from}`);
+  else if (failed.length) recordDelivery(adapter.id, "rejected", failed[0]);
 
-  // Only now — the messages are on disk — is it safe to move on. A pull that threw
-  // above never gets here, so the next sweep re-reads the same window.
-  writeBackfillState(cursorKey(channelId), { cursor, at: new Date().toISOString() });
+  // Only now — the messages are on disk — is it safe to move on. A conversation that
+  // threw never reaches here, so the next sweep re-reads its window.
+  const at = new Date().toISOString();
+  for (const [t, cursor] of cursors) writeBackfillState(cursorKey(channelId, t), { cursor, at });
 
-  return { channel: adapter.id, from, captured: added, duplicates: messages.length - added, cursor };
+  return {
+    channel: adapter.id,
+    from,
+    captured: added,
+    duplicates: messages.length - added,
+    conversations: cursors.length,
+    failed,
+  };
 }
 
-/** The conversation configured for this channel's pull, if any. */
+/** The conversation setting as typed: a name, a comma-separated list, or "*". */
 export function pullChannelName(channelId: string, env = channelEnv()): string {
   return channelId === "slack" ? (env.slackPullChannel ?? "").trim() : "";
+}
+
+/**
+ * Turn that setting into the conversations to read.
+ *
+ * "*" means EVERY conversation the bot is a member of. That exists because naming
+ * one channel is a guess: a week of daily logs went missing here, and the reason was
+ * simply that they had been written somewhere other than the channel the poll was
+ * pointed at. The bot can only ever read where it has been invited, so "capture
+ * everything I can see" is both the honest default for a personal log and the thing
+ * that makes a missing week impossible to explain away.
+ */
+async function resolveTargets(
+  adapter: { id: string; conversations?: (env: ChannelEnv) => Promise<Array<{ id: string; member: boolean }>> },
+  env: ChannelEnv,
+): Promise<string[]> {
+  const raw = pullChannelName(adapter.id, env);
+  if (!raw) return [];
+  if (raw !== "*") {
+    return raw.split(",").map((p) => p.trim().replace(/^#/, "")).filter(Boolean);
+  }
+  if (!adapter.conversations) return [];
+  const all = await adapter.conversations(env);
+  return all.filter((c) => c.member).map((c) => c.id);
 }
 
 /** Is this channel set up to be pulled on a schedule? */

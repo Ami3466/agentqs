@@ -45,7 +45,7 @@ function check(label: string, cond: boolean, extra = ""): void {
 }
 
 /** A stand-in for slack.com/api holding one channel's history. */
-function slackApi(state: { messages: any[]; fail?: string }): Promise<{ port: number; close: () => void; calls: string[] }> {
+function slackApi(state: { messages: any[]; dm?: any[]; fail?: string }): Promise<{ port: number; close: () => void; calls: string[] }> {
   const calls: string[] = [];
   return new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
@@ -54,12 +54,18 @@ function slackApi(state: { messages: any[]; fail?: string }): Promise<{ port: nu
       res.setHeader("content-type", "application/json");
       if (state.fail) return res.end(JSON.stringify({ ok: false, error: state.fail }));
       if (url.pathname.endsWith("/conversations.list")) {
-        return res.end(JSON.stringify({ ok: true, channels: [{ id: "C0DAILY", name: "daily-log" }] }));
+        return res.end(JSON.stringify({ ok: true, channels: [
+          { id: "C0DAILY", name: "daily-log", is_member: true },
+          { id: "D0DM", is_im: true, user: "U1" },
+          { id: "C0OTHER", name: "not-invited", is_member: false },
+        ] }));
       }
       if (url.pathname.endsWith("/conversations.history")) {
         const oldest = Number(url.searchParams.get("oldest") || 0);
+        const ch = url.searchParams.get("channel") || "";
         // Slack's `oldest` is INCLUSIVE — the cursor message comes back every time.
-        const msgs = state.messages.filter((m) => Number(m.ts) >= oldest);
+        const pool: any[] = ch === "D0DM" ? (state.dm ?? []) : state.messages;
+        const msgs = pool.filter((m: any) => Number(m.ts) >= oldest);
         return res.end(JSON.stringify({ ok: true, messages: msgs }));
       }
       res.end(JSON.stringify({ ok: false, error: "unknown_method" }));
@@ -97,6 +103,8 @@ async function main(): Promise<void> {
       { type: "message", ts: "1000.000400", subtype: "channel_join", user: "U1", text: "has joined the channel" },
       { type: "message", ts: "1000.000500", user: "U1", text: "walked 90 min on the treadmill" },
     ],
+    // The week that "disappeared": written in a DM, not the polled channel.
+    dm: [{ type: "message", ts: "2000.000100", user: "U1", text: "fire 9 happiness 7 july week" }] as any[],
     fail: undefined as string | undefined,
   };
   const api = await slackApi(state);
@@ -128,7 +136,11 @@ async function main(): Promise<void> {
     check("a channel_join was not captured", !inbox.some((i) => /joined the channel/.test(i.text)));
 
     console.log("\nIt is incremental…\n");
-    check("the cursor advanced to the newest message", pullCursor("slack") === "1000.000500", pullCursor("slack"));
+    check(
+      "the cursor advanced to the newest message",
+      pullCursor("slack", "daily-log") === "1000.000500",
+      pullCursor("slack", "daily-log"),
+    );
     const second = await pullChannel("slack", { recordDir: rDir });
     check("a second pull captures nothing new", second.captured === 0, `captured ${second.captured}`);
     check("…and the inbox did not grow", readRecord(rDir).inbox.length === 2);
@@ -142,7 +154,7 @@ async function main(): Promise<void> {
     check("re-pulling an overlapping window never duplicates", fourth.captured === 0 && readRecord(rDir).inbox.length === 3);
 
     console.log("\nA failed pull loses nothing…\n");
-    const before = pullCursor("slack");
+    const before = pullCursor("slack", "daily-log");
     state.fail = "not_in_channel";
     let threw = "";
     try {
@@ -151,7 +163,7 @@ async function main(): Promise<void> {
       threw = (e as Error).message;
     }
     check("a Slack error surfaces with the fix, not a bare code", /not_in_channel/.test(threw) && /invite/i.test(threw), threw);
-    check("the cursor did NOT move past unread messages", pullCursor("slack") === before);
+    check("the cursor did NOT move past unread messages", pullCursor("slack", "daily-log") === before);
     state.fail = undefined;
 
     console.log("\nIt runs on THIS host's scheduler…\n");
@@ -165,6 +177,24 @@ async function main(): Promise<void> {
       dueSources(rDir).some((s) => s.id === "slack"),
       dueSources(rDir).map((s) => s.id).join(",") || "none",
     );
+
+    // "*" — capture every conversation the bot is in. This is the answer to a week
+    // of logs written somewhere other than the one channel the poll was aimed at.
+    console.log("\n\"*\" captures every conversation the bot is in…\n");
+    {
+      const c0 = readConfig()!;
+      writeConfig({ ...c0, channels: { ...c0.channels, slackPullChannel: "*" } });
+      const star = await pullChannel("slack", { recordDir: rDir });
+      check("it read more than the one channel", star.conversations >= 2, `conversations=${star.conversations}`);
+      check(
+        "the DM-only message is now in the record",
+        readRecord(rDir).inbox.some((i) => /july week/.test(i.text)),
+        `captured ${star.captured}`,
+      );
+      check("a conversation the bot is NOT in is skipped", !star.failed.some((f) => f.includes("C0OTHER")), star.failed.join(" | ") || "none");
+      const again = await pullChannel("slack", { recordDir: rDir });
+      check("and re-running captures nothing new", again.captured === 0, `captured ${again.captured}`);
+    }
 
     // Turning it off must actually turn it off.
     const cfg = readConfig()!;
