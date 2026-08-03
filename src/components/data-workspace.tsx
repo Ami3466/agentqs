@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Card } from "@/components/ui";
+import { invalidate } from "@/lib/client-cache";
 import { Dropzone } from "@/components/dropzone";
 import { SourcesPanel } from "@/components/sources-panel";
 import { InboxPanel } from "@/components/inbox-panel";
@@ -17,7 +18,14 @@ import { DataLog } from "@/components/data-log";
  */
 export function DataWorkspace() {
   const [version, setVersion] = useState(0);
-  const bump = () => setVersion((v) => v + 1);
+  const bump = () => {
+    // Anything that bumps the version CHANGED THE RECORD — a drop, a structure, a
+    // reject, a sync, a removed source. Every cached answer derived from it (the
+    // Overview heatmap, the Journal, the source list) is now a lie, so the cache is
+    // dropped here rather than at each of the dozen call sites that could forget.
+    invalidate();
+    setVersion((v) => v + 1);
+  };
 
   return (
     <div className="space-y-4">

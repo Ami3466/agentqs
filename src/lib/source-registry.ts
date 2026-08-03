@@ -27,6 +27,9 @@ import type { AutomationRecipe } from "./automation-types";
 import { GOOGLE_PRESET_DAILY_SOURCES } from "./google-web-scraper";
 import { readInboxFromRecord, shouldSkipDailyCsvRead } from "./record";
 import { CHANNELS, channelEnv } from "./channels/registry";
+import { deliveryVerdict, readChannelDeliveries } from "./channel-deliveries";
+import { pullChannelName, pullable } from "./channels/pull";
+import { readBackfillState } from "./sync-runs";
 import { SOURCE_BUNDLES, type SourceBundle } from "./source-bundles";
 import {
   isDue,
@@ -252,9 +255,34 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
     const n = captures.length;
     const last = n ? captures.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
     const tail = "messages you send the bot land in your inbox";
+    // Inbound webhook health: whether the PLATFORM is still calling us, and what we
+    // did with the call. Without it, "connected" (a token is stored) was the only
+    // signal a channel had — and it stays true while every delivery is refused.
+    const d = readChannelDeliveries(adapter.id);
+    const delivery = {
+      lastAt: d.last?.at ?? null,
+      lastOutcome: d.last?.outcome ?? null,
+      lastDetail: d.last?.detail ?? null,
+      rejectedAt: d.lastRejected?.at ?? null,
+      rejectedDetail: d.lastRejected?.detail ?? null,
+      verdict: deliveryVerdict(d, { configured: connected, label: adapter.label }),
+    };
+    // A channel with a conversation configured is ALSO polled on our own schedule.
+    // Push is instant but silently dies when the platform disables the subscription;
+    // the poll is what still collects those messages, and it runs in this process on
+    // this host — never a cron somewhere else that can quietly stop being paid for.
+    const polls = pullable(adapter.id, env);
+    const from = pullChannelName(adapter.id, env);
+    // Naming a conversation to poll IS the request to poll it, so the cadence
+    // defaults to hourly rather than to "off". A setting that silently does nothing
+    // until you also find a dropdown is the same class of bug as the cron that
+    // reported success while capturing nothing — the user's intent was explicit.
+    const stored = intervalFor(cfg, adapter.id);
+    const interval: Interval = polls ? (stored === "off" ? "hourly" : stored) : "off";
+    const lastPull = readBackfillState(`channel-pull:${adapter.id}`).at ?? null;
     const detail = n
-      ? `${n} message${n === 1 ? "" : "s"} captured · ${tail}`
-      : `${connected ? "nothing captured yet" : "not connected"} · ${tail}`;
+      ? `${n} message${n === 1 ? "" : "s"} captured${polls ? ` · polling #${from}` : ""} · ${tail}`
+      : `${connected ? "nothing captured yet" : "not connected"}${polls ? ` · polling #${from}` : ""} · ${tail}`;
     return {
       id: adapter.id,
       name: adapter.label,
@@ -263,13 +291,14 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
       detail,
       connected,
       hasData: n > 0,
-      interval: "off",
+      interval,
       lastSync: last?.ts ?? null,
       stale: false,
-      due: false, // pushed, never polled
-      syncEndpoint: null, // nothing to sync
-      live: false,
+      due: polls && isDue(lastPull, interval),
+      syncEndpoint: polls ? `/api/import/${adapter.id}` : null,
+      live: polls,
       credentialOrigin: connected ? "env" : null,
+      delivery,
       ...lastRunFields(adapter.id),
     };
   });

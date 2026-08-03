@@ -66,6 +66,10 @@ export interface ChannelsConfig {
   telegramWebhookSecret?: string;
   slackBotToken?: string;
   slackSigningSecret?: string;
+  /** A Slack conversation to POLL on the app's own schedule ("daily-log", or a
+   *  C…/G… id). The webhook is instant but dies silently when Slack disables the
+   *  subscription; polling is what still collects those messages afterwards. */
+  slackPullChannel?: string;
   replies?: Record<string, ChannelReplyPrefs>; // per-channel reply behaviour, keyed by channel id
 }
 
@@ -478,6 +482,7 @@ export interface PublicConfig {
     telegram: boolean;
     slack: boolean;
     slackVerified: boolean; // signing secret stored — inbound events are signature-checked
+    slackPullChannel: string; // conversation polled on our own schedule ("" = push only)
     replies: Record<string, ChannelReplyPrefs>;
   };
   theme: string;
@@ -550,6 +555,7 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
       telegram: Boolean(ch?.telegramBotToken),
       slack: Boolean(ch?.slackBotToken),
       slackVerified: Boolean(ch?.slackSigningSecret),
+      slackPullChannel: ch?.slackPullChannel ?? "",
       replies: ch?.replies ?? {},
     },
     theme: cfg.theme,

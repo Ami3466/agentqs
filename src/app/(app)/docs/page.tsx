@@ -57,7 +57,7 @@ export default function DocsPage() {
         <Section
           id="indexes"
           title="Derived indexes — rebuildable"
-          intro="Built from the record, never edited directly. agentqs rebuild recreates all of them, byte-identical."
+          intro="Built from the record, never edited directly. agentqs rebuild recreates all of them, byte-identical. A single capture — a memo, a Slack message — patches them in place instead, so logging a note costs milliseconds however large your record is."
         >
           <Row name="SQLite cache">The daily / events / sessions tables chat runs SQL on.</Row>
           <Row name="Full-text index">Keyword search over memos, sessions, events and journal text.</Row>

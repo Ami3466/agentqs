@@ -1,6 +1,6 @@
 import { activeLlm, readConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
-import { appendInboxItem, rebuild, readSessionsFromRecord } from "./record";
+import { appendInboxItem, landInboxCaptures, readSessionsFromRecord } from "./record";
 import { autoStructureNewItem } from "./structure-run";
 import { groundedCrossSourceAnswer, looksLikeDataQuestion, looksLikeRecallQuestion, readGrounding } from "./grounding";
 import { answerRecall } from "./embeddings";
@@ -67,7 +67,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
     }
     const item = appendInboxItem({ text, source: input.channel || "memo", kind: "text" }, { recordDir: rDir });
     if (input.ai === false) {
-      rebuild({ recordDir: rDir });
+      landInboxCaptures([item], { recordDir: rDir });
       return {
         mode: "memo",
         text: `Saved to your inbox. No reply — press Structure in the app when you want it turned into data.`,
@@ -80,7 +80,7 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
     // Auto-structure first: when it merges, structurePending rebuilds the cache
     // itself — rebuilding here too would run the whole derivation twice per message.
     const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
-    if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
+    if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
     return {
       mode: "memo",
       text:

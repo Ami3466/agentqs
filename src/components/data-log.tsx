@@ -4,6 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Clock, MessageSquare, Spinner, Trash } from "@/components/icons";
 import { ago, Button, cn } from "@/components/ui";
+import { peekCache, primeCache } from "@/lib/client-cache";
+
+/** Shared cache entry for the capture log — seeds the panel on a tab return. */
+const LOG_KEY = "/api/log";
 import { DRAFT_KEY } from "@/lib/smart-input";
 
 interface AppliedCell {
@@ -50,8 +54,8 @@ const STATUS_LABEL: Record<string, string> = {
  */
 export function DataLog({ version, onChanged }: { version: number; onChanged: () => void }) {
   const router = useRouter();
-  const [items, setItems] = useState<LogItem[]>([]);
-  const [total, setTotal] = useState<number | null>(null);
+  const [items, setItems] = useState<LogItem[]>(() => peekCache<{ items: LogItem[] }>(LOG_KEY)?.items ?? []);
+  const [total, setTotal] = useState<number | null>(() => peekCache<{ total: number }>(LOG_KEY)?.total ?? null);
   // Like every long list here: a fixed-height scrollable box with its own search.
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -65,6 +69,7 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
     const data = (await res.json()) as { total: number; items: LogItem[] };
     setItems(data.items);
     setTotal(data.total);
+    primeCache(LOG_KEY, data);
   }, []);
 
   useEffect(() => {

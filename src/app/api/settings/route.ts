@@ -153,6 +153,12 @@ export async function POST(req: Request) {
       telegramWebhookSecret: keepOrSet(c.telegramWebhookSecret, cfg.channels?.telegramWebhookSecret),
       slackBotToken: keepOrSet(c.slackBotToken, cfg.channels?.slackBotToken),
       slackSigningSecret: keepOrSet(c.slackSigningSecret, cfg.channels?.slackSigningSecret),
+      // Not a secret, so NOT keepOrSet: an empty string here means "stop polling",
+      // and a setting you cannot turn off is a bug. Undefined still means "unchanged".
+      slackPullChannel:
+        typeof c.slackPullChannel === "string"
+          ? c.slackPullChannel.trim().replace(/^#/, "")
+          : cfg.channels?.slackPullChannel,
       replies: sanitizeChannelReplies(c.replies, cfg.channels?.replies),
     };
   }

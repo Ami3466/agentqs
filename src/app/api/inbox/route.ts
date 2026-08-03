@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItem, readInboxFromRecord, rebuild } from "@/lib/record";
+import { appendInboxItem, landInboxCaptures, readInboxFromRecord } from "@/lib/record";
 import { inboxResolve } from "@/lib/cli-core";
 import { MAX_INBOX_BYTES } from "@/lib/import-tree";
 import { autoStructureNewItem } from "@/lib/structure-run";
@@ -30,7 +30,7 @@ export async function GET() {
   });
 }
 
-/** Append verbatim to the inbox, no LLM, then rebuild the cache. Handles both a
+/** Append verbatim to the inbox, no LLM, then land it in the cache. Handles both a
  * typed memo (`//`) and a dropped/uploaded file (source `drop`, meta.filename). */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
@@ -67,7 +67,7 @@ export async function POST(req: Request) {
   // Auto-structure first: when it merges, structurePending rebuilds the cache
   // itself — rebuilding here too would run the whole derivation twice per capture.
   const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
-  if (!auto || auto.structured === 0) rebuild({ recordDir: recordDir() });
+  if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: recordDir() });
 
   const pending =
     auto?.pending ?? readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length;

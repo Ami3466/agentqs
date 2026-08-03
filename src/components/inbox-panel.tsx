@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bookmark, Spinner, Wand, X } from "@/components/icons";
 import { ago, Button, cn, TabBar } from "@/components/ui";
+import { primeCache } from "@/lib/client-cache";
+
+/** Shared cache entry for the inbox — other panels read the pending count from it. */
+const INBOX_KEY = "/api/inbox";
 import { DataQualityPanel } from "./data-quality";
 
 interface Item {
@@ -63,6 +67,7 @@ export function InboxPanel({
     const res = await fetch("/api/inbox");
     if (!res.ok) return;
     const data = (await res.json()) as { pending: number; items: Item[]; notifications?: Item[] };
+    primeCache(INBOX_KEY, data);
     setPending(data.pending);
     // Generic import notifications (folder receipts, CSV-loss warnings) have no
     // fix action for the Data quality tab, so THIS list is where they surface —

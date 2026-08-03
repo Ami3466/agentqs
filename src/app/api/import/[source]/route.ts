@@ -3,6 +3,7 @@ import path from "path";
 import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
+import { getChannelAdapter } from "@/lib/channels/registry";
 import { recordDir } from "@/lib/paths";
 import { parseCsv } from "@/lib/record";
 import { pluginInstanceById, pluginInstanceName, type PluginInstance } from "@/lib/importers/registry";
@@ -123,6 +124,15 @@ export async function GET(_req: Request, { params }: { params: { source: string 
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  if (getChannelAdapter(params.source)) {
+    // A channel is not a plugin: point the caller at the face that owns it rather
+    // than 404ing, which is what made the Pipeline row render a connected Slack bot
+    // as a stranger with a Connect button.
+    return NextResponse.json(
+      { error: `"${params.source}" is a capture channel — read it at /api/channels/${params.source}.` },
+      { status: 404 },
+    );
+  }
   const inst = pluginInstanceById(params.source);
   if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });
   return backupTargetError(inst) ?? NextResponse.json(status(inst));
@@ -140,6 +150,18 @@ export async function GET(_req: Request, { params }: { params: { source: string 
 export async function POST(req: Request, { params }: { params: { source: string } }) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  // A capture channel (slack · telegram) syncs by POLLING its conversation. It has
+  // no credential window and no daily table, so it never reaches the plugin path —
+  // but it IS a due-source, and this is the endpoint the in-app scheduler and the
+  // Pipeline row both POST to.
+  if (getChannelAdapter(params.source)) {
+    try {
+      const { pullChannel } = await import("@/lib/channels/pull");
+      return NextResponse.json({ ok: true, ...(await pullChannel(params.source)) });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
   }
   const inst = pluginInstanceById(params.source);
   if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });

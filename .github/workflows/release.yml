@@ -38,13 +38,32 @@ env:
   IMAGE: ${{ github.repository }}
 
 jobs:
+  # Fails in ~a minute on the thing that has actually broken this pipeline: a module
+  # that exists on the author's disk but was never committed. CI checks out only the
+  # TRACKED tree, so the import resolves to nothing — and buried in a three-minute
+  # docker build, that reads as "the image failed" rather than "you forgot to
+  # `git add`". Same check runs locally as `npm run verify:tree` (against the tree
+  # git would push, not the working directory), so it should never get this far.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Type-check the committed tree
+        run: npx tsc --noEmit
+
   image:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
