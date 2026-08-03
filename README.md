@@ -175,11 +175,22 @@ Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`
 
 ### Docker
 
-The repo ships a `docker-compose.yml` that builds the image, persists your record in a `/data` volume and passes provider keys through:
+A prebuilt image is published on every commit to `main`, for `linux/amd64` and `linux/arm64`. It's public - no login, no build:
 
 ```bash
-SESSION_SECRET=$(openssl rand -hex 32) docker compose up -d --build
+docker run -d -p 3000:3000 -v agentqs-data:/data \
+  -e SESSION_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/ami3466/agentqs:latest
 ```
+
+Version tags (`:0.2.2`, `:0.2`) and per-commit tags (`:sha-abc1234`) are there too, so a rollback is one tag away. The repo's `docker-compose.yml` uses the same image and passes provider keys through:
+
+```bash
+export SESSION_SECRET=$(openssl rand -hex 32)
+docker compose pull && docker compose up -d
+```
+
+Add `--build` to `up` to build from your working tree instead of pulling the published image.
 
 Optional env: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` for chat and structuring. Local file sources (Chrome history, iPhone backups) only work when the container runs on the machine that holds the files - otherwise run the daemon there (`npm run daemon -- run --push`) and let the instance pull the record via git.
 
