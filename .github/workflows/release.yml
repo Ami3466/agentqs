@@ -31,7 +31,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ${{ github.repository }}
 
 jobs:
   # Fails in ~a minute on the thing that has actually broken this pipeline: a module
@@ -82,8 +81,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Name this platform for artifacts
+      # GITHUB_REPOSITORY is `Ami3466/agentqs` but a Docker ref must be lowercase,
+      # so the raw `name=` below needs ${,,}. metadata-action lowercases on its own -
+      # anything hand-written does not.
+      - name: Resolve names
         run: |
+          echo "IMAGE_REF=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
           platform=${{ matrix.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
 
@@ -99,7 +102,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          images: ${{ env.IMAGE_REF }}
 
       - id: build
         uses: docker/build-push-action@v6
@@ -107,7 +110,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.IMAGE_REF }},push-by-digest=true,name-canonical=true,push=true
           # Separate scopes: one shared cache would have the two architectures
           # overwriting each other's layers every run.
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
@@ -149,11 +152,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve names
+        run: echo "IMAGE_REF=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       # v0.2.0 -> :0.2.0, :0.2, :latest. A manual run -> :edge (or whatever was typed).
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          images: ${{ env.IMAGE_REF }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -166,7 +172,7 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
+            $(printf '${{ env.IMAGE_REF }}@sha256:%s ' *)
 
       - name: Check both architectures are in the published tag
         run: |
