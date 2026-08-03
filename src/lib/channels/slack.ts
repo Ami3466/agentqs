@@ -229,9 +229,12 @@ export const slackAdapter: ChannelAdapter = {
   async pull({ env, channel, since }): Promise<PullResult> {
     const call = slackCaller(env, channel);
 
-    // A name needs resolving to an id; an id (C…/G…/D…) is used as-is.
+    // A name needs resolving to an id; an id is used as-is. Slack ids are an
+    // uppercase C/G/D followed by uppercase alphanumerics — a channel NAME is
+    // lowercase and may contain hyphens, so the two never collide. (Matching on a
+    // length threshold instead silently turned short DM ids into name lookups.)
     let channelId = channel.replace(/^#/, "").trim();
-    if (!/^[CGD][A-Z0-9]{6,}$/.test(channelId)) {
+    if (!/^[CGD][A-Z0-9]{2,}$/.test(channelId)) {
       const wanted = channelId;
       let cursor = "";
       let found = "";

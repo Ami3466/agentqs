@@ -2138,12 +2138,12 @@ function ChannelCard({
         {onPullChannel ? (
           <Field
             label="Also poll this channel"
-            hint="Channel name (daily-log) or id. The app checks it on its own schedule, so messages still land if the platform stops pushing. Blank = push only."
+            hint="Channel name (daily-log), a comma-separated list, an id, or * for every conversation the bot is in — including DMs. Checked on the app's own schedule, so messages land even if the platform stops pushing. Blank = push only."
           >
             <Input
               value={pullChannel ?? ""}
               onChange={(e) => onPullChannel(e.target.value)}
-              placeholder="daily-log"
+              placeholder="daily-log  ·  or  *"
               className="font-mono"
             />
           </Field>
