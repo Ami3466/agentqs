@@ -42,7 +42,8 @@ export default function DocsPage() {
           intro="Plain text files in record/ inside your data directory. Human-readable, git-friendly, and every change is revertible from the Log."
         >
           <Row name="daily/&lt;source&gt;.csv">
-            One row per day, one column per metric, numbers whenever possible. What Graphs and the Journal table read.
+            One row per day, one column per metric, numbers whenever possible. What Graphs, the Journal table and the
+            Coverage map (Journal and Pipeline, or <code>GET /api/coverage</code>) read.
           </Row>
           <Row name="events.jsonl">
             One line per item — a meeting, a page visit, a track, a message — with timestamp, title, text and link. The Journal timeline.

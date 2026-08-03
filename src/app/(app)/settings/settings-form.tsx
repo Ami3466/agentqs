@@ -133,15 +133,17 @@ const newId = (type: string) => `${type}-${Date.now().toString(36)}-${(rid++).to
 type IconComponent = (p: React.SVGProps<SVGSVGElement>) => JSX.Element;
 
 /** Settings subtabs. Deep links use the hash (/settings#skills, /settings#api);
- *  legacy anchors that aren't tab ids (#memos) map to their tab below. */
-const TABS: { id: string; label: string; icon: IconComponent }[] = [
+ *  legacy anchors that aren't tab ids (#memos) map to their tab below.
+ *  `parent` nests a tab under another in the rail — a child keeps its own id, so
+ *  its deep link (#agent) is unchanged. */
+const TABS: { id: string; label: string; icon: IconComponent; parent?: string }[] = [
   { id: "general", label: "General", icon: Sliders },
+  { id: "data", label: "Data", icon: DataIcon },
   { id: "models", label: "Models", icon: Sparkles },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "channels", label: "Channels", icon: Send },
-  { id: "agent", label: "Agent", icon: Cpu },
+  { id: "agent", label: "Agent", icon: Cpu, parent: "channels" },
   { id: "skills", label: "Skills", icon: Wand },
-  { id: "data", label: "Data", icon: DataIcon },
   { id: "api", label: "API", icon: Key },
 ];
 
@@ -915,6 +917,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
               aria-current={active ? "page" : undefined}
               className={cn(
                 "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors md:w-full",
+                // A child sits indented under its parent on the rail; on mobile the
+                // rail is a scrolling pill row, where indenting would read as a gap.
+                t.parent && "md:pl-8",
                 active ? "bg-accent/10 text-fg" : "text-muted-fg hover:bg-muted hover:text-fg",
               )}
             >

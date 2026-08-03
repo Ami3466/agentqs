@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
 import { JournalSearch } from "./journal-search";
+import { CoverageGrid } from "./coverage-grid";
 import { RangePicker, rangeStart } from "./range-picker";
 import { Button, Segmented, Select, SkeletonRows } from "./ui";
 import { peekCache, primeCache } from "@/lib/client-cache";
@@ -12,12 +13,16 @@ import { Spinner, X } from "./icons";
 import type { GraphRangePreset } from "@/lib/graphs";
 import type { JournalData, JournalView } from "@/lib/journal";
 
-type Mode = "timeline" | "table";
+/** Three readings of the same record: the grid of days, the narrative, and the
+ *  source×year map of what exists at all (the same panel Pipeline shows). */
+type Mode = "timeline" | "table" | "coverage";
 const MODE_KEY = "agentqs_journal_mode";
 const MODE_OPTIONS = [
   { value: "table", label: "Table" },
   { value: "timeline", label: "Timeline" },
+  { value: "coverage", label: "Coverage" },
 ] as const;
+const MODES = MODE_OPTIONS.map((o) => o.value) as readonly string[];
 
 /** Type filter values: everything, one source's metrics, one metric column
  * (set by clicking a tag in the Timeline), or just memos/sessions. */
@@ -140,7 +145,7 @@ export function JournalWorkspace() {
   // restore last-used view mode
   useEffect(() => {
     const saved = localStorage.getItem(MODE_KEY);
-    if (saved === "table" || saved === "timeline") setMode(saved);
+    if (saved && MODES.includes(saved)) setMode(saved as Mode);
   }, []);
 
   // Mirror the source filter into the URL so a reload keeps it, Clear really
@@ -292,7 +297,9 @@ export function JournalWorkspace() {
         />
       </div>
 
-      {data ? (
+      {/* Coverage answers a whole-record question — a date range or type filter has
+          nothing to narrow there, so the bar goes away instead of sitting dead. */}
+      {data && mode !== "coverage" ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <JournalSearch />
           <Select
@@ -351,7 +358,15 @@ export function JournalWorkspace() {
         </div>
       ) : null}
 
-      {loading ? (
+      {/* Ahead of the journal's own load gate: coverage reads /api/coverage, so it
+          renders while the megabyte-scale day payload is still on the wire. */}
+      {mode === "coverage" ? (
+        <CoverageGrid
+          tall
+          onSourceClick={(source) => drillToTable(`src:${source}`)}
+          emptyHint="No data yet. Connect a source in Pipeline to fill this in."
+        />
+      ) : loading ? (
         <div className="rounded-xl border border-border bg-card p-4">
           <SkeletonRows rows={10} rowClassName="h-9" label="Loading your journal" />
         </div>

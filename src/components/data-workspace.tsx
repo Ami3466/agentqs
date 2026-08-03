@@ -6,22 +6,25 @@ import { invalidate } from "@/lib/client-cache";
 import { Dropzone } from "@/components/dropzone";
 import { SourcesPanel } from "@/components/sources-panel";
 import { InboxPanel } from "@/components/inbox-panel";
+import { CoverageGrid } from "@/components/coverage-grid";
 import { DataLog } from "@/components/data-log";
 
 /**
  * Client shell for the Pipeline tab. Top-down flow that reads in the order it works:
  * drop a file (photos included) → it lands in the inbox → Structure it. Sources are
- * the separate, live-feed lane below; the Log is the audit trail of every capture
- * (review, reject, or hand to the AI). One shared `version` counter fans a single
- * refetch across every panel after any mutation (a drop, a structure/discard, an
- * auto-sync). The daily table lives on the Journal tab, not here.
+ * the separate, live-feed lane below, and the coverage heatmap sits right under them
+ * because it answers the question the source list raises — which stream has holes,
+ * and how far back does it go. The Log is the audit trail of every capture (review,
+ * reject, or hand to the AI). One shared `version` counter fans a single refetch
+ * across every panel after any mutation (a drop, a structure/discard, an auto-sync).
+ * The daily table lives on the Journal tab, not here.
  */
 export function DataWorkspace() {
   const [version, setVersion] = useState(0);
   const bump = () => {
     // Anything that bumps the version CHANGED THE RECORD — a drop, a structure, a
     // reject, a sync, a removed source. Every cached answer derived from it (the
-    // Overview heatmap, the Journal, the source list) is now a lie, so the cache is
+    // coverage heatmap, the Journal, the source list) is now a lie, so the cache is
     // dropped here rather than at each of the dozen call sites that could forget.
     invalidate();
     setVersion((v) => v + 1);
@@ -38,6 +41,8 @@ export function DataWorkspace() {
       <Card>
         <SourcesPanel version={version} onChanged={bump} />
       </Card>
+
+      <CoverageGrid />
 
       <Card>
         <DataLog version={version} onChanged={bump} />
