@@ -76,6 +76,7 @@ import {
   setDriveImportFolder,
 } from "./drive-import";
 import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
+import { getChannelAdapter } from "./channels/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
@@ -1141,6 +1142,31 @@ async function syncSourceInner(opts: SyncSourceOpts): Promise<SyncResult> {
   const cfg = readConfig();
   const now = new Date().toISOString();
   const progress: JobProgress = opts.onProgress ?? (() => {});
+
+  // A capture CHANNEL syncs by polling its conversation — no daily table, no
+  // credential window. It is a due-source like any other so the in-app scheduler on
+  // this host sweeps it; that is the whole point (the Slack capture used to be a
+  // GitHub Actions cron in another repo, which stopped the day its minutes ran out
+  // and reported success for the eighteen days it captured nothing).
+  if (getChannelAdapter(opts.id)) {
+    const { pullChannel } = await import("./channels/pull");
+    const r = await pullChannel(opts.id, { recordDir: rDir });
+    const today = now.slice(0, 10);
+    // A channel fills the INBOX, not the daily table — so the numbers a daily source
+    // reports (metrics, cells, rows) are honestly zero here, and `metrics` carries
+    // what actually happened instead of pretending a table was written.
+    return {
+      id: opts.id,
+      name: getChannelAdapter(opts.id)!.label,
+      from: today,
+      to: today,
+      days: 0,
+      metrics: [r.captured ? `${r.captured} captured from #${r.from}` : `no new messages in #${r.from}`],
+      cells: 0,
+      dailyRows: 0,
+      syncedAt: now,
+    };
+  }
 
   if (opts.id === "github") {
     const token = resolveGithubToken(opts.credential);

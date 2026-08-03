@@ -216,6 +216,13 @@ function readJsonl(file: string): Array<Record<string, unknown>> {
  *  Shared by readDaily, recordHash and the sources registry so the record, its
  *  hash and the UI never disagree about what counts as a source. */
 export function shouldSkipDailyCsvRead(dir: string, file: string): boolean {
+  // Dot-files are never a source. macOS writes an AppleDouble sidecar ("._x.csv")
+  // beside every file it touches on a non-native volume — a Docker bind mount, a
+  // USB stick, an SMB share — and each one ends in .csv, so the record readers and
+  // the Pipeline list adopted dozens of them as phantom sources ("._chrome",
+  // "._journal", …). They are binary metadata, they parse to zero rows, and they
+  // exist purely because of where the store lives.
+  if (file.startsWith(".")) return true;
   return (
     file === "browser_history.csv" &&
     fs.existsSync(path.join(dir, "browser_history_scrape.csv"))
@@ -729,6 +736,88 @@ export function insertEventsIntoCache(
   }
 }
 
+/**
+ * Land freshly appended/updated inbox captures in the derived cache WITHOUT a full
+ * rebuild. A capture is one row; a rebuild re-reads every daily CSV, re-copies
+ * events.jsonl and re-indexes the lot — on a real record that is minutes of frozen
+ * server for a single memo, and it is what made a Slack/Telegram message miss the
+ * platform's 3s webhook deadline (the platform then retries, and eventually
+ * disables the subscription — the bot goes silent with nothing in the logs).
+ *
+ * Mirrors the inbox half of rebuild() exactly: raw_inbox holds every capture, the
+ * FTS row is skipped for images (their body is a base64 data URL) and for
+ * discarded ones (Reject means "leave my record"). Idempotent — re-landing the
+ * same id replaces the row and its single search entry. Best-effort like
+ * insertEventsIntoCache: no cache yet / locked / stale schema is a no-op, and the
+ * next full rebuild converges exactly.
+ */
+export function upsertInboxItemsInCache(
+  items: InboxItem[],
+  opts: { dataDir?: string; dbFile?: string } = {},
+): number {
+  const file = opts.dbFile ?? dbPath(opts.dataDir);
+  if (!items.length || !fs.existsSync(file)) return 0;
+  try {
+    const db = new Database(file);
+    try {
+      const ins = db.prepare(
+        "INSERT OR REPLACE INTO raw_inbox (id,ts,source,kind,text,meta,status) VALUES (?,?,?,?,?,?,?)",
+      );
+      // FTS5 has no uniqueness or upsert, so the ref's old row is deleted first —
+      // otherwise re-structuring a capture would leave two copies in search.
+      const delSearch = db.prepare("DELETE FROM search WHERE kind = 'inbox' AND ref = ?");
+      const insSearch = db.prepare("INSERT INTO search (ref,kind,body) VALUES (?,?,?)");
+      const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+      let n = 0;
+      const tx = db.transaction(() => {
+        for (const it of items) {
+          ins.run(
+            it.id,
+            it.ts,
+            it.source,
+            it.kind,
+            it.text,
+            it.meta == null ? null : JSON.stringify(it.meta),
+            it.status,
+          );
+          delSearch.run(`inbox:${it.id}`);
+          if (it.kind !== "image" && it.status !== "discarded") {
+            insSearch.run(`inbox:${it.id}`, "inbox", it.text);
+          }
+          n += 1;
+        }
+        const rows = (db.prepare("SELECT COUNT(*) AS n FROM raw_inbox").get() as { n: number }).n;
+        setMeta.run("inbox_rows", String(rows));
+        // record_hash / events_stamp stay untouched for the same reason
+        // refreshSyncCache leaves them: only a full rebuild can promise the cache
+        // was built from exactly that record text, and the next one must re-parse.
+      });
+      tx();
+      return n;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return 0; // stale schema / locked cache — the next full rebuild catches up
+  }
+}
+
+/**
+ * Land freshly captured inbox items in the cache — the one call every capture path
+ * makes (a `//` memo, a Slack/Telegram message, a dropped file, an agent
+ * `log_memo`). Patches the cache in place when there is one, and falls back to the
+ * single full rebuild when there isn't yet. Same shape as landDailyEditInCache:
+ * a rebuild is for "the record changed shape", never for "one row arrived".
+ */
+export function landInboxCaptures(items: InboxItem[], opts: { recordDir?: string; dataDir?: string } = {}): void {
+  // Resolve the cache the SAME way rebuild() does. A caller that passes only a
+  // temp `recordDir` (every test does) must never have its capture patched into
+  // the real store's cache — the bug a bare dbPath() default would introduce.
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const dbFile = dbPath(opts.dataDir ?? path.dirname(rDir));
+  if (upsertInboxItemsInCache(items, { dbFile }) === 0) rebuild(opts);
+}
+
 /** What one source sync changed in the record — everything the cache needs to
  *  catch up without re-reading the rest of it. */
 export interface SyncCacheChange {
@@ -1231,6 +1320,7 @@ export function applyDailyEdits(
     fs
       .readdirSync(dailyDir)
       .filter((f) => f.toLowerCase().endsWith(".csv"))
+      .filter((f) => !shouldSkipDailyCsvRead(dailyDir, f))
       .map((f) => f.replace(/\.csv$/i, ""));
 
   const result: DailyEditResult = { sets: 0, clears: 0, deletedColumns: 0, deletedRows: 0, sources: [] };

@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-table";
 import type { JournalData, JournalDay, JournalView } from "@/lib/journal";
 import { Button, cn } from "./ui";
+import { invalidate } from "@/lib/client-cache";
 import { Bookmark, GripVertical, Pencil, Plus, Spinner, X } from "./icons";
 import { DataQualityPanel } from "./data-quality";
 
@@ -305,6 +306,9 @@ export function JournalTable({
         setEditError(body.error || "Saving failed.");
         return;
       }
+      // An edit rewrote daily cells: every cached answer derived from them (the
+      // Overview heatmap, the other journal window, the graphs) is now stale.
+      invalidate();
       onData(body.journal);
       resetDraft();
       setEditing(false);

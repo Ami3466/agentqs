@@ -5,16 +5,21 @@ import { Check, ChevronDown, Inbox, Plus, RefreshCw, Spinner, Trash, X } from "@
 import { GithubConnect } from "@/components/github-connect";
 import { WhoopConnect } from "@/components/whoop-connect";
 import { SourceConnect } from "@/components/source-connect";
+import { ChannelRow } from "@/components/channel-row";
 import { CopyRow } from "@/components/connect-api";
 import { GoogleCard } from "@/components/google-card";
 import { SourceHeader, SourceTitle } from "@/components/source-title";
 import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
-import { Badge, Button, cn, Input, TabBar } from "@/components/ui";
+import { Badge, Button, cn, Input, SkeletonRows, TabBar } from "@/components/ui";
+import { peekCache, primeCache } from "@/lib/client-cache";
 import { jobActive, type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
+
+/** One cache entry for the source list, shared with anything else that reads it. */
+const SOURCES_KEY = "/api/sources";
 
 type GoogleImportStatus = {
   exists: boolean;
@@ -62,7 +67,12 @@ export function SourcesPanel({
   version: number;
   onChanged: () => void;
 }) {
-  const [sources, setSources] = useState<SourceView[] | null>(null);
+  // Seeded from the shared cache: coming back to Pipeline from another tab paints
+  // the last list immediately and refreshes underneath, instead of showing an empty
+  // panel for the couple of seconds a full source scan takes.
+  const [sources, setSources] = useState<SourceView[] | null>(
+    () => peekCache<{ sources: SourceView[] }>(SOURCES_KEY)?.sources ?? null,
+  );
   const [tab, setTab] = useState<Tab>("connections");
   const [savingId, setSavingId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -107,6 +117,7 @@ export function SourcesPanel({
       }
       const data = (await res.json()) as { sources: SourceView[] };
       setSources(data.sources);
+      primeCache(SOURCES_KEY, data); // the next visit to this tab starts from here
       return data.sources;
     } catch (e) {
       setSourceError(
@@ -114,7 +125,10 @@ export function SourcesPanel({
           ? "Sources are still loading after 60s — the server may be busy importing."
           : (e as Error).message,
       );
-      setSources([]);
+      // A failed REFRESH must not empty a list the user is reading — the error
+      // banner above already says it went stale. Only a first load has nothing
+      // better to show.
+      setSources((prev) => prev ?? []);
       return null;
     } finally {
       window.clearTimeout(timer);
@@ -356,6 +370,10 @@ export function SourcesPanel({
         />
       );
     }
+    // A channel is PUSHED to our webhook — it has no importer to ask for status
+    // and no key to paste in this list. Must be checked before the generic api
+    // branch below, which would otherwise render it as a credential row.
+    if (s.channel) return <ChannelRow key={s.id} source={s} />;
     if (s.kind === "api") {
       return (
         <SourceConnect
@@ -370,6 +388,10 @@ export function SourcesPanel({
           coverage={s.coverage}
           account={s.account}
           provenance={s.provenance}
+          connectedSeed={s.connected}
+          hasDataSeed={Boolean(s.hasData)}
+          detectedAppSeed={Boolean(s.detectedApp)}
+          nameSeed={s.name}
           onIntervalChange={onIntervalChange}
           onRemove={onRemove}
           onSyncStarted={() => void load()}
@@ -436,9 +458,7 @@ export function SourcesPanel({
         </div>
       ) : null}
       {sources === null ? (
-        <div className="flex items-center gap-2 p-4 text-xs text-muted-fg">
-          <Spinner width={13} height={13} /> Loading…
-        </div>
+        <SkeletonRows rows={5} rowClassName="h-14" className="p-4" label="Loading your sources" />
       ) : (
         <>
           {tab === "automated" ? (

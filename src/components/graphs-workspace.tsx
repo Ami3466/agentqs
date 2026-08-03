@@ -15,7 +15,8 @@ import {
 } from "recharts";
 import type { JournalData } from "@/lib/journal";
 import type { GraphRangePreset, GraphViewType, SavedGraph } from "@/lib/graphs";
-import { Button, Card, Input, Select, cn } from "./ui";
+import { Button, Card, Input, Select, SkeletonRows, cn } from "./ui";
+import { peekCache, primeCache } from "@/lib/client-cache";
 import { RangePicker } from "./range-picker";
 import { Plus, Spinner, Trash } from "./icons";
 
@@ -629,10 +630,15 @@ function GraphCard({
   );
 }
 
+/** Numbers-only full history. Its own cache key — the same bytes are re-derived on
+ *  every visit to Graphs otherwise, and on a lifetime record that is the single
+ *  most expensive request the app makes. */
+const GRAPHS_JOURNAL = "/api/journal?days=all&numeric=1";
+
 export function GraphsWorkspace() {
-  const [data, setData] = useState<JournalData | null>(null);
+  const [data, setData] = useState<JournalData | null>(() => peekCache<JournalData>(GRAPHS_JOURNAL) ?? null);
   const [graphs, setGraphs] = useState<SavedGraph[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => peekCache<JournalData>(GRAPHS_JOURNAL) === undefined);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -640,13 +646,17 @@ export function GraphsWorkspace() {
     (async () => {
       const [journal, saved] = await Promise.all([
         // Full history, numbers only — graphs never read the (huge) cell text.
-        fetch("/api/journal?days=all&numeric=1").then((r) => (r.ok ? (r.json() as Promise<JournalData>) : null)),
+        fetch(GRAPHS_JOURNAL).then((r) => (r.ok ? (r.json() as Promise<JournalData>) : null)),
         fetch("/api/graphs")
           .then((r) => (r.ok ? (r.json() as Promise<{ graphs: SavedGraph[] }>) : { graphs: [] }))
           .catch(() => ({ graphs: [] as SavedGraph[] })),
       ]);
       if (!alive) return;
-      setData(journal);
+      // Keep whatever is already drawn if the refresh came back empty.
+      if (journal) {
+        setData(journal);
+        primeCache(GRAPHS_JOURNAL, journal);
+      }
       setGraphs(saved.graphs ?? []);
       setLoading(false);
     })();
@@ -710,8 +720,8 @@ export function GraphsWorkspace() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-20 text-sm text-muted-fg">
-        <Spinner width={16} height={16} /> Loading…
+      <div className="rounded-xl border border-border bg-card p-4">
+        <SkeletonRows rows={3} rowClassName="h-40" label="Loading your graphs" />
       </div>
     );
   }

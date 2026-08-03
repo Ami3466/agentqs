@@ -138,6 +138,19 @@ export interface SourceView {
    *  so there is nothing to schedule and nothing to sync — it is connected by a bot
    *  token and it fills the inbox. Connect it in Settings → Channels. */
   channel?: boolean;
+  /** Inbound webhook health for a channel row. "Connected" only says a token is
+   *  stored; these say whether the PLATFORM is still calling us and what we did
+   *  with the call — the difference between a disabled subscription and a secret
+   *  mismatch, which look identical (an empty inbox) without them. */
+  delivery?: {
+    lastAt: string | null; // any inbound POST, whatever the outcome
+    lastOutcome: string | null;
+    lastDetail: string | null;
+    rejectedAt: string | null; // most recent refusal
+    rejectedDetail: string | null;
+    /** One actionable sentence — see deliveryVerdict in channel-deliveries.ts. */
+    verdict: { tone: "ok" | "warn" | "error"; text: string } | null;
+  };
   /** Provenance of the working credential: "saved" = the user connected it,
    *  "env" = environment variable, "discovered" = auto-detected from the
    *  source's local desktop app (the user never connected it — surface that). */

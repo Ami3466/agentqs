@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useCachedFetch } from "@/lib/client-cache";
 import { useCopy } from "@/components/connect-api";
 import { Check, Copy, Eye, EyeOff, Spinner, Trash } from "@/components/icons";
 import { IntervalSelect } from "@/components/interval-select";
@@ -91,6 +92,10 @@ export function SourceConnect({
   coverage,
   account,
   provenance,
+  connectedSeed = false,
+  hasDataSeed = false,
+  detectedAppSeed = false,
+  nameSeed,
   onIntervalChange,
   onRemove,
   onSyncStarted,
@@ -116,6 +121,13 @@ export function SourceConnect({
   nameOverride?: string;
   /** Draw a different source's mark (the provider's) — same reason. */
   iconId?: string;
+  /** What /api/sources already knows about this row. The panel has the whole list
+   *  in one response; a row that renders from it needs no GET of its own, which is
+   *  what turned opening Pipeline into ~30 parallel scans of the record. */
+  connectedSeed?: boolean;
+  hasDataSeed?: boolean;
+  detectedAppSeed?: boolean;
+  nameSeed?: string;
   onIntervalChange?: (i: Interval) => void;
   onRemove?: () => void;
   /** A sync job was just enqueued — the panel starts polling. */
@@ -138,15 +150,33 @@ export function SourceConnect({
   // API source actually auto-syncs (Manual is still selectable here).
   const [pendingInterval, setPendingInterval] = useState<Interval>("daily");
 
-  async function loadStatus() {
-    const res = await fetch(`/api/import/${id}`);
-    if (res.ok) setStatus((await res.json()) as Status);
-  }
-
+  // A row's own status GET is only worth paying for once it has something to say:
+  // a live sparkline + sync state (connected / holding data), or the credential
+  // form the user just opened. A dark row in a 30-source list renders entirely from
+  // the panel's seed — opening Pipeline used to fire one request per row, each
+  // re-reading the record, and the tab took seconds to settle because of it.
+  // ...and one more case: we just came back from this source's OAuth consent page
+  // (/api/oauth/callback bounces to ?source=<id>). That handoff is handled below
+  // off `status`, so a not-yet-connected row must load it here or the return would
+  // be silently dropped.
+  const [oauthReturn] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("source") === id,
+  );
+  const wantStatus = connectedSeed || hasDataSeed || open || oauthReturn;
+  const remote = useCachedFetch<Status>(`/api/import/${id}`, { enabled: wantStatus });
   useEffect(() => {
-    void loadStatus();
+    if (remote.data) setStatus(remote.data);
+  }, [remote.data]);
+  // `version` bumps on any panel-wide mutation (a sync landed, a source was
+  // removed) — that is exactly when this row's status is stale.
+  useEffect(() => {
+    if (version > 0 && wantStatus) void remote.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, id]);
+
+  async function loadStatus() {
+    await remote.refresh();
+  }
 
   // Prefer the panel's freshly polled job over this row's own (older) GET.
   const liveJob = job ?? status?.job ?? null;
@@ -258,16 +288,18 @@ export function SourceConnect({
     onSyncStarted?.();
   }
 
-  const displayName = nameOverride ?? status?.name ?? id;
+  const displayName = nameOverride ?? status?.name ?? nameSeed ?? id;
   // The panel's coverage is richer (events + date range). Without it — a product
   // nested in a provider card — fall back to the row's own day count.
   const cov: SourceCoverage | undefined =
     coverage ?? (status ? { events: 0, days: status.days, from: null, to: null } : undefined);
   // Guarded for SSR — only read once the panel is open (post-hydration anyway).
   const redirectUri = typeof window === "undefined" ? "" : `${window.location.origin}/api/oauth/callback`;
-  const connected = status?.connected;
+  // Seeded from the panel until this row's own GET (if any) lands, so a connected
+  // row is never briefly drawn as a stranger with a Connect button.
+  const connected = status?.connected ?? connectedSeed;
   const live = status?.live ?? true;
-  const detectedApp = Boolean(status?.detectedApp) && !connected;
+  const detectedApp = (status ? Boolean(status.detectedApp) : detectedAppSeed) && !connected;
   const canSyncNow = Boolean(status?.hasCredential) || Boolean(cred) || detectedApp;
   const working = busy || syncing;
   const startLabel = busy ? (cred ? "Testing key…" : "Starting…") : "Sync";
@@ -282,8 +314,8 @@ export function SourceConnect({
           name={displayName}
           iconId={iconId}
           connected={Boolean(connected)}
-          hasData={Boolean(status?.hasData)}
-          provenance={provenance ?? (connected ? "credential" : status?.hasData ? "imported" : undefined)}
+          hasData={status ? Boolean(status.hasData) : hasDataSeed}
+          provenance={provenance ?? (connected ? "credential" : (status?.hasData ?? hasDataSeed) ? "imported" : undefined)}
           account={account}
           coverage={cov}
           lastSync={status?.syncedAt ?? null}

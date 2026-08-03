@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
-import { Badge, Card, cn } from "./ui";
+import { Badge, Card, cn, Skeleton, SkeletonRows } from "./ui";
+import { useCachedFetch } from "@/lib/client-cache";
 import type { CoverageReport, SourceCoverage } from "@/lib/coverage";
 
 /** Density buckets, faint → solid. Static classes so Tailwind keeps them. */
@@ -62,23 +63,34 @@ function Row({ s, years, max }: { s: SourceCoverage; years: number[]; max: numbe
   );
 }
 
+/** Holds the heatmap's shape while it loads — four stat slots and a run of source
+ *  rows — so the page lands once instead of jumping when the data arrives. */
+function CoverageSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Card className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="space-y-1.5">
+            <Skeleton className="h-6 w-16" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+        ))}
+      </Card>
+      <Card className="p-4">
+        <SkeletonRows rows={8} rowClassName="h-6" label="Loading your record" />
+      </Card>
+    </div>
+  );
+}
+
 /** The Overview tab: the whole record as a source×year heatmap. Derived entirely from
  *  GET /api/coverage (survives reload), richest source first. A cell → the Journal
  *  filtered to that source, so "see all my data" is one glance and one click. */
 export function CoverageGrid() {
-  const [data, setData] = useState<CoverageReport | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/coverage")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Coverage failed (${r.status}).`))))
-      .then((d: CoverageReport) => alive && setData(d))
-      .catch((e) => alive && setError(e instanceof Error ? e.message : "Could not load coverage."));
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // Cached: coming back to Overview from another tab renders the last heatmap
+  // instantly and refreshes behind it, instead of re-running the whole scan and
+  // showing a bare "Loading…" every single visit.
+  const { data, error, loading } = useCachedFetch<CoverageReport>("/api/coverage");
 
   const max = useMemo(() => {
     if (!data) return 1;
@@ -87,8 +99,9 @@ export function CoverageGrid() {
     return m;
   }, [data]);
 
-  if (error) return <Card className="text-sm text-destructive">{error}</Card>;
-  if (!data) return <Card className="text-sm text-muted-fg">Loading your record…</Card>;
+  if (loading) return <CoverageSkeleton />;
+  if (error && !data) return <Card className="p-4 text-sm text-destructive">{error}</Card>;
+  if (!data) return <CoverageSkeleton />;
   if (data.sources.length === 0)
     return <Card className="text-sm text-muted-fg">No data yet. Connect a source in Pipeline to fill this in.</Card>;
 
@@ -97,6 +110,8 @@ export function CoverageGrid() {
 
   return (
     <div className="space-y-4">
+      {/* A refresh that fails over data already on screen: keep the heatmap, say so. */}
+      {error ? <p className="text-xs text-destructive">Could not refresh: {error}</p> : null}
       <Card className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="sources" value={String(data.sources.length)} />
         <Stat label="rows" value={fmt(data.totalRows)} />

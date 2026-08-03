@@ -7,6 +7,7 @@ import {
   type ReactNode,
   type SelectHTMLAttributes,
 } from "react";
+import Link from "next/link";
 import { twMerge } from "tailwind-merge";
 
 /** Joins class names and resolves Tailwind conflicts (a passed `w-40` beats a base `w-full`). */
@@ -48,25 +49,58 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: Size;
 }
 
+/** The one button recipe. Shared with LinkButton so a control that NAVIGATES is
+ *  pixel-identical to one that acts — divergence here is how a row ends up with
+ *  two different-looking primary buttons. */
+export function buttonClasses(
+  variant: Variant = "secondary",
+  size: Size = "md",
+  className?: string,
+): string {
+  return cn(
+    // whitespace-nowrap: a button label is always ONE line — tight flex rows
+    // must truncate their text, never wrap their buttons.
+    "inline-flex items-center justify-center whitespace-nowrap rounded-lg font-medium transition-colors",
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+    "disabled:opacity-50 disabled:pointer-events-none",
+    VARIANTS[variant],
+    SIZES[size],
+    className,
+  );
+}
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ variant = "secondary", size = "md", className, ...props }, ref) => (
-    <button
-      ref={ref}
-      className={cn(
-        // whitespace-nowrap: a button label is always ONE line — tight flex rows
-        // must truncate their text, never wrap their buttons.
-        "inline-flex items-center justify-center whitespace-nowrap rounded-lg font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
-        "disabled:opacity-50 disabled:pointer-events-none",
-        VARIANTS[variant],
-        SIZES[size],
-        className,
-      )}
-      {...props}
-    />
+    <button ref={ref} className={buttonClasses(variant, size, className)} {...props} />
   ),
 );
 Button.displayName = "Button";
+
+/** A Button that is really a link — same look, correct semantics (middle-click,
+ *  copy address, keyboard). Use it whenever the action is "go somewhere". */
+export function LinkButton({
+  href,
+  variant = "secondary",
+  size = "md",
+  className,
+  children,
+  title,
+  prefetch,
+}: {
+  href: string;
+  variant?: Variant;
+  size?: Size;
+  className?: string;
+  children: ReactNode;
+  title?: string;
+  prefetch?: boolean;
+}) {
+  return (
+    <Link href={href} prefetch={prefetch} className={buttonClasses(variant, size, className)} title={title}>
+      {children}
+    </Link>
+  );
+}
 
 // ---- Input ----------------------------------------------------------------
 
@@ -357,6 +391,41 @@ export function ProgressBar({
           style={{ width: `${clamped}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+// ---- Loading ---------------------------------------------------------------
+
+/**
+ * A block standing in for content that hasn't arrived. Panels used to render the
+ * word "Loading…" — which says nothing about what is coming, collapses the layout,
+ * and then shoves the page around when the real thing lands. A skeleton holds the
+ * shape, so the page settles once.
+ */
+export function Skeleton({ className }: { className?: string }) {
+  return <div aria-hidden className={cn("animate-pulse rounded-md bg-muted", className)} />;
+}
+
+/** The list placeholder: `rows` bars at the height of a real row. `label` is what
+ *  a screen reader hears while the bars are on screen. */
+export function SkeletonRows({
+  rows = 4,
+  className,
+  rowClassName = "h-12",
+  label = "Loading",
+}: {
+  rows?: number;
+  className?: string;
+  rowClassName?: string;
+  label?: string;
+}) {
+  return (
+    <div className={cn("space-y-2", className)} role="status" aria-live="polite" aria-busy="true">
+      <span className="sr-only">{label}…</span>
+      {Array.from({ length: rows }, (_, i) => (
+        <Skeleton key={i} className={cn(rowClassName, i === rows - 1 && "opacity-60")} />
+      ))}
     </div>
   );
 }

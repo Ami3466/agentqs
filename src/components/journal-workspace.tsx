@@ -6,7 +6,8 @@ import { JournalTimeline } from "./journal-timeline";
 import { JournalTable } from "./journal-table";
 import { JournalSearch } from "./journal-search";
 import { RangePicker, rangeStart } from "./range-picker";
-import { Button, Segmented, Select } from "./ui";
+import { Button, Segmented, Select, SkeletonRows } from "./ui";
+import { peekCache, primeCache } from "@/lib/client-cache";
 import { Spinner, X } from "./icons";
 import type { GraphRangePreset } from "@/lib/graphs";
 import type { JournalData, JournalView } from "@/lib/journal";
@@ -21,6 +22,12 @@ const MODE_OPTIONS = [
 /** Type filter values: everything, one source's metrics, one metric column
  * (set by clicking a tag in the Timeline), or just memos/sessions. */
 type TypeFilter = "all" | "memos" | "sessions" | `src:${string}` | `met:${string}`;
+
+/** The two windows the Journal asks for. Also the cache keys, so the recent window
+ *  and the full history are remembered separately instead of clobbering each
+ *  other — a lifetime record is megabytes and must never be refetched per tab. */
+const JOURNAL_WINDOW = "/api/journal?days=180";
+const JOURNAL_ALL = "/api/journal?days=all";
 
 /** Dev recompiles briefly 404 API routes (see next.config.mjs watchOptions note),
  * and one failed fetch used to leave the Journal on "Loading…" forever. Retry a
@@ -164,19 +171,31 @@ export function JournalWorkspace() {
   urlSourceRef.current = urlSource;
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(false);
     const all = Boolean(urlSourceRef.current);
+    const url = all ? JOURNAL_ALL : JOURNAL_WINDOW;
+    // Cached from a previous visit → render it NOW and refresh underneath. Only a
+    // cold start shows a loading state; switching tabs never does.
+    const seed = peekCache<JournalData>(url);
+    if (seed) {
+      setData(seed);
+      if (all) setFullHistory(true);
+    }
+    setLoading(!seed);
+    setLoadError(false);
     const [d, v] = await Promise.all([
-      fetchJournalRetrying(all ? "/api/journal?days=all" : "/api/journal?days=180"),
+      fetchJournalRetrying(url),
       fetch("/api/journal/views")
         .then((r) => (r.ok ? (r.json() as Promise<{ views: JournalView[] }>) : { views: [] }))
         .catch(() => ({ views: [] as JournalView[] })),
     ]);
-    setData(d);
-    if (all && d) setFullHistory(true);
+    if (d) {
+      setData(d);
+      primeCache(url, d);
+      if (all) setFullHistory(true);
+    }
     setViews(v?.views ?? []);
-    setLoadError(!d);
+    // A failed refresh over data already on screen is not an empty Journal.
+    setLoadError(!d && !seed);
     setLoading(false);
   }, []);
 
@@ -187,9 +206,10 @@ export function JournalWorkspace() {
   const loadFullHistory = useCallback(async () => {
     setLoadingFull(true);
     try {
-      const d = await fetchJournalRetrying("/api/journal?days=all");
+      const d = await fetchJournalRetrying(JOURNAL_ALL);
       if (d) {
         setData(d);
+        primeCache(JOURNAL_ALL, d);
         setFullHistory(true);
       }
     } finally {
@@ -332,8 +352,8 @@ export function JournalWorkspace() {
       ) : null}
 
       {loading ? (
-        <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-20 text-sm text-muted-fg">
-          <Spinner width={16} height={16} /> Loading…
+        <div className="rounded-xl border border-border bg-card p-4">
+          <SkeletonRows rows={10} rowClassName="h-9" label="Loading your journal" />
         </div>
       ) : loadError || !data || !filtered ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-4 py-16 text-center">

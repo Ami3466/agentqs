@@ -36,6 +36,29 @@ const EMPTY: CoverageReport = {
   span: { first: null, last: null },
 };
 
+/** Fingerprint of the cache file (and its WAL) — changes on any commit. Coverage is
+ *  a pure function of that file, so an unchanged fingerprint means an unchanged
+ *  report. */
+function cacheStamp(file: string): string {
+  const part = (p: string): string => {
+    try {
+      const st = fs.statSync(p);
+      return `${st.size}:${Math.floor(st.mtimeMs)}`;
+    } catch {
+      return "-";
+    }
+  };
+  return `${part(file)}|${part(`${file}-wal`)}`;
+}
+
+/** Last report, keyed by the cache file it was built from. The Overview tab is the
+ *  app's front door and every visitor asks the same question of a file that changes
+ *  a few times a day; two full GROUP BYs over a 200k-row table per page view is
+ *  work nobody asked for. Capped in age as well as keyed on the stamp, so even a
+ *  write the stamp somehow missed self-heals within a minute. */
+const memo = new Map<string, { stamp: string; at: number; report: CoverageReport }>();
+const MEMO_MAX_AGE_MS = 60_000;
+
 /**
  * Build the coverage report from the SQLite cache. Two GROUP BYs over `daily`
  * (per-source totals, per-source-per-year counts), both covered by the (source, date)
@@ -43,6 +66,15 @@ const EMPTY: CoverageReport = {
  */
 export function buildCoverage(file: string = dbPath()): CoverageReport {
   if (!fs.existsSync(file)) return EMPTY;
+  const stamp = cacheStamp(file);
+  const hit = memo.get(file);
+  if (hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS) return hit.report;
+  const report = computeCoverage(file);
+  memo.set(file, { stamp, at: Date.now(), report });
+  return report;
+}
+
+function computeCoverage(file: string): CoverageReport {
   ensureIndexes(file);
   const db = openReadonly(file);
   try {

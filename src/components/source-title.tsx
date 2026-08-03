@@ -80,6 +80,8 @@ export function SourceHeader({
   account,
   coverage,
   lastSync,
+  detail,
+  href,
   title,
   badge,
 }: {
@@ -95,6 +97,13 @@ export function SourceHeader({
   account?: string | null;
   coverage?: SourceCoverage;
   lastSync?: string | null;
+  /** Replaces the derived coverage line for a row whose "what landed" is NOT daily
+   *  rows — a channel counts inbox captures, and "no data yet" would be a lie. */
+  detail?: string;
+  /** Where the row links. Defaults to the Journal filtered to this source; pass
+   *  null for a row whose data isn't in the daily table (a channel fills the
+   *  inbox), so it never links to an empty view. */
+  href?: string | null;
   title?: string;
   /** Extra state shown beside the name (stale). */
   badge?: React.ReactNode;
@@ -110,7 +119,7 @@ export function SourceHeader({
     connected || hasData
       ? [
           account || null,
-          coverageLine(coverage),
+          detail ?? coverageLine(coverage),
           // "Synced" is a thing a CONNECTION does. A dropped file was imported once
           // and will never sync itself — saying "synced 2h ago" on it is the same
           // lie as the Connected badge, one line lower.
@@ -142,6 +151,11 @@ export function SourceHeader({
       </Badge>
     ) : null;
 
+  // `href === null` opts a row out of the Journal link entirely (its data isn't in
+  // the daily table); undefined keeps the default.
+  const target = href === undefined ? `/journal?source=${encodeURIComponent(id)}` : href;
+  const linked = hasData && Boolean(target);
+
   const inner = (
     <>
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-fg">
@@ -149,7 +163,7 @@ export function SourceHeader({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className={cn("truncate text-sm font-medium text-fg", hasData && "group-hover:text-accent group-hover:underline")}>
+          <p className={cn("truncate text-sm font-medium text-fg", linked && "group-hover:text-accent group-hover:underline")}>
             {name}
           </p>
           {stateBadge}
@@ -158,14 +172,14 @@ export function SourceHeader({
         {meta.length ? (
           <p className="truncate text-xs text-muted-fg" title={meta.join(" · ")}>
             {meta.join(" · ")}
-            {hasData ? <span className="ml-1 font-medium text-accent">View data →</span> : null}
+            {linked ? <span className="ml-1 font-medium text-accent">View data →</span> : null}
           </p>
         ) : null}
       </div>
     </>
   );
 
-  if (!hasData) {
+  if (!linked) {
     return (
       <div className="flex min-w-0 flex-1 items-center gap-3" title={title}>
         {inner}
@@ -175,7 +189,7 @@ export function SourceHeader({
   return (
     // prefetch off: dozens of rows would each prefetch the same client-filtered page
     <Link
-      href={`/journal?source=${encodeURIComponent(id)}`}
+      href={target as string}
       prefetch={false}
       className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left"
       title={title ?? `See everything ${name} put in your record`}

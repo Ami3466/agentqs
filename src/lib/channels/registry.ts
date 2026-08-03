@@ -27,5 +27,6 @@ export function channelEnv(): ChannelEnv {
     slackBotToken: ch?.slackBotToken || process.env.SLACK_BOT_TOKEN || "",
     slackSigningSecret: ch?.slackSigningSecret || process.env.SLACK_SIGNING_SECRET || "",
     slackApiBase: process.env.SLACK_API_BASE || "",
+    slackPullChannel: ch?.slackPullChannel || process.env.SLACK_PULL_CHANNEL || "",
   };
 }

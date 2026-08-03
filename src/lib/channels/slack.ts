@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import type { ChannelAdapter, ChannelEnv, ChannelStatus, WebhookVerdict } from "./types";
+import type { ChannelAdapter, ChannelEnv, ChannelStatus, InboundMessage, PullResult, WebhookVerdict } from "./types";
 
 /**
  * Slack adapter (Loop 14) — the official Web API + Events API, same three-part
@@ -138,5 +138,106 @@ export const slackAdapter: ChannelAdapter = {
       const msg = json?.error || body || res.statusText;
       throw new Error(`Slack chat.postMessage failed: ${res.status} ${msg}`);
     }
+  },
+
+  /**
+   * Pull `#channel` history since the last cursor (a Slack `ts`).
+   *
+   * This exists because the push path can die silently: Slack disables an Events
+   * subscription that fails often enough, and from our side that is indis-
+   * tinguishable from "nobody sent anything". A poll asks, so the messages sent
+   * while the webhook was down are still there to collect on the next sweep.
+   *
+   * Two things it must get right, both learned from the GitHub-cron version of
+   * this job that ran for 18 days capturing nothing:
+   *
+   *   • NEVER capture the bot's own posts. That job logged the bot's "Saved to
+   *     your inbox…" acks as if they were journal entries, and — worse — moved
+   *     the cursor past them, so its own chatter buried the real messages.
+   *   • The cursor is only advanced by the CALLER, after the messages are safely
+   *     in the record. A pull that lands nothing must not skip anything.
+   */
+  async pull({ env, channel, since }): Promise<PullResult> {
+    const token = env.slackBotToken?.trim();
+    if (!token) throw new Error("Slack bot token is not set (SLACK_BOT_TOKEN).");
+    const fetchImpl = env.fetchImpl ?? fetch;
+
+    const call = async (method: string, params: Record<string, string>): Promise<any> => {
+      const url = `${apiBase(env)}/${method}?${new URLSearchParams(params)}`;
+      const res = await fetchImpl(url, { headers: { authorization: `Bearer ${token}` } });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok || json?.ok === false) {
+        const err = json?.error || res.statusText;
+        // Name the two that actually happen, with the fix, instead of an opaque code.
+        const hint =
+          err === "not_in_channel"
+            ? ` — invite the bot: /invite @agentqs in #${channel}`
+            : err === "missing_scope"
+              ? ` — the bot token needs channels:history + channels:read (groups:* for a private channel); reinstall the app after adding them`
+              : "";
+        throw new Error(`Slack ${method} failed: ${err}${hint}`);
+      }
+      return json;
+    };
+
+    // A name needs resolving to an id; an id (C…/G…/D…) is used as-is.
+    let channelId = channel.replace(/^#/, "").trim();
+    if (!/^[CGD][A-Z0-9]{6,}$/.test(channelId)) {
+      const wanted = channelId;
+      let cursor = "";
+      let found = "";
+      do {
+        const page = await call("conversations.list", {
+          limit: "200",
+          types: "public_channel,private_channel",
+          exclude_archived: "true",
+          ...(cursor ? { cursor } : {}),
+        });
+        found = (page.channels ?? []).find((c: any) => c?.name === wanted)?.id ?? "";
+        cursor = page.response_metadata?.next_cursor ?? "";
+      } while (!found && cursor);
+      if (!found) throw new Error(`Slack channel #${wanted} not found — is the bot a member of it?`);
+      channelId = found;
+    }
+
+    // Page forward from the cursor so a long gap (the webhook was down for a week)
+    // is caught up in one sweep rather than one page per 15 minutes.
+    const raw: any[] = [];
+    let pageCursor = "";
+    for (let page = 0; page < 20; page++) {
+      const data = await call("conversations.history", {
+        channel: channelId,
+        limit: "200",
+        ...(since ? { oldest: since } : {}),
+        ...(pageCursor ? { cursor: pageCursor } : {}),
+      });
+      raw.push(...(data.messages ?? []));
+      pageCursor = data.response_metadata?.next_cursor ?? "";
+      if (!pageCursor) break;
+    }
+
+    const messages: InboundMessage[] = raw
+      // Plain human messages only. `bot_id`/`app_id` is the guard that keeps our
+      // own acks (and every other app's posts) out of the record.
+      .filter((m) => m?.type === "message" && !m.subtype && !m.bot_id && !m.app_id)
+      .filter((m) => typeof m.text === "string" && m.text.trim() !== "")
+      // `oldest` is INCLUSIVE, so the cursor message itself comes back every time.
+      .filter((m) => !since || Number(m.ts) > Number(since))
+      .sort((a, b) => Number(a.ts) - Number(b.ts))
+      .map((m) => ({
+        channel: "slack",
+        // Slack's ts is unique per channel and stable — the natural dedupe key, so
+        // re-pulling an overlapping window can never double-capture.
+        eventId: `slack:${channelId}:${m.ts}`,
+        target: channelId,
+        userId: String(m.user ?? ""),
+        text: String(m.text).trim(),
+      }));
+
+    return {
+      messages,
+      // Unchanged when nothing new arrived, so the next sweep asks the same question.
+      cursor: raw.length ? String(Math.max(...raw.map((m) => Number(m.ts))).toFixed(6)) : since,
+    };
   },
 };

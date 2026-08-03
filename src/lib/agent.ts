@@ -9,7 +9,7 @@ import { openReadonly } from "./db";
 import { semanticSearch } from "./embeddings";
 import { findSimilarImages, photoContext } from "./photos";
 import { fallbackModel, type ResolvedLlm } from "./models";
-import { appendInboxItem, rebuild } from "./record";
+import { appendInboxItem, landInboxCaptures } from "./record";
 import { recordDir } from "./paths";
 import { autoStructureNewItem, structurePending } from "./structure-run";
 import type { LlmMessage } from "./llm";
@@ -234,7 +234,7 @@ export function mentorTools(dbFile: string, used: Used) {
       // Parity with `//` memos: auto-structure when the Settings toggle is on
       // (structurePending rebuilds when it merges — rebuild only otherwise).
       const auto = await autoStructureNewItem(item.id);
-      if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
+      if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
       return { saved: true, structured: (auto?.structured ?? 0) > 0 };
     },
   });
@@ -247,8 +247,8 @@ export function mentorTools(dbFile: string, used: Used) {
       const t = text.trim();
       if (!t) return { error: "Empty insight." };
       const rDir = recordDir();
-      appendInboxItem({ text: t, source: "insight" }, { recordDir: rDir });
-      rebuild({ recordDir: rDir });
+      const item = appendInboxItem({ text: t, source: "insight" }, { recordDir: rDir });
+      landInboxCaptures([item], { recordDir: rDir });
       return { saved: true };
     },
   });
@@ -261,8 +261,8 @@ export function mentorTools(dbFile: string, used: Used) {
       const t = text.trim();
       if (!t) return { error: "Empty commitment." };
       const rDir = recordDir();
-      appendInboxItem({ text: t, source: "commitment" }, { recordDir: rDir });
-      rebuild({ recordDir: rDir });
+      const item = appendInboxItem({ text: t, source: "commitment" }, { recordDir: rDir });
+      landInboxCaptures([item], { recordDir: rDir });
       return { saved: true };
     },
   });

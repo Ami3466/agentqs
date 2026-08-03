@@ -26,6 +26,8 @@ npm run dev               # → http://localhost:3000
 
 The agent can import and structure the data already on your machine, connect your accounts and set up syncs.
 
+Contributing? `npm run verify:tree` type-checks the tree **git would push** (not your working copy), which catches the one thing that has ever broken this repo's CI: a new module imported but never committed. Each feature also has a deterministic script - `npm run capture:test` covers the capture path, `npm run channels:test` the Slack/Telegram bots, `npm run rebuild:verify` the derived cache.
+
 Better on the cloud: it needs to be live for the Slack and Telegram integrations, and OAuth apps need a public, stable callback URL. Either way you can back your data up, encrypted, to your own Google Drive - on the schedule you set.
 
 <div align="center">
@@ -81,7 +83,9 @@ Text or voice, from the app, CLI or a channel. They land in your inbox - structu
 
 ### Channels
 
-Slack and Telegram: log memos and ask your record questions from where you already are. They are capture channels, not scrapers - what you send the bot lands in your inbox, and your Slack history is never read. The Pipeline lists them under **Capture channels**, so a bot you haven't linked yet never looks like a broken data source.
+Slack and Telegram: log memos and ask your record questions from where you already are. They are capture channels, not scrapers - what you send the bot lands in your inbox, and your Slack history is never read. The Pipeline lists them among your connections, in the same row as everything else, with the count of what they captured and a link to their setup, so a bot you haven't linked yet never looks like a broken data source and a linked one is never asked to connect again. Your message is written to the record and acknowledged before the reply is composed, because Slack drops a delivery it hasn't heard back from in 3 seconds and eventually disables the subscription - a bot that answers slowly must never become a bot that stops receiving. Every inbound delivery is written down, **refusals included**, and the row says which failure you have: a bot nothing ever reaches (the platform stopped calling - check its Event Subscriptions) reads differently from one whose every message the app refuses (a rotated signing secret). Both used to look identical: an empty inbox.
+
+**Polling, not just push.** Name a conversation under Settings → Channels → *Also poll this channel* and agentqs checks it on its own schedule (hourly by default) as well as receiving webhooks - so the messages you sent while the webhook was down are still collected on the next sweep instead of being lost. Both paths key on Slack's own message id, so a message that arrives twice lands once, and the bot's own replies are never captured as entries. It is an ordinary due-source swept by the in-app scheduler **on the same host as your record**: no external CI minutes to run out, nothing to keep in sync with a second repo. `agentqs sync --id slack` runs it by hand.
 
 **Agent rules** (Settings → Agent) message you the other way: *when X, ping me*. X is a time (an 8pm evening brief) or a data line crossing (resting HR over 55, social over 60 min today) - the threshold is a plain compare over your record, no AI. The message is a fixed line, or an AI brief the agent writes from your day. The in-app scheduler checks every 15 minutes, so an alert is as fresh as the source behind its metric. Set them in the app, from the CLI (`agentqs rules add`), or let the agent add its own via MCP.
 
@@ -199,6 +203,8 @@ Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a s
 - **Off-site backups built in.** `agentqs backup github --remote <url>` pushes a snapshot of your plain-text record to a private repo (files past GitHub's size limit are excluded and named, never silently dropped), and `agentqs backup drive` uploads the whole store as one AES-256-GCM-encrypted archive to your Google Drive on a schedule (`--schedule daily|off`, or the switches in Settings → Data) - `agentqs backup restore` brings either back. Backups are where your data is *kept*, not where it comes from: Google Drive here is a destination, so it never shows up among your data sources.
 - **Raw files on request, from Drive.** For raw content the record deliberately never stores (emails, whole message threads, PDFs), keep it in a Google Drive folder and point agentqs at it in Settings → Data → Drive import. `agentqs drive list` shows what's there and `agentqs drive pull <file>` reads one file's text on demand - nothing is synced into your record, and the chat agent pulls a file only when a question needs it. Read-only access, a separate grant from the backup one.
 - **Token use is explicit.** Capture and search are local. AI runs only when you chat, structure prose, or run a channel - CLI-agent workflows skip it entirely.
+- **Nothing is scheduled outside the app.** There is no crontab, no launchd line and no CI job driving your data: the running server sweeps every 15 minutes for due syncs, scheduled notifications and agent rules (`AGENTQS_NO_SCHEDULER=1` turns it off; `agentqs sync --due` is the headless equivalent). GitHub Actions only builds the container image.
+- **Tabs remember what they loaded.** Switching between Overview, Journal, Graphs and Pipeline paints the last answer immediately and refreshes behind it, and each tab shows its own shape while a first load runs instead of a bare "Loading…". A capture patches the derived cache in place rather than rebuilding it, so logging a memo costs milliseconds on a record of any size.
 
 ## License
 

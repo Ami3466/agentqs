@@ -147,6 +147,15 @@ const TABS: { id: string; label: string; icon: IconComponent }[] = [
 
 const HASH_TABS: Record<string, string> = { memos: "voice" };
 
+/** What GET /api/channels/<id> answers: is the bot wired up, AND is the platform
+ *  actually delivering to it. The second half is what a silent bot needs. */
+interface ChannelProbe {
+  enabled?: boolean;
+  verified?: boolean;
+  verdict?: { tone: "ok" | "warn" | "error"; text: string } | null;
+  deliveries?: { last?: { at: string; outcome: string; detail?: string } } | null;
+}
+
 function tabForHash(hash: string): string | null {
   if (TABS.some((t) => t.id === hash)) return hash;
   return HASH_TABS[hash] ?? null;
@@ -321,6 +330,8 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [tgToken, setTgToken] = useState("");
   const [slackToken, setSlackToken] = useState("");
   const [slackSecret, setSlackSecret] = useState("");
+  // The conversation the app POLLS on its own schedule, as well as receiving pushes.
+  const [slackPull, setSlackPull] = useState(config.channels.slackPullChannel ?? "");
   /**
    * The LIVE state of each bot, from its own capability probe — the truth the
    * webhook itself runs on. The server-rendered config only knows what's in
@@ -328,15 +339,25 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
    * instance) worked perfectly while this page called it "Not linked". Probe wins;
    * config is the fallback until it answers.
    */
-  const [channelLive, setChannelLive] = useState<Record<string, { enabled: boolean; verified: boolean }>>({});
+  const [channelLive, setChannelLive] = useState<Record<string, ChannelProbe>>({});
   const loadChannels = useCallback(async () => {
     const probes = await Promise.all(
       ["slack", "telegram"].map(async (id) => {
         try {
           const res = await fetch(`/api/channels/${id}`, { cache: "no-store" });
           if (!res.ok) return null;
-          const s = (await res.json()) as { enabled?: boolean; verified?: boolean };
-          return [id, { enabled: Boolean(s.enabled), verified: Boolean(s.verified) }] as const;
+          const s = (await res.json()) as ChannelProbe;
+          return [
+            id,
+            {
+              enabled: Boolean(s.enabled),
+              verified: Boolean(s.verified),
+              // Inbound health travels with the probe: a token can be perfect while
+              // the platform has stopped calling, or while every call is refused.
+              verdict: s.verdict ?? null,
+              deliveries: s.deliveries ?? null,
+            },
+          ] as const;
         } catch {
           return null; // a failed probe must never downgrade a working bot to "Not linked"
         }
@@ -841,6 +862,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         ...(tgToken ? { telegramBotToken: tgToken } : {}),
         ...(slackToken ? { slackBotToken: slackToken } : {}),
         ...(slackSecret ? { slackSigningSecret: slackSecret } : {}),
+        slackPullChannel: slackPull.trim(),
         replies,
       },
     };
@@ -1263,6 +1285,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         icon={Telegram}
         desc="DM your bot to chat with your record — “// a note” logs a memo with zero tokens."
         linked={channelLive.telegram?.enabled ?? config.channels.telegram}
+        verdict={channelLive.telegram?.verdict ?? null}
+        lastDeliveryAt={channelLive.telegram?.deliveries?.last?.at ?? null}
+        lastDeliveryOutcome={channelLive.telegram?.deliveries?.last?.outcome ?? null}
         token={tgToken}
         onToken={setTgToken}
         tokenPlaceholder="123456:ABC…"
@@ -1283,6 +1308,9 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         icon={Slack}
         desc="DM or @mention the bot to chat with your record — “// a note” logs a memo with zero tokens."
         linked={channelLive.slack?.enabled ?? config.channels.slack}
+        verdict={channelLive.slack?.verdict ?? null}
+        lastDeliveryAt={channelLive.slack?.deliveries?.last?.at ?? null}
+        lastDeliveryOutcome={channelLive.slack?.deliveries?.last?.outcome ?? null}
         token={slackToken}
         onToken={setSlackToken}
         tokenPlaceholder="xoxb-…"
@@ -1290,6 +1318,8 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         secret={slackSecret}
         onSecret={setSlackSecret}
         secretSet={channelLive.slack?.verified ?? config.channels.slackVerified}
+        pullChannel={slackPull}
+        onPullChannel={setSlackPull}
         manifest={slackManifest}
         steps={[
           "api.slack.com/apps → Create New App → From a manifest → pick your workspace → paste the manifest below. It sets the scopes, the events and this webhook URL in one go.",
@@ -1930,6 +1960,11 @@ function ChannelCard({
   secret,
   onSecret,
   secretSet,
+  pullChannel,
+  onPullChannel,
+  verdict,
+  lastDeliveryAt,
+  lastDeliveryOutcome,
   prefs,
   onPrefs,
   skills,
@@ -1939,6 +1974,11 @@ function ChannelCard({
   icon: IconComponent;
   desc: string;
   linked: boolean;
+  /** One actionable sentence about INBOUND deliveries — a stored token says
+   *  nothing about whether the platform is still calling us. */
+  verdict?: { tone: "ok" | "warn" | "error"; text: string } | null;
+  lastDeliveryAt?: string | null;
+  lastDeliveryOutcome?: string | null;
   token: string;
   onToken: (v: string) => void;
   tokenPlaceholder: string;
@@ -1947,6 +1987,9 @@ function ChannelCard({
   /** Platform app manifest to paste when creating the app (Slack) — one paste sets
    *  scopes + events + the request URL. Omitted by platforms without one. */
   manifest?: string;
+  /** A conversation to POLL on our own schedule, as well as receiving pushes. */
+  pullChannel?: string;
+  onPullChannel?: (v: string) => void;
   /** Request-signing secret (Slack). Absent → the channel has no signature check. */
   secret?: string;
   onSecret?: (v: string) => void;
@@ -1993,6 +2036,27 @@ function ChannelCard({
       }
     >
       <div className="space-y-4">
+      {/* Has anything actually ARRIVED? "Linked" only means a token is stored, and
+          it stays green while a disabled subscription or a wrong signing secret
+          quietly drops every message. */}
+      {verdict && verdict.tone !== "ok" ? (
+        <p
+          className={cn(
+            "rounded-lg border px-3 py-2 text-xs",
+            verdict.tone === "error"
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-warning/30 bg-warning/10 text-warning",
+          )}
+        >
+          {verdict.text}
+        </p>
+      ) : null}
+      {lastDeliveryAt ? (
+        <p className="text-xs text-muted-fg">
+          Last inbound delivery: {ago(lastDeliveryAt as string)}
+          {lastDeliveryOutcome ? ` · ${lastDeliveryOutcome}` : ""}
+        </p>
+      ) : null}
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-medium text-fg">Setup</p>
         <button
@@ -2067,6 +2131,19 @@ function ChannelCard({
               value={secret ?? ""}
               onChange={(e) => onSecret(e.target.value)}
               placeholder="a1b2c3…"
+              className="font-mono"
+            />
+          </Field>
+        ) : null}
+        {onPullChannel ? (
+          <Field
+            label="Also poll this channel"
+            hint="Channel name (daily-log) or id. The app checks it on its own schedule, so messages still land if the platform stops pushing. Blank = push only."
+          >
+            <Input
+              value={pullChannel ?? ""}
+              onChange={(e) => onPullChannel(e.target.value)}
+              placeholder="daily-log"
               className="font-mono"
             />
           </Field>

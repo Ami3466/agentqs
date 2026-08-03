@@ -44,7 +44,18 @@ export interface ChannelEnv {
   slackBotToken?: string; // SLACK_BOT_TOKEN (xoxb-…)
   slackSigningSecret?: string; // SLACK_SIGNING_SECRET (required — inbound refused without it)
   slackApiBase?: string; // default https://slack.com/api
+  /** Channel to PULL history from (name like "daily-log", or a C…/G… id). Unset
+   *  → Slack is push-only. */
+  slackPullChannel?: string;
   fetchImpl?: typeof fetch; // injectable for tests
+}
+
+/** One pull of a channel's history. `cursor` is stored verbatim and handed back as
+ *  `since` next time — only advanced when the pull succeeded, so a failed sweep
+ *  re-reads rather than skipping messages. */
+export interface PullResult {
+  messages: InboundMessage[];
+  cursor: string;
 }
 
 export interface ChannelStatus {
@@ -67,4 +78,16 @@ export interface ChannelAdapter {
   ingest(args: { env: ChannelEnv; headers: Headers; rawBody: string }): WebhookVerdict;
   /** Post a reply back out via the platform's official API. */
   send(env: ChannelEnv, target: string, text: string): Promise<void>;
+  /**
+   * PULL new messages from a channel, oldest-first, instead of waiting to be
+   * pushed. The webhook is the live path; this is the one that still works when
+   * the platform has stopped calling (a disabled subscription, a lapsed tunnel, a
+   * host that was down) — it asks, so a gap self-heals on the next sweep instead
+   * of being lost forever.
+   *
+   * `since` is the adapter's own opaque cursor from the previous pull ("" = start
+   * from the platform's default window). Adapters without a history API omit this
+   * and simply aren't pullable.
+   */
+  pull?(args: { env: ChannelEnv; channel: string; since: string }): Promise<PullResult>;
 }
