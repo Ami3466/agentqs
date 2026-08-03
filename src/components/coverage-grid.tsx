@@ -31,25 +31,68 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Row({ s, years, max }: { s: SourceCoverage; years: number[]; max: number }) {
+/** A cell's target. From Pipeline that is a link into the Journal; from INSIDE the
+ *  Journal a navigation would be a no-op the user reads as a broken click, so the
+ *  host passes `onPick` and the cell drills into the table it is already on. */
+function Open({
+  source,
+  onPick,
+  className,
+  title,
+  children,
+}: {
+  source: string;
+  onPick?: (source: string) => void;
+  className: string;
+  title: string;
+  children?: React.ReactNode;
+}) {
+  if (onPick) {
+    return (
+      <button type="button" onClick={() => onPick(source)} title={title} className={cn("w-full text-left", className)}>
+        {children}
+      </button>
+    );
+  }
+  return (
+    <Link href={`/journal?source=${encodeURIComponent(source)}`} title={title} className={className}>
+      {children}
+    </Link>
+  );
+}
+
+function Row({
+  s,
+  years,
+  max,
+  onPick,
+}: {
+  s: SourceCoverage;
+  years: number[];
+  max: number;
+  onPick?: (source: string) => void;
+}) {
+  const where = onPick ? "Show it in the table." : "Open in Journal.";
   return (
     <tr className="group">
-      <td className="sticky left-0 z-10 bg-bg pr-3 group-hover:bg-muted/40">
-        <Link
-          href={`/journal?source=${encodeURIComponent(s.source)}`}
+      <td className="sticky left-0 z-10 bg-bg pl-4 pr-3 group-hover:bg-muted/40">
+        <Open
+          source={s.source}
+          onPick={onPick}
           className="flex items-center gap-2 py-1"
-          title={`${s.source} — ${s.rows.toLocaleString()} rows, ${s.days.toLocaleString()} days (${s.first} → ${s.last}). Open in Journal.`}
+          title={`${s.source} — ${s.rows.toLocaleString()} rows, ${s.days.toLocaleString()} days (${s.first} → ${s.last}). ${where}`}
         >
           <span className="min-w-0 flex-1 truncate text-sm text-fg hover:text-accent">{s.source}</span>
           <Badge className="shrink-0">{fmt(s.rows)}</Badge>
-        </Link>
+        </Open>
       </td>
       {years.map((y) => {
         const n = s.byYear[String(y)] ?? 0;
         return (
           <td key={y} className="px-0.5">
-            <Link
-              href={`/journal?source=${encodeURIComponent(s.source)}`}
+            <Open
+              source={s.source}
+              onPick={onPick}
               title={n ? `${s.source} · ${y} · ${n.toLocaleString()} rows` : `${s.source} · ${y} · no data`}
               className={cn(
                 "block h-6 w-6 rounded-sm transition-transform hover:scale-125 hover:ring-1 hover:ring-accent",
@@ -63,34 +106,68 @@ function Row({ s, years, max }: { s: SourceCoverage; years: number[]; max: numbe
   );
 }
 
+/** Section title. On the Pipeline page the heatmap is one panel among several, so it
+ *  says what it is — including while it loads, or the section is an anonymous block
+ *  of grey bars. On the Journal tab it is the whole view, and the hint changes with
+ *  where a click lands. */
+function Header({ hint }: { hint: string }) {
+  return (
+    <div className="flex items-center gap-2 px-4 pt-4">
+      <p className="shrink-0 text-sm font-medium text-fg">Coverage</p>
+      <p className="min-w-0 flex-1 truncate text-xs text-muted-fg" title={`Every source by year, richest first. ${hint}`}>
+        every source by year — {hint.toLowerCase()}
+      </p>
+    </div>
+  );
+}
+
 /** Holds the heatmap's shape while it loads — four stat slots and a run of source
  *  rows — so the page lands once instead of jumping when the data arrives. */
-function CoverageSkeleton() {
+function CoverageSkeleton({ hint }: { hint: string }) {
   return (
-    <div className="space-y-4">
-      <Card className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
+    <Card className="p-0">
+      <Header hint={hint} />
+      <div className="grid grid-cols-2 gap-4 px-4 pt-3 sm:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
           <div key={i} className="space-y-1.5">
             <Skeleton className="h-6 w-16" />
             <Skeleton className="h-3 w-20" />
           </div>
         ))}
-      </Card>
-      <Card className="p-4">
-        <SkeletonRows rows={8} rowClassName="h-6" label="Loading your record" />
-      </Card>
-    </div>
+      </div>
+      <div className="p-4">
+        <SkeletonRows rows={6} rowClassName="h-6" label="Loading your record" />
+      </div>
+    </Card>
   );
 }
 
-/** The Overview tab: the whole record as a source×year heatmap. Derived entirely from
- *  GET /api/coverage (survives reload), richest source first. A cell → the Journal
- *  filtered to that source, so "see all my data" is one glance and one click. */
-export function CoverageGrid() {
-  // Cached: coming back to Overview from another tab renders the last heatmap
-  // instantly and refreshes behind it, instead of re-running the whole scan and
-  // showing a bare "Loading…" every single visit.
+/** The whole record as a source×year heatmap, derived entirely from GET /api/coverage
+ *  (survives reload), richest source first. Two hosts, one component:
+ *
+ *  • Pipeline — under the source list, because it grades it: which stream goes back
+ *    how far, and where the holes are. Cells link into the Journal.
+ *  • Journal — a third view beside Table and Timeline. The host passes `onSourceClick`
+ *    so a cell drills into the table it is already on, and `emptyHint` because
+ *    "connect a source" points somewhere else from there.
+ */
+export function CoverageGrid({
+  onSourceClick,
+  emptyHint = "No data yet. Connect a source above to fill this in.",
+  tall = false,
+}: {
+  onSourceClick?: (source: string) => void;
+  emptyHint?: string;
+  /** The grid is the whole view (Journal) rather than one panel among several
+   *  (Pipeline), so it may take more of the page before it starts scrolling. */
+  tall?: boolean;
+} = {}) {
+  // Cached: coming back to a tab renders the last heatmap instantly and refreshes
+  // behind it, instead of re-running the whole scan and showing a bare "Loading…"
+  // every single visit. A capture on the same page invalidates the key, which
+  // refetches in place (client-cache keeps it on screen).
   const { data, error, loading } = useCachedFetch<CoverageReport>("/api/coverage");
+  const hint = onSourceClick ? "Click a cell to show that source in the table." : "Click a cell to open it in the Journal.";
 
   const max = useMemo(() => {
     if (!data) return 1;
@@ -99,32 +176,44 @@ export function CoverageGrid() {
     return m;
   }, [data]);
 
-  if (loading) return <CoverageSkeleton />;
+  if (loading) return <CoverageSkeleton hint={hint} />;
   if (error && !data) return <Card className="p-4 text-sm text-destructive">{error}</Card>;
-  if (!data) return <CoverageSkeleton />;
+  if (!data) return <CoverageSkeleton hint={hint} />;
   if (data.sources.length === 0)
-    return <Card className="text-sm text-muted-fg">No data yet. Connect a source in Pipeline to fill this in.</Card>;
+    return (
+      <Card className="p-0">
+        <Header hint={hint} />
+        <p className="p-4 text-sm text-muted-fg">{emptyHint}</p>
+      </Card>
+    );
 
   const spanLabel =
     data.span.first && data.span.last ? `${data.span.first.slice(0, 4)}–${data.span.last.slice(0, 4)}` : "—";
 
   return (
-    <div className="space-y-4">
-      {/* A refresh that fails over data already on screen: keep the heatmap, say so. */}
-      {error ? <p className="text-xs text-destructive">Could not refresh: {error}</p> : null}
-      <Card className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="sources" value={String(data.sources.length)} />
-        <Stat label="rows" value={fmt(data.totalRows)} />
-        <Stat label="days covered" value={fmt(data.totalDays)} />
-        <Stat label="span" value={spanLabel} />
-      </Card>
+    // One panel, like every other section on this page: title, the record's totals,
+    // then the grid those totals summarize.
+    <Card className="overflow-hidden p-0">
+      <Header hint={hint} />
+      <div className="px-4 pt-3">
+        {/* A refresh that fails over data already on screen: keep the heatmap, say so. */}
+        {error ? <p className="pb-2 text-xs text-destructive">Could not refresh: {error}</p> : null}
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Stat label="sources" value={String(data.sources.length)} />
+          <Stat label="rows" value={fmt(data.totalRows)} />
+          <Stat label="days covered" value={fmt(data.totalDays)} />
+          <Stat label="span" value={spanLabel} />
+        </div>
+      </div>
 
-      <Card className="overflow-hidden p-0">
-        <div className="max-h-[70vh] overflow-auto scrollbar-thin">
+      <div className="pt-3">
+        {/* No padding on the scrollport: the sticky source column and year header
+            pin to its edges, and any inset would let rows show through the gap. */}
+        <div className={cn("overflow-auto scrollbar-thin pb-3", tall ? "max-h-[70vh]" : "max-h-[50vh]")}>
           <table className="border-separate border-spacing-0">
             <thead>
               <tr>
-                <th className="sticky left-0 top-0 z-20 bg-bg py-2 pr-3 text-left text-xs font-medium text-muted-fg">
+                <th className="sticky left-0 top-0 z-20 bg-bg py-2 pl-4 pr-3 text-left text-xs font-medium text-muted-fg">
                   source
                 </th>
                 {data.years.map((y) => (
@@ -139,12 +228,12 @@ export function CoverageGrid() {
             </thead>
             <tbody>
               {data.sources.map((s) => (
-                <Row key={s.source} s={s} years={data.years} max={max} />
+                <Row key={s.source} s={s} years={data.years} max={max} onPick={onSourceClick} />
               ))}
             </tbody>
           </table>
         </div>
-      </Card>
-    </div>
+      </div>
+    </Card>
   );
 }

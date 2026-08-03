@@ -53,17 +53,13 @@ Better on the cloud: it needs to be live for the Slack and Telegram integrations
   </tr>
 </table>
 
-### Overview
-
-The whole record at a glance: a source × year heatmap of every stream you have - how far back each goes, and where the holes are. Click any cell to open the Journal filtered to that source. Same map over the API (`GET /api/coverage`), the CLI (`agentqs coverage`), and the `coverage` MCP tool.
-
 ### Journal
 
-One daily record of everything: sleep, steps, mood, focus, screen time, workouts, commits - plain CSVs you own, as a table or a timeline. **Scan data** keeps it clean: duplicate columns merge, dead columns drop, messy values get fixed. One click each, all undoable. `agentqs audit` hands your AI agent the evidence for a deeper review - impossible dates, coverage holes, sources gone quiet, outlier values.
+One daily record of everything: sleep, steps, mood, focus, screen time, workouts, commits - plain CSVs you own, as a table, a timeline, or the **Coverage** map (the same source × year heatmap Pipeline shows - click a cell to filter the table to that source). **Scan data** keeps it clean: duplicate columns merge, dead columns drop, messy values get fixed. One click each, all undoable. `agentqs audit` hands your AI agent the evidence for a deeper review - impossible dates, coverage holes, sources gone quiet, outlier values.
 
 ### Data
 
-Connect a source, or drop any file and hit **Structure** - it lands in your record. Clean CSVs map instantly, no LLM. Every capture is logged: structured, pending or rejected, and everything is revertible. Click any source's name to jump to the Journal filtered to just its data (`/journal?source=<id>`).
+Connect a source, or drop any file and hit **Structure** - it lands in your record. Clean CSVs map instantly, no LLM. Every capture is logged: structured, pending or rejected, and everything is revertible. Click any source's name to jump to the Journal filtered to just its data (`/journal?source=<id>`). Under the source list, a **coverage** heatmap grades what you have: every stream by year, how far back each goes, and where the holes are - click a cell to open that source in the Journal (the Journal's own Coverage view shows the same map). Same map over the API (`GET /api/coverage`), the CLI (`agentqs coverage`), and the `coverage` MCP tool.
 
 ### Graphs
 
@@ -204,7 +200,7 @@ Any other host: mount storage at `/data`, set `AGENTQS_DATA_DIR=/data`, keep a s
 - **Raw files on request, from Drive.** For raw content the record deliberately never stores (emails, whole message threads, PDFs), keep it in a Google Drive folder and point agentqs at it in Settings → Data → Drive import. `agentqs drive list` shows what's there and `agentqs drive pull <file>` reads one file's text on demand - nothing is synced into your record, and the chat agent pulls a file only when a question needs it. Read-only access, a separate grant from the backup one.
 - **Token use is explicit.** Capture and search are local. AI runs only when you chat, structure prose, or run a channel - CLI-agent workflows skip it entirely.
 - **Nothing is scheduled outside the app.** There is no crontab, no launchd line and no CI job driving your data: the running server sweeps every 15 minutes for due syncs, scheduled notifications and agent rules (`AGENTQS_NO_SCHEDULER=1` turns it off; `agentqs sync --due` is the headless equivalent). GitHub Actions only builds the container image.
-- **Tabs remember what they loaded.** Switching between Overview, Journal, Graphs and Pipeline paints the last answer immediately and refreshes behind it, and each tab shows its own shape while a first load runs instead of a bare "Loading…". A capture patches the derived cache in place rather than rebuilding it, so logging a memo costs milliseconds on a record of any size.
+- **Tabs remember what they loaded.** Switching between Journal, Graphs and Pipeline paints the last answer immediately and refreshes behind it, and each tab shows its own shape while a first load runs instead of a bare "Loading…". A capture patches the derived cache in place rather than rebuilding it, so logging a memo costs milliseconds on a record of any size.
 
 ## License
 

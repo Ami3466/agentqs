@@ -307,7 +307,7 @@ export function JournalTable({
         return;
       }
       // An edit rewrote daily cells: every cached answer derived from them (the
-      // Overview heatmap, the other journal window, the graphs) is now stale.
+      // coverage heatmap, the other journal window, the graphs) is now stale.
       invalidate();
       onData(body.journal);
       resetDraft();
