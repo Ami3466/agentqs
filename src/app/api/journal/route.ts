@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { apiError } from "@/lib/api";
+import { apiError, cachedJson } from "@/lib/api";
 import { readJournal } from "@/lib/journal";
 
 export const runtime = "nodejs";
@@ -26,7 +26,13 @@ export async function GET(req: Request) {
         : 180;
   const numericOnly = url.searchParams.get("numeric") === "1";
   try {
-    return NextResponse.json(readJournal({ days, numericOnly }));
+    // The heaviest read in the app (full history is megabytes). The ETag makes a
+    // revisit a bodiless 304 that never even builds the payload.
+    return cachedJson(req, () => readJournal({ days, numericOnly }), [
+      String(days),
+      numericOnly,
+      new Date().toISOString().slice(0, 10),
+    ]);
   } catch (e) {
     return apiError(e);
   }

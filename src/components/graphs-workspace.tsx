@@ -13,10 +13,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { JournalData } from "@/lib/journal";
-import type { GraphRangePreset, GraphViewType, SavedGraph } from "@/lib/graphs";
+import type { GraphRangePreset, GraphSeriesData, GraphViewType, SavedGraph } from "@/lib/graphs";
 import { Button, Card, Input, Select, SkeletonRows, cn } from "./ui";
-import { peekCache, primeCache } from "@/lib/client-cache";
+import { fetchCached, peekCache } from "@/lib/client-cache";
 import { RangePicker } from "./range-picker";
 import { Plus, Spinner, Trash } from "./icons";
 
@@ -121,44 +120,27 @@ function defaultDraft(series: SeriesDef[]): DraftGraph {
   };
 }
 
-function buildSeries(data: JournalData | null): SeriesDef[] {
+/** Rehydrate the wire shape into the date→value maps the charts read. `d` present
+ *  means a sparse series (only the days it was recorded); `d` absent means the
+ *  values line up with `dates` one for one. The aggregation itself already
+ *  happened in SQL — this is only unpacking. */
+function buildSeries(data: GraphSeriesData | null): SeriesDef[] {
   if (!data) return [];
-  const series: SeriesDef[] = [];
-
-  for (const metric of data.metrics) {
+  return data.series.map((s) => {
     const values = new Map<string, number>();
-    for (const day of data.days) {
-      const v = day.values[metric.key]?.num;
-      if (typeof v === "number" && Number.isFinite(v)) values.set(day.date, v);
+    if (s.d) {
+      for (let i = 0; i < s.d.length; i++) {
+        const date = data.dates[s.d[i]];
+        if (date !== undefined) values.set(date, s.v[i]);
+      }
+    } else {
+      for (let i = 0; i < s.v.length; i++) {
+        const date = data.dates[i];
+        if (date !== undefined) values.set(date, s.v[i]);
+      }
     }
-    if (values.size) {
-      series.push({ key: `metric:${metric.key}`, label: `${metric.source} · ${metric.metric}`, values });
-    }
-  }
-
-  const addCount = (key: string, label: string, count: (day: JournalData["days"][number]) => number) => {
-    const values = new Map<string, number>();
-    for (const day of data.days) values.set(day.date, count(day));
-    series.push({ key, label, values });
-  };
-
-  addCount("count:data-points", "Count · data points per day", (day) => Object.keys(day.values).length);
-  addCount("count:logs", "Count · logs per day", (day) => day.memos.length);
-  addCount("count:sessions", "Count · sessions per day", (day) => day.sessions.length);
-  addCount(
-    "count:activity",
-    "Count · all activity per day",
-    (day) => Object.keys(day.values).length + day.memos.length + day.sessions.length,
-  );
-
-  const sources = [...new Set(data.metrics.map((m) => m.source))].sort();
-  for (const source of sources) {
-    addCount(`count:source:${source}`, `Count · ${source} points per day`, (day) =>
-      Object.keys(day.values).filter((key) => key.startsWith(`${source}.`)).length,
-    );
-  }
-
-  return series;
+    return { key: s.key, label: s.label, values };
+  });
 }
 
 function rangeDates(graph: Pick<SavedGraph, "range" | "startDate" | "endDate">, dates: string[]) {
@@ -630,40 +612,43 @@ function GraphCard({
   );
 }
 
-/** Numbers-only full history. Its own cache key — the same bytes are re-derived on
- *  every visit to Graphs otherwise, and on a lifetime record that is the single
- *  most expensive request the app makes. */
-const GRAPHS_JOURNAL = "/api/journal?days=all&numeric=1";
+/** Every plottable line, already aggregated: one date axis plus numbers. Its own
+ *  cache key, so a revisit draws from memory instead of re-fetching the record. */
+const GRAPHS_SERIES = "/api/graphs/series";
 
 export function GraphsWorkspace() {
-  const [data, setData] = useState<JournalData | null>(() => peekCache<JournalData>(GRAPHS_JOURNAL) ?? null);
+  const [data, setData] = useState<GraphSeriesData | null>(
+    () => peekCache<GraphSeriesData>(GRAPHS_SERIES) ?? null,
+  );
   const [graphs, setGraphs] = useState<SavedGraph[]>([]);
-  const [loading, setLoading] = useState(() => peekCache<JournalData>(GRAPHS_JOURNAL) === undefined);
+  const [loading, setLoading] = useState(() => peekCache<GraphSeriesData>(GRAPHS_SERIES) === undefined);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const [journal, saved] = await Promise.all([
-        // Full history, numbers only — graphs never read the (huge) cell text.
-        fetch(GRAPHS_JOURNAL).then((r) => (r.ok ? (r.json() as Promise<JournalData>) : null)),
-        fetch("/api/graphs")
-          .then((r) => (r.ok ? (r.json() as Promise<{ graphs: SavedGraph[] }>) : { graphs: [] }))
-          .catch(() => ({ graphs: [] as SavedGraph[] })),
-      ]);
-      if (!alive) return;
-      // Keep whatever is already drawn if the refresh came back empty.
-      if (journal) {
-        setData(journal);
-        primeCache(GRAPHS_JOURNAL, journal);
-      }
-      setGraphs(saved.graphs ?? []);
-      setLoading(false);
-    })();
-    return () => {
-      alive = false;
-    };
+  const [loadError, setLoadError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoadError("");
+    // Both legs catch their own failure. A rejected fetch used to escape the async
+    // body entirely, so `setLoading(false)` never ran and the tab sat on its
+    // skeleton FOREVER — and the biggest payload in the app is exactly the one that
+    // rejects (Chrome answers a 15MB body it can't file with
+    // net::ERR_CACHE_WRITE_FAILURE). A tab may show an error; it may never hang.
+    const [series, saved] = await Promise.all([
+      fetchCached<GraphSeriesData>(GRAPHS_SERIES).catch((e: Error) => {
+        setLoadError(e.message || "Could not load the graph data.");
+        return null;
+      }),
+      fetchCached<{ graphs: SavedGraph[] }>("/api/graphs").catch(() => ({ graphs: [] as SavedGraph[] })),
+    ]);
+    // Keep whatever is already drawn if the refresh came back empty.
+    if (series) setData(series);
+    setGraphs(saved.graphs ?? []);
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const series = useMemo(() => buildSeries(data), [data]);
   const [draft, setDraft] = useState<DraftGraph>(() => defaultDraft([]));

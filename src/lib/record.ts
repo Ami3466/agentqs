@@ -818,6 +818,165 @@ export function landInboxCaptures(items: InboxItem[], opts: { recordDir?: string
   if (upsertInboxItemsInCache(items, { dbFile }) === 0) rebuild(opts);
 }
 
+/**
+ * Patch the cache for the daily sources a write rewrote — the ONE call every
+ * writer makes instead of `rebuild()`.
+ *
+ * A full rebuild re-reads the entire record and re-indexes every event: on a
+ * 1.5M-event record that is over two MINUTES of synchronous, event-loop-blocking
+ * work, during which every page in the app sits on "Loading…". Nothing that
+ * changes a handful of cells may cost that. `agentqs rebuild` stays the converger;
+ * the fallback here is only for "there is no cache yet".
+ *
+ * Returns the daily row count the cache now holds.
+ */
+export function landDailySources(
+  sources: string[],
+  opts: { recordDir?: string; dataDir?: string } = {},
+): number {
+  const patched = refreshSyncCache({ sources }, opts);
+  return patched ? patched.dailyRows : rebuild(opts).daily;
+}
+
+/** Patch the cache after sources LEFT the record (disconnect / reset): their daily
+ *  rows re-read from files that are now gone — so they drop — and their event layer
+ *  goes with them. */
+export function landRemovedSources(
+  sources: string[],
+  opts: { recordDir?: string; dataDir?: string } = {},
+): number {
+  const patched = refreshSyncCache({ sources, eventsRemoved: sources }, opts);
+  return patched ? patched.dailyRows : rebuild(opts).daily;
+}
+
+/** Re-land the inbox stream in the cache. It is the small jsonl (pending captures +
+ *  scanner notifications), so re-upserting it whole is milliseconds — and it spares
+ *  every path that merely APPENDS a notification from re-deriving a million events.
+ *  Inbox lines are only ever appended or patched, never dropped, so upserting the
+ *  full stream leaves exactly what a rebuild would have. */
+export function landInboxStream(opts: { recordDir?: string; dataDir?: string } = {}): void {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  landInboxCaptures(readInboxFromRecord(rDir), opts);
+}
+
+/** One session's keyword-search body. Mirrored by the full rebuild's insert. */
+function sessionSearchBody(s: SessionItem): string {
+  return [s.title, s.summary, ...s.insights, ...s.commitments, s.transcript].filter(Boolean).join("\n");
+}
+
+/**
+ * Land a finished session in the derived cache WITHOUT a full rebuild — the
+ * sessions half of upsertInboxItemsInCache, and for the same reason: a rebuild
+ * re-derives 1.5M events and re-indexes the lot (over two MINUTES of frozen,
+ * synchronous server on a real record) to add ONE row. Saving a mentor session
+ * from chat must never cost that.
+ *
+ * Idempotent: re-landing the same id replaces both the row and its single search
+ * entry. Best-effort — no cache yet / locked / stale schema is a no-op and the
+ * next `agentqs rebuild` converges exactly.
+ */
+export function upsertSessionsInCache(
+  items: SessionItem[],
+  opts: { dataDir?: string; dbFile?: string } = {},
+): number {
+  const file = opts.dbFile ?? dbPath(opts.dataDir);
+  if (!items.length || !fs.existsSync(file)) return 0;
+  try {
+    const db = new Database(file);
+    try {
+      const ins = db.prepare(
+        "INSERT OR REPLACE INTO sessions (id,date,started_at,ended_at,skill,title,summary,transcript,insights,commitments) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      );
+      // FTS5 has no upsert, so the ref's old row goes first — otherwise re-landing
+      // a session would leave two copies in search.
+      const delSearch = db.prepare("DELETE FROM search WHERE kind = 'session' AND ref = ?");
+      const insSearch = db.prepare("INSERT INTO search (ref,kind,body) VALUES (?,?,?)");
+      const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+      let n = 0;
+      const tx = db.transaction(() => {
+        for (const s of items) {
+          ins.run(
+            s.id,
+            s.date,
+            s.startedAt,
+            s.endedAt,
+            s.skill,
+            s.title,
+            s.summary,
+            s.transcript,
+            JSON.stringify(s.insights),
+            JSON.stringify(s.commitments),
+          );
+          delSearch.run(`session:${s.id}`);
+          insSearch.run(`session:${s.id}`, "session", sessionSearchBody(s));
+          n += 1;
+        }
+        setMeta.run(
+          "session_rows",
+          String((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n),
+        );
+      });
+      tx();
+      return n;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return 0; // stale schema / locked cache — the next full rebuild catches up
+  }
+}
+
+/** Drop sessions from the cache by id (the delete half of upsertSessionsInCache).
+ *  Returns null — not 0 — when there was no cache to patch, so a delete that
+ *  legitimately matched nothing can't be mistaken for "patch failed, rebuild". */
+export function removeSessionsFromCache(
+  ids: string[],
+  opts: { dataDir?: string; dbFile?: string } = {},
+): number | null {
+  const file = opts.dbFile ?? dbPath(opts.dataDir);
+  if (!ids.length) return 0;
+  if (!fs.existsSync(file)) return null;
+  try {
+    const db = new Database(file);
+    try {
+      const del = db.prepare("DELETE FROM sessions WHERE id = ?");
+      const delSearch = db.prepare("DELETE FROM search WHERE kind = 'session' AND ref = ?");
+      const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+      let n = 0;
+      const tx = db.transaction(() => {
+        for (const id of ids) {
+          n += del.run(id).changes;
+          delSearch.run(`session:${id}`);
+        }
+        setMeta.run(
+          "session_rows",
+          String((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n),
+        );
+      });
+      tx();
+      return n;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Patch-or-rebuild for a session write — the sessions twin of landInboxCaptures. */
+export function landSessionWrite(items: SessionItem[], opts: { recordDir?: string; dataDir?: string } = {}): void {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const dbFile = dbPath(opts.dataDir ?? path.dirname(rDir));
+  if (upsertSessionsInCache(items, { dbFile }) === 0) rebuild(opts);
+}
+
+/** Patch-or-rebuild for a session delete. */
+export function landSessionDelete(ids: string[], opts: { recordDir?: string; dataDir?: string } = {}): void {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const dbFile = dbPath(opts.dataDir ?? path.dirname(rDir));
+  if (removeSessionsFromCache(ids, { dbFile }) === null) rebuild(opts);
+}
+
 /** What one source sync changed in the record — everything the cache needs to
  *  catch up without re-reading the rest of it. */
 export interface SyncCacheChange {
@@ -827,6 +986,10 @@ export interface SyncCacheChange {
   eventsReplaced?: { source: string; from: string; to: string };
   /** Events appended to record/events.jsonl by this sync. */
   eventsAdded?: EventItem[];
+  /** Sources whose events left the record entirely (disconnect / reset). Their
+   *  daily rows go via `sources`; this drops the event layer with them, so a
+   *  removal never needs the full rebuild it used to. */
+  eventsRemoved?: string[];
 }
 
 /**
@@ -846,7 +1009,7 @@ export interface SyncCacheChange {
 export function refreshSyncCache(
   change: SyncCacheChange,
   opts: { recordDir?: string; dataDir?: string } = {},
-): { dailyRows: number } | null {
+): { dailyRows: number; eventRows: number } | null {
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
   const file = dbPath(opts.dataDir ?? path.dirname(rDir));
   if (!fs.existsSync(file)) return null;
@@ -888,6 +1051,13 @@ export function refreshSyncCache(
           }
         }
       }
+      for (const source of change.eventsRemoved ?? []) {
+        db.prepare(
+          `DELETE FROM search WHERE kind = 'event' AND ref IN
+             (SELECT 'event:' || id FROM events WHERE source = ?)`,
+        ).run(source);
+        db.prepare("DELETE FROM events WHERE source = ?").run(source);
+      }
       const replaced = change.eventsReplaced;
       if (replaced) {
         db.prepare(
@@ -921,10 +1091,9 @@ export function refreshSyncCache(
       // "this cache was built from exactly that record text", and only a full
       // rebuild can promise it. Leaving them stale keeps the next rebuild honest
       // (it re-parses instead of trusting a fast path).
-      return dailyRows;
+      return { dailyRows, eventRows };
     });
-    const dailyRows = tx() as number;
-    return { dailyRows };
+    return tx() as { dailyRows: number; eventRows: number };
   } finally {
     db.close();
   }

@@ -13,7 +13,7 @@ import { AutomationSetup } from "@/components/automation-setup";
 import { AutomationRow } from "@/components/automation-row";
 import { IntervalSelect } from "@/components/interval-select";
 import { Badge, Button, cn, Input, SkeletonRows, TabBar } from "@/components/ui";
-import { peekCache, primeCache } from "@/lib/client-cache";
+import { fetchCached, peekCache } from "@/lib/client-cache";
 import { jobActive, type Interval, type SourceView } from "@/lib/sources";
 
 type Tab = "connections" | "automated";
@@ -105,33 +105,25 @@ export function SourcesPanel({
   // tell them to restart the app, which fixed nothing (the cost was a full scan of
   // the events table on every load, not a wedged process). The request is given
   // room to finish, and a failure offers a retry instead of a chore.
-  const load = useCallback(async (): Promise<SourceView[] | null> => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 60000);
+  // `fromCache` is opt-in and only the mount read passes it. Everything else here
+  // is a refresh AFTER something changed — a sync starting, a job finishing, the
+  // 2s poller — and those must see the server's answer, never a cached one.
+  const load = useCallback(async (fromCache = false): Promise<SourceView[] | null> => {
     try {
       setSourceError("");
-      const res = await fetch("/api/sources", { signal: controller.signal });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error || `Could not load sources (${res.status}).`);
-      }
-      const data = (await res.json()) as { sources: SourceView[] };
+      // Through the shared cache: the background warmer may already have this list
+      // (or have it in flight), and asking twice for the same scan is exactly the
+      // pile-up that made the tab feel stuck.
+      const data = await fetchCached<{ sources: SourceView[] }>(SOURCES_KEY, { force: !fromCache });
       setSources(data.sources);
-      primeCache(SOURCES_KEY, data); // the next visit to this tab starts from here
       return data.sources;
     } catch (e) {
-      setSourceError(
-        (e as Error).name === "AbortError"
-          ? "Sources are still loading after 60s — the server may be busy importing."
-          : (e as Error).message,
-      );
+      setSourceError((e as Error).message || "Could not load sources.");
       // A failed REFRESH must not empty a list the user is reading — the error
       // banner above already says it went stale. Only a first load has nothing
       // better to show.
       setSources((prev) => prev ?? []);
       return null;
-    } finally {
-      window.clearTimeout(timer);
     }
   }, []);
 
@@ -161,10 +153,14 @@ export function SourcesPanel({
   // lazy-sync-on-open for any due api source (guarded so it runs exactly once).
   // The POSTs return immediately (202 — the syncs run as background jobs on the
   // server); the job poller below tracks them to completion.
+  const mounted = useRef(false);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const list = await load();
+      // Mount may read the warmed cache; a `version` bump means a write landed, so
+      // that read has to be authoritative.
+      const list = await load(!mounted.current);
+      mounted.current = true;
       if (cancelled || ranAuto.current) return;
       ranAuto.current = true;
       const due = (list ?? []).filter((s) => s.due && s.syncEndpoint);

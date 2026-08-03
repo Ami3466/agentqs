@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Clock, MessageSquare, Spinner, Trash } from "@/components/icons";
 import { ago, Button, cn } from "@/components/ui";
-import { peekCache, primeCache } from "@/lib/client-cache";
+import { fetchCached, invalidate, peekCache } from "@/lib/client-cache";
 
 /** Shared cache entry for the capture log — seeds the panel on a tab return. */
 const LOG_KEY = "/api/log";
@@ -63,17 +63,26 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/log");
-    if (!res.ok) return;
-    const data = (await res.json()) as { total: number; items: LogItem[] };
-    setItems(data.items);
-    setTotal(data.total);
-    primeCache(LOG_KEY, data);
+  const load = useCallback(async (force = false) => {
+    // Through the shared cache: an entry the background warmer already filled (or
+    // is filling) is reused instead of asking the server for the same half-megabyte
+    // of log a second time.
+    try {
+      const data = await fetchCached<{ total: number; items: LogItem[] }>(LOG_KEY, { force });
+      setItems(data.items);
+      setTotal(data.total);
+    } catch {
+      /* a failed refresh keeps whatever is on screen */
+    }
   }, []);
 
+  // Mount reads through the cache (instant when the warmer got there first); a
+  // `version` bump means something WROTE, so that read must ignore the cache or the
+  // panel would keep showing the record as it was before the write.
+  const mounted = useRef(false);
   useEffect(() => {
-    void load();
+    void load(mounted.current);
+    mounted.current = true;
   }, [load, version]);
 
   const q = query.trim().toLowerCase();
@@ -108,6 +117,8 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
         setError(data.error || "Reject failed.");
         return;
       }
+      // A reject moves the record — every cached view of it is now a lie.
+      invalidate();
       onChanged();
     } catch {
       setError("Could not reach the log endpoint.");

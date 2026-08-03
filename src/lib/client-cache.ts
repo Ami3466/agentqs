@@ -35,6 +35,9 @@ interface Entry<T> {
   at: number;
   /** The in-flight request, so concurrent readers share one round trip. */
   inflight?: Promise<void>;
+  /** Where the answer came from, so an invalidation can refetch it for a reader
+   *  that is on screen right now. */
+  url?: string;
 }
 
 const cache = new Map<string, Entry<unknown>>();
@@ -65,22 +68,34 @@ function subscribe(key: string, fn: () => void): () => void {
  *  A bare `invalidate()` clears everything — the right move after a sync/import
  *  that can move more than one panel's numbers. */
 export function invalidate(...keys: string[]): void {
-  if (keys.length === 0) {
-    const all = [...cache.keys()];
-    cache.clear();
-    for (const k of all) emit(k);
+  const targets = keys.length === 0 ? [...cache.keys()] : keys;
+  for (const key of targets) drop(key);
+}
+
+/** Invalidate one key. A key nobody is reading is simply deleted — the next mount
+ *  fetches it. A key with a MOUNTED reader is different: that hook's fetch effect
+ *  already ran, so deleting the entry would leave the panel showing a skeleton
+ *  forever (it re-renders, sees no data, and nothing re-asks). Those refetch here
+ *  instead, keeping the old answer on screen while the new one lands — the house
+ *  rule that a post-action refresh is quiet. */
+function drop(key: string): void {
+  const entry = cache.get(key);
+  const watched = (listeners.get(key)?.size ?? 0) > 0;
+  if (watched && entry?.url && entry.data !== undefined) {
+    cache.set(key, { data: entry.data, at: 0, url: entry.url });
+    emit(key);
+    void revalidate(key, entry.url);
     return;
   }
-  for (const key of keys) {
-    cache.delete(key);
-    emit(key);
-  }
+  cache.delete(key);
+  emit(key);
 }
 
 /** Write a value straight into the cache — for a response that already carries the
  *  fresh state, so the UI updates without a second round trip. */
 export function primeCache<T>(key: string, data: T): void {
-  cache.set(key, { data, at: Date.now() });
+  const prev = cache.get(key);
+  cache.set(key, { data, at: Date.now(), url: prev?.url });
   emit(key);
 }
 
@@ -101,12 +116,12 @@ async function revalidate<T>(key: string, url: string, init?: RequestInit): Prom
         throw new Error(body.error || `Request failed (${res.status}).`);
       }
       const data = (await res.json()) as T;
-      cache.set(key, { data, at: Date.now() });
+      cache.set(key, { data, at: Date.now(), url });
     } catch (e) {
       const prev = cache.get(key) as Entry<T> | undefined;
       // A failed refresh must not erase a good answer the user is reading — keep
       // the data, surface the error beside it.
-      cache.set(key, { data: prev?.data, at: prev?.at ?? 0, error: (e as Error).message });
+      cache.set(key, { data: prev?.data, at: prev?.at ?? 0, error: (e as Error).message, url });
     } finally {
       const cur = cache.get(key) as Entry<T> | undefined;
       if (cur) delete cur.inflight;
@@ -114,8 +129,74 @@ async function revalidate<T>(key: string, url: string, init?: RequestInit): Prom
     }
   })();
 
-  cache.set(key, { ...entry, inflight: run });
+  cache.set(key, { ...entry, url, inflight: run });
   return run;
+}
+
+/**
+ * One-shot read through the shared cache, for a panel that owns its own state and
+ * can't use the hook. Same three guarantees as `useCachedFetch`: an in-flight
+ * request is SHARED rather than duplicated (which is what stops a panel's own load
+ * from racing the background warmer for the same url), the answer lands in the
+ * cache for the next reader, and a fresh entry is returned without a round trip.
+ *
+ * Throws on failure, so callers keep their existing error handling.
+ */
+export async function fetchCached<T>(url: string, opts: { ttlMs?: number; force?: boolean } = {}): Promise<T> {
+  const { ttlMs = DEFAULT_TTL_MS, force = false } = opts;
+  const entry = cache.get(url) as Entry<T> | undefined;
+  if (!force && entry?.data !== undefined && Date.now() - entry.at < ttlMs) return entry.data;
+  if (force && entry && !entry.inflight) cache.set(url, { ...entry, at: 0 });
+  await revalidate<T>(url, url);
+  const next = cache.get(url) as Entry<T> | undefined;
+  if (next?.data === undefined) throw new Error(next?.error || "Request failed.");
+  return next.data;
+}
+
+/**
+ * Fill the cache for views the user has NOT opened yet, so the first visit to a
+ * tab is as instant as the second.
+ *
+ * Two rules make this a help and not a new problem. It runs STRICTLY ONE AT A
+ * TIME: the server holds the record in SQLite and better-sqlite3 is synchronous,
+ * so parallel warm-up requests would queue behind each other anyway — and worse,
+ * would delay the request the user is actually waiting for. And it never touches
+ * an entry that is already fresh or already in flight, so a warmed tab the user
+ * then opens costs nothing twice.
+ *
+ * Returns a cancel function; the warmer stops at the next gap when the app
+ * unmounts.
+ */
+export function warmCache(urls: string[], opts: { ttlMs?: number } = {}): () => void {
+  const { ttlMs = DEFAULT_TTL_MS } = opts;
+  let cancelled = false;
+  void (async () => {
+    for (const url of urls) {
+      if (cancelled) return;
+      const entry = cache.get(url) as Entry<unknown> | undefined;
+      if (entry?.inflight) continue;
+      if (entry?.data !== undefined && Date.now() - entry.at < ttlMs) continue;
+      await revalidate(url, url).catch(() => undefined);
+    }
+  })();
+  return () => {
+    cancelled = true;
+  };
+}
+
+/** Run `fn` when the browser is idle, or soon after paint where that API is
+ *  missing (Safari). Warm-up must never compete with the render the user sees. */
+export function whenIdle(fn: () => void, timeout = 2_000): () => void {
+  const w = window as Window & {
+    requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
+    cancelIdleCallback?: (h: number) => void;
+  };
+  if (typeof w.requestIdleCallback === "function") {
+    const handle = w.requestIdleCallback(fn, { timeout });
+    return () => w.cancelIdleCallback?.(handle);
+  }
+  const t = window.setTimeout(fn, 300);
+  return () => window.clearTimeout(t);
 }
 
 export interface CachedFetch<T> {

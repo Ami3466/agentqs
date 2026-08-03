@@ -11,14 +11,15 @@ import { wipeDemoOnImport } from "./demo";
 import { recordDir } from "./paths";
 import {
   appendInboxItems,
+  landDailySources,
+  landInboxStream,
   mergeDailyCsv,
   readInboxFromRecord,
-  rebuild,
   updateInboxItems,
   type InboxItem,
 } from "./record";
 import { llmComplete } from "./llm";
-import { acceptQualityAction, columnGuard, qualityActionOf } from "./column-scan";
+import { acceptQualityAction, columnGuard, qualityActionOf, splitColumnKey } from "./column-scan";
 import {
   parseLlmCsv,
   proseExtractionSystem,
@@ -321,9 +322,22 @@ export async function structurePending(
   if (patches.length) updateInboxItems(patches, { recordDir: rDir });
   // The post-structure column check: re-apply saved merge rules and queue a
   // notification for any NEW duplicate the fresh rows just created — before the
-  // rebuild, so the cache already reflects both.
+  // cache patch, so the cache already reflects both.
   const guard = mutated ? columnGuard(rDir) : null;
-  const rebuilt = mutated ? rebuild({ recordDir: rDir }) : null;
+  // Only the sources this run wrote (plus both sides of any merge rule it
+  // re-applied). A full rebuild here re-derived every event in the record —
+  // minutes of frozen server for a handful of structured cells.
+  const touched = [
+    ...new Set([
+      ...results.flatMap((r) => (r.status === "structured" && r.source ? [r.source] : [])),
+      ...(guard?.autoMerged ?? []).flatMap((o) => [
+        splitColumnKey(o.from).source,
+        splitColumnKey(o.into).source,
+      ]),
+    ]),
+  ].filter(Boolean);
+  const dailyRows = mutated ? landDailySources(touched, { recordDir: rDir }) : null;
+  if (mutated) landInboxStream({ recordDir: rDir });
   const remaining = readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
 
   return {
@@ -331,7 +345,7 @@ export async function structurePending(
     structured: results.filter((r) => r.status === "structured").length,
     results,
     pending: remaining,
-    dailyRows: rebuilt?.daily ?? null,
+    dailyRows,
     ...(guard
       ? { scan: { autoMerged: guard.autoMerged.length, findings: guard.findings.length, notified: guard.notified } }
       : {}),

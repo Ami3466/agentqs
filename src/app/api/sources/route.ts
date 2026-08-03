@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/session";
-import { recordDir } from "@/lib/paths";
+import { cachedJson } from "@/lib/api";
+import { storeStamp } from "@/lib/cache-stamp";
+import { dataDir, recordDir } from "@/lib/paths";
 import { buildSources } from "@/lib/source-registry";
 import { disconnectSource, resetSource, setInterval as setSourceInterval } from "@/lib/cli-core";
 import { isValidInterval } from "@/lib/sources";
@@ -10,12 +12,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** The Pipeline-tab sources list: kind, connected, last-sync, interval, stale/due. */
-export async function GET() {
+export async function GET(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const cfg = readConfig();
-  return NextResponse.json({ sources: buildSources(cfg, recordDir()) });
+  // Connection + schedule state lives in the config and the sync ledgers, so both
+  // stamp this view — a 304 must never hide a sync that just finished.
+  return cachedJson(req, () => ({ sources: buildSources(readConfig(), recordDir()) }), [
+    storeStamp(dataDir()),
+  ]);
 }
 
 /** Set one source's sync interval (persisted per user), or `{"action":"reset"}` to wipe

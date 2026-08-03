@@ -18,7 +18,15 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { appendSession, readSessionsFromRecord, rebuild } from "../src/lib/record";
+import Database from "better-sqlite3";
+import {
+  appendSession,
+  readSessionsFromRecord,
+  rebuild,
+  removeSessionFromRecord,
+  removeSessionsFromCache,
+  upsertSessionsInCache,
+} from "../src/lib/record";
 import {
   continuityBlock,
   continuityFallbackReply,
@@ -31,6 +39,30 @@ const json = process.argv.includes("--json");
 
 function log(s = ""): void {
   if (!json) process.stdout.write(s + "\n");
+}
+
+/** Every session row in the cache, in a stable order — the comparable a patched
+ *  cache and a rebuilt one must agree on. */
+function sessionRows(dbFile: string): unknown[] {
+  const db = new Database(dbFile, { readonly: true });
+  try {
+    return db.prepare("SELECT * FROM sessions ORDER BY id").all() as unknown[];
+  } finally {
+    db.close();
+  }
+}
+
+/** Same, for the FTS rows: an upsert that forgot to delete the old index entry
+ *  would double a session in search — invisible in `sessions`, wrong in results. */
+function sessionSearch(dbFile: string): unknown[] {
+  const db = new Database(dbFile, { readonly: true });
+  try {
+    return db
+      .prepare("SELECT ref, body FROM search WHERE kind = 'session' ORDER BY ref, body")
+      .all() as unknown[];
+  } finally {
+    db.close();
+  }
 }
 
 async function main(): Promise<void> {
@@ -97,6 +129,51 @@ async function main(): Promise<void> {
       fs.existsSync(path.join(recordDir, "sessions.jsonl")) &&
         !fs.existsSync(path.join(recordDir, "daily")),
       "synthesis stored in sessions.jsonl, separate from record/daily",
+    );
+
+    // --- Saving a session must PATCH the cache, never re-derive it -----------
+    // /api/sessions used to call rebuild() per save. A rebuild re-reads the whole
+    // record and re-indexes every event — on a real record that is minutes of
+    // frozen server (better-sqlite3 is synchronous) to add ONE row, which is what
+    // left every page of the app stuck on "Loading…". The patch is only allowed to
+    // be that much cheaper if it lands the SAME rows a rebuild would, so that is
+    // what is asserted here: patch a second session in, then rebuild from the same
+    // record text, and require both caches to agree exactly.
+    const dbFile = path.join(tmp, "agentqs.db");
+    const second = appendSession(
+      {
+        skill: "mentor",
+        startedAt: "2026-07-02T09:00:00Z",
+        title: "Second session",
+        summary: "A second session, landed by the patch path.",
+        insights: ["patching beats re-deriving"],
+        commitments: ["ship the cache patch"],
+      },
+      { recordDir },
+    );
+    check(upsertSessionsInCache([second], { dbFile }) === 1, "a saved session patches the cache in place");
+    const patchedRows = sessionRows(dbFile);
+    const patchedSearch = sessionSearch(dbFile);
+    rebuild({ recordDir, dbPath: dbFile });
+    check(
+      JSON.stringify(patchedRows) === JSON.stringify(sessionRows(dbFile)),
+      "patched session rows are identical to a full rebuild's",
+    );
+    check(
+      JSON.stringify(patchedSearch) === JSON.stringify(sessionSearch(dbFile)),
+      "patched session search index is identical to a full rebuild's",
+    );
+
+    // …and deleting one leaves as little behind as a rebuild would.
+    removeSessionFromRecord(second.id, { recordDir });
+    check(removeSessionsFromCache([second.id], { dbFile }) === 1, "deleting a session patches the cache in place");
+    const afterDelete = sessionRows(dbFile);
+    const afterDeleteSearch = sessionSearch(dbFile);
+    rebuild({ recordDir, dbPath: dbFile });
+    check(
+      JSON.stringify(afterDelete) === JSON.stringify(sessionRows(dbFile)) &&
+        JSON.stringify(afterDeleteSearch) === JSON.stringify(sessionSearch(dbFile)),
+      "a patched delete leaves exactly what a rebuild leaves (no orphan search row)",
     );
 
     // --- Session 2 (new): does it reference Session 1's commitment? ---------
