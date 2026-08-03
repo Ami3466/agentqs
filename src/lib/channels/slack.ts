@@ -189,38 +189,41 @@ export const slackAdapter: ChannelAdapter = {
 
     // im/mpim are included on purpose: a DM to the bot is the single most common
     // place "my messages vanished" turns out to mean "they went somewhere the poll
-    // was never pointed at". But each type needs its OWN read scope, and Slack fails
-    // the WHOLE call if any one is missing — so a token without `im:read` would
-    // answer "missing_scope" and hide the channels it could perfectly well list.
-    // Narrow until it answers, and say which kinds were unavailable.
-    const LADDER = [
-      "public_channel,private_channel,im,mpim",
-      "public_channel,private_channel",
-      "public_channel",
-    ];
-    let types = "";
-    for (const t of LADDER) {
+    // was never pointed at" — and that is exactly where a week of this record's logs
+    // turned out to be.
+    //
+    // Each type needs its OWN read scope and Slack fails the WHOLE call if any one
+    // is missing, so asking for all four with a token lacking (say) mpim:read
+    // returns missing_scope and lists NOTHING — hiding the DMs it could read
+    // perfectly well. So each type is probed on its own and the ones that answer are
+    // used. Dropping a type we cannot read is fine; silently dropping one we CAN is
+    // how the conversation someone is hunting for stays invisible.
+    const WANTED = ["public_channel", "private_channel", "im", "mpim"] as const;
+    const usable: string[] = [];
+    const denied: string[] = [];
+    for (const t of WANTED) {
       try {
-        await call("conversations.list", { limit: "1", types: t, exclude_archived: "true" });
-        types = t;
-        break;
+        await call("conversations.list", { limit: "1", types: t });
+        usable.push(t);
       } catch (e) {
         if (!/missing_scope/.test((e as Error).message)) throw e;
+        denied.push(t);
       }
     }
-    if (!types) {
+    if (!usable.length) {
       throw new Error(
-        "Slack conversations.list failed: missing_scope — the bot token cannot list anything. Add channels:read " +
-          "(plus groups:read for private channels, im:read + mpim:read for DMs) at api.slack.com → OAuth & Permissions, " +
+        "Slack conversations.list failed: missing_scope — this token cannot list anything. Add channels:read " +
+          "(groups:read for private channels, im:read + mpim:read for DMs) at api.slack.com → OAuth & Permissions, " +
           "then reinstall the app to the workspace.",
       );
     }
-    if (types !== LADDER[0]) {
-      // Not fatal, but it MUST be visible: the conversation someone is hunting for
-      // may be exactly the kind we were not allowed to enumerate.
+    const types = usable.join(",");
+    if (denied.length) {
+      // Not fatal, but it must be VISIBLE: what we could not enumerate is exactly
+      // what a search for missing messages would silently miss.
       out.push({
         id: "",
-        name: `⚠ could not list DMs/private channels — token is missing im:read / mpim:read / groups:read (listed: ${types})`,
+        name: `⚠ could not list ${denied.join(", ")} — token is missing ${denied.map((d) => `${d.replace("_channel", "s").replace("public", "channel")}:read`).join(", ")}`,
         kind: "public",
         member: false,
         lastMessageAt: null,
