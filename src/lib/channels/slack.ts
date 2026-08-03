@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import type { ChannelAdapter, ChannelEnv, ChannelStatus, InboundMessage, PullResult, WebhookVerdict } from "./types";
+import type { ChannelAdapter, ChannelConversation, ChannelEnv, ChannelStatus, InboundMessage, PullResult, WebhookVerdict } from "./types";
 
 /**
  * Slack adapter (Loop 14) — the official Web API + Events API, same three-part
@@ -30,6 +30,32 @@ function validSignature(secret: string, headers: Headers, rawBody: string): bool
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+
+/** One authenticated Slack Web API caller, shared by pull() and conversations().
+ *  Slack's error codes are opaque ("not_in_channel", "missing_scope"), so the two
+ *  that actually happen are translated into the action that fixes them. */
+function slackCaller(env: ChannelEnv, channelHint = "") {
+  const token = env.slackBotToken?.trim();
+  if (!token) throw new Error("Slack bot token is not set (SLACK_BOT_TOKEN).");
+  const fetchImpl = env.fetchImpl ?? fetch;
+  return async (method: string, params: Record<string, string>): Promise<any> => {
+    const url = `${apiBase(env)}/${method}?${new URLSearchParams(params)}`;
+    const res = await fetchImpl(url, { headers: { authorization: `Bearer ${token}` } });
+    const json = (await res.json().catch(() => ({}))) as any;
+    if (!res.ok || json?.ok === false) {
+      const err = json?.error || res.statusText;
+      const hint =
+        err === "not_in_channel"
+          ? ` — invite the bot: /invite @agentqs${channelHint ? ` in #${channelHint}` : ""}`
+          : err === "missing_scope"
+            ? " — the bot token needs channels:history + channels:read (groups:* for a private channel, im:history for DMs); reinstall the app after adding them"
+            : "";
+      throw new Error(`Slack ${method} failed: ${err}${hint}`);
+    }
+    return json;
+  };
 }
 
 export const slackAdapter: ChannelAdapter = {
@@ -157,28 +183,51 @@ export const slackAdapter: ChannelAdapter = {
    *   • The cursor is only advanced by the CALLER, after the messages are safely
    *     in the record. A pull that lands nothing must not skip anything.
    */
-  async pull({ env, channel, since }): Promise<PullResult> {
-    const token = env.slackBotToken?.trim();
-    if (!token) throw new Error("Slack bot token is not set (SLACK_BOT_TOKEN).");
-    const fetchImpl = env.fetchImpl ?? fetch;
-
-    const call = async (method: string, params: Record<string, string>): Promise<any> => {
-      const url = `${apiBase(env)}/${method}?${new URLSearchParams(params)}`;
-      const res = await fetchImpl(url, { headers: { authorization: `Bearer ${token}` } });
-      const json = (await res.json().catch(() => ({}))) as any;
-      if (!res.ok || json?.ok === false) {
-        const err = json?.error || res.statusText;
-        // Name the two that actually happen, with the fix, instead of an opaque code.
-        const hint =
-          err === "not_in_channel"
-            ? ` — invite the bot: /invite @agentqs in #${channel}`
-            : err === "missing_scope"
-              ? ` — the bot token needs channels:history + channels:read (groups:* for a private channel); reinstall the app after adding them`
-              : "";
-        throw new Error(`Slack ${method} failed: ${err}${hint}`);
+  async conversations(env: ChannelEnv): Promise<ChannelConversation[]> {
+    const call = slackCaller(env);
+    const out: ChannelConversation[] = [];
+    let cursor = "";
+    do {
+      const page = await call("conversations.list", {
+        limit: "200",
+        // im/mpim included on purpose: a DM to the bot is the single most common
+        // place "my messages vanished" turns out to mean "they went somewhere the
+        // poll was never pointed at".
+        types: "public_channel,private_channel,im,mpim",
+        exclude_archived: "true",
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const c of page.channels ?? []) {
+        out.push({
+          id: String(c.id),
+          name: String(c.name ?? (c.is_im ? `dm:${c.user ?? "?"}` : c.id)),
+          kind: c.is_im ? "dm" : c.is_mpim ? "group" : c.is_private ? "private" : "public",
+          member: Boolean(c.is_member ?? c.is_im),
+          lastMessageAt: null,
+        });
       }
-      return json;
-    };
+      cursor = page.response_metadata?.next_cursor ?? "";
+    } while (cursor);
+
+    // Last-activity needs one cheap history call each, so only the ones the bot can
+    // actually read, and bounded — this is a diagnostic, not a crawl.
+    const readable = out.filter((c) => c.member).slice(0, 40);
+    await Promise.all(
+      readable.map(async (c) => {
+        try {
+          const h = await call("conversations.history", { channel: c.id, limit: "1" });
+          const ts = h.messages?.[0]?.ts;
+          if (ts) c.lastMessageAt = new Date(Number(ts) * 1000).toISOString();
+        } catch {
+          /* unreadable (no scope / not in it) — it stays null, which is the answer */
+        }
+      }),
+    );
+    return out.sort((a, b) => (b.lastMessageAt ?? "").localeCompare(a.lastMessageAt ?? ""));
+  },
+
+  async pull({ env, channel, since }): Promise<PullResult> {
+    const call = slackCaller(env, channel);
 
     // A name needs resolving to an id; an id (C…/G…/D…) is used as-is.
     let channelId = channel.replace(/^#/, "").trim();

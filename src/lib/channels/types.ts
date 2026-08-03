@@ -62,6 +62,16 @@ export interface PullResult {
   cursor: string;
 }
 
+/** One conversation the bot can see, with when it last had traffic — the answer to
+ *  "where did my messages actually go?". */
+export interface ChannelConversation {
+  id: string;
+  name: string; // channel name, or the DM's user id
+  kind: "public" | "private" | "dm" | "group";
+  member: boolean; // is the bot in it? (it can only read where it is)
+  lastMessageAt: string | null; // ISO, null when empty or unreadable
+}
+
 export interface ChannelStatus {
   channel: string;
   label: string;
@@ -94,4 +104,10 @@ export interface ChannelAdapter {
    * and simply aren't pullable.
    */
   pull?(args: { env: ChannelEnv; channel: string; since: string }): Promise<PullResult>;
+  /**
+   * Every conversation the bot can see, newest traffic first. This is the tool for
+   * "I logged for a week and nothing arrived": the messages are usually in a
+   * conversation nobody pointed the poll at, and guessing costs more than asking.
+   */
+  conversations?(env: ChannelEnv): Promise<ChannelConversation[]>;
 }
