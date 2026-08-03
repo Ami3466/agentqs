@@ -109,6 +109,14 @@ async function main(): Promise<void> {
     console.log("\nIt pulls, and it never captures its own voice…\n");
     const first = await pullChannel("slack", { recordDir: rDir });
     check("pulled the human messages", first.captured === 2, `captured ${first.captured}`);
+    // A backlog is HISTORY. Dating it "now" would file a week-old entry under today
+    // and, once structured, write the daily row on the wrong day.
+    const dated = readRecord(rDir).inbox.find((i) => i.text.startsWith("fire 8"));
+    check(
+      "a pulled message keeps the time SLACK says it was sent",
+      dated?.ts === new Date(1000.0001 * 1000).toISOString(),
+      `${dated?.ts} (slack ts 1000.000100)`,
+    );
     const inbox = readRecord(rDir).inbox;
     check("they landed in the inbox as slack captures", inbox.filter((i) => i.source === "slack").length === 2);
     check(
