@@ -28,10 +28,6 @@ on:
         description: "Extra tag to publish (e.g. edge). The digest is always tagged too."
         required: false
         default: "edge"
-      platforms:
-        description: "Target platforms. Default is amd64 only (the deploy target). Add arm64 for laptop use - it builds under QEMU emulation and is much slower."
-        required: false
-        default: "linux/amd64"
 
 env:
   REGISTRY: ghcr.io
@@ -56,16 +52,95 @@ jobs:
       - name: Type-check the committed tree
         run: npx tsc --noEmit
 
-  image:
+  # One job per architecture, each on a runner of that architecture. amd64 is the
+  # VPS; arm64 is every Apple Silicon laptop - without it `docker pull` on a Mac
+  # fails with "no matching manifest for linux/arm64/v8", which is not a warning,
+  # it is a dead end. The obvious alternative - one job building both under QEMU -
+  # emulates node for the whole Next.js build of a native-heavy image (onnxruntime,
+  # better-sqlite3) and turns a 7-minute release into tens of minutes. Native
+  # runners build both in parallel at full speed.
+  #
+  # Each job pushes an untagged manifest by digest only; `merge` stitches the
+  # digests into one multi-arch tag. That is what makes the two builds independent -
+  # neither has to know the other's tags, and a tag never points at half an image.
+  # onnxruntime has no musl build, which is why the Dockerfile is Debian - do not
+  # "optimize" it to alpine here.
+  build:
     needs: verify
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v5
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Name this platform for artifacts
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Labels only - the tags are applied once, in `merge`.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Separate scopes: one shared cache would have the two architectures
+          # overwriting each other's layers every run.
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Turn the per-architecture digests into ONE tag that resolves per-puller: a Mac
+  # gets arm64, the VPS gets amd64, from the same `:latest`.
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -86,28 +161,31 @@ jobs:
             type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      # amd64 is the deploy target (the VPS). arm64 is opt-in via the
-      # workflow_dispatch `platforms` input - it builds under QEMU emulation, which
-      # for a native-heavy image (onnxruntime, the local embedder behind `recall`)
-      # is minutes-to-tens-of-minutes slower and can hang, so it does NOT gate a
-      # release. onnxruntime has no musl build, which is why the Dockerfile is
-      # Debian - do not "optimize" it to alpine here.
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: ${{ inputs.platforms || 'linux/amd64' }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # The image is the artifact, so it has to actually boot. Pull the amd64 image
-      # we just pushed, run it on a throwaway /data, and require a real HTTP answer -
-      # a build that compiles and then dies on start is not a release.
-      - name: Smoke-test the pushed image
+      - name: Create the multi-arch tags
+        working-directory: /tmp/digests
         run: |
-          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Check both architectures are in the published tag
+        run: |
+          TAG=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect "$TAG" --format '{{json .Manifest}}' > /tmp/idx.json
+          for arch in amd64 arm64; do
+            jq -e --arg a "$arch" '.manifests[] | select(.platform.architecture == $a and .platform.os == "linux")' /tmp/idx.json > /dev/null \
+              || { echo "$TAG has no linux/$arch — a pull on that platform would fail"; jq . /tmp/idx.json; exit 1; }
+            echo "linux/$arch present"
+          done
+
+      # The image is the artifact, so it has to actually boot. Pull the image we just
+      # tagged, run it on a throwaway /data, and require a real HTTP answer - a build
+      # that compiles and then dies on start is not a release. This runner is amd64,
+      # so this exercises the amd64 half; the arm64 half is covered by the manifest
+      # check above plus its own native build.
+      - name: Smoke-test the published image
+        run: |
+          IMG=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           docker run -d --name qs -p 3000:3000 -v /tmp/qs-data:/data "$IMG"
           for i in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || true)
