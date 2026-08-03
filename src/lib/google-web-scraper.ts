@@ -1,7 +1,16 @@
 import fs from "fs";
 import path from "path";
 import { execFileSync } from "child_process";
-import { appendEvents, insertEventsIntoCache, mergeDailyCsv, parseCsv, readEventsFromRecord, rebuild } from "./record";
+import {
+  appendEvents,
+  insertEventsIntoCache,
+  mergeDailyCsv,
+  parseCsv,
+  readEventsFromRecord,
+  refreshSyncCache,
+  rebuild,
+  type EventItem,
+} from "./record";
 import { dataDir, recordDir } from "./paths";
 
 export type GoogleScrapePreset =
@@ -333,6 +342,27 @@ function mergeDailyCountsAdditive(rDir: string, dailySource: string, added: Dail
   mergeDailyCsv(rDir, dailySource, summed);
 }
 
+/**
+ * Land what a scrape wrote: its daily rollup source, plus the events it appended.
+ *
+ * Every one of these paths used to end in a full `rebuild()`, which re-parses the
+ * whole events.jsonl and re-indexes every event in the record — over two minutes of
+ * blocked, synchronous server on a lifetime record, per scrape. Two of them ran it
+ * after an AUTH PROBE that wrote nothing at all. Only what changed is patched now;
+ * `agentqs rebuild` stays the converger.
+ */
+function landScrape(
+  rDir: string,
+  preset: GoogleScrapePreset,
+  eventsAdded: EventItem[],
+): { daily: number; events: number } {
+  const sources = [PRESETS[preset].dailySource];
+  const patched = refreshSyncCache({ sources, eventsAdded }, { recordDir: rDir });
+  if (patched) return { daily: patched.dailyRows, events: patched.eventRows };
+  const rebuilt = rebuild({ recordDir: rDir }); // no cache yet — the one that creates it
+  return { daily: rebuilt.daily, events: rebuilt.events };
+}
+
 function rebuildDailyFromRecord(rDir: string, preset: GoogleScrapePreset): void {
   const cfg = PRESETS[preset];
   const events = readEventsFromRecord(rDir)
@@ -463,11 +493,10 @@ export function ingestGoogleActivityApiItems(opts: {
   if (written.items.length) mergeDailyCountsAdditive(rDir, cfg.dailySource, written.items);
   if (opts.final) rebuildDailyFromRecord(rDir, opts.preset);
   // A paused/aborted import must still reach the SQLite cache (journal + graphs
-  // read events from there). A full rebuild re-parses the whole events.jsonl —
-  // hundreds of MB on a lifetime record — so mid-run batches insert their events
-  // incrementally and only the final batch pays for the exact rebuild.
+  // read events from there), so mid-run batches insert their events incrementally
+  // and the final batch lands the recomputed daily rollup with them.
   if (!opts.final && written.items.length && !opts.rDir) insertEventsIntoCache(written.items);
-  const rebuilt = opts.final ? rebuild({ recordDir: rDir }) : { daily: 0, events: 0 };
+  const rebuilt = opts.final ? landScrape(rDir, opts.preset, written.items) : { daily: 0, events: 0 };
   return {
     preset: opts.preset,
     url: cfg.url,
@@ -547,7 +576,7 @@ export async function runGoogleWebScrape(opts: {
         authRequired = await pageNeedsGoogleAuth(page);
       }
       await context.close().catch(() => undefined);
-      const rebuilt = rebuild({ recordDir: opts.rDir ?? recordDir() });
+      const rebuilt = landScrape(opts.rDir ?? recordDir(), opts.preset, []);
       return {
         preset: opts.preset,
         url: cfg.url,
@@ -585,7 +614,7 @@ export async function runGoogleWebScrape(opts: {
   const rDir = opts.rDir ?? recordDir();
   const written = appendEvents(events, { recordDir: rDir });
   if (events.length) mergeDailyCsv(rDir, cfg.dailySource, dailyTable(events));
-  const rebuilt = rebuild({ recordDir: rDir });
+  const rebuilt = landScrape(rDir, opts.preset, written.items);
   return {
     preset: opts.preset,
     url: cfg.url,
@@ -610,7 +639,7 @@ export async function runGoogleChromeSessionCheck(opts: {
   const authRequired =
     /sign in|sign into|choose an account|couldn.t sign you in|to continue to|use your google account/i.test(snapshot.body || "") ||
     /accounts\.google\.com/.test(snapshot.url || "");
-  const rebuilt = rebuild({ recordDir: opts.rDir ?? recordDir() });
+  const rebuilt = landScrape(opts.rDir ?? recordDir(), opts.preset, []);
   return {
     preset: opts.preset,
     url: cfg.url,
@@ -663,7 +692,7 @@ export async function runGoogleChromeSessionScrape(opts: {
   const events = authRequired ? [] : extractGoogleEventsFromBlocks(uniqueBlocks, opts.preset);
   const written = appendEvents(events, { recordDir: rDir });
   if (events.length) mergeDailyCsv(rDir, cfg.dailySource, dailyTable(events));
-  const rebuilt = rebuild({ recordDir: rDir });
+  const rebuilt = landScrape(rDir, opts.preset, written.items);
   return {
     preset: opts.preset,
     url: cfg.url,

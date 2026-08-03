@@ -223,8 +223,16 @@ async function main() {
     const before = Number(/before:(\d+)/.exec(q)?.[1] ?? 0);
     // Gmail answers a RANGE. The per-day counter asks about one day; the cheap
     // hasAnyData probe asks about a whole year.
-    const wFrom = new Date(after * 1000).toISOString().slice(0, 10);
-    const wTo = new Date((before - 1) * 1000).toISOString().slice(0, 10);
+    //
+    // Decode the window in the RECORD'S timezone, because that is the frame the
+    // importer encoded it in: `after:`/`before:` are LOCAL midnights on purpose (a
+    // 9pm mail belongs to the day you lived, not to tomorrow in UTC). Reading them
+    // back with toISOString() re-introduced exactly the UTC bucketing the importer
+    // exists to avoid, so east of Greenwich every window here read a day early and
+    // the floor assertion below failed on the developer's machine while passing in
+    // a UTC CI container — a fake lying about the product, not a bug in it.
+    const wFrom = localDay(after * 1000);
+    const wTo = localDay((before - 1) * 1000);
     if (wFrom < oldestAsked) oldestAsked = wFrom;
     const n = Object.entries(mail)
       .filter(([day]) => day >= wFrom && day <= wTo)

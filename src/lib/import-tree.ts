@@ -5,14 +5,15 @@ import path from "path";
 import { recordDir } from "./paths";
 import {
   appendInboxItems,
+  landDailySources,
+  landInboxStream,
   mergeDailyCsv,
   readInboxFromRecord,
-  rebuild,
   updateInboxItems,
 } from "./record";
 import { structureCsv, sourceName } from "./structure";
 import { notifyCsvLoss } from "./structure-run";
-import { columnGuard } from "./column-scan";
+import { columnGuard, splitColumnKey } from "./column-scan";
 import { wipeDemoOnImport } from "./demo";
 import { isStreamingHistoryFile } from "./importers/files/spotify-export";
 
@@ -209,6 +210,9 @@ export function importTree(root: string): ImportTreeReport {
   };
 
   let cells = 0;
+  // Daily stems this walk merged into — the cache patch at the end needs exactly
+  // these, and nothing else in the record has to be re-read.
+  const mergedSources = new Set<string>();
   let totalBytes = 0;
 
   for (const file of files) {
@@ -343,6 +347,7 @@ export function importTree(root: string): ImportTreeReport {
         const merge = mergeDailyCsv(rDir, source, { header: table.header, rows: table.rows });
         notifyCsvLoss(rDir, rel, table);
         cells += merge.cells;
+        mergedSources.add(source);
         // Same drop-item shape as importRaw's CSV path, so the Log's Reject
         // reverts this file's cells exactly like a GUI-structured drop.
         land({
@@ -407,8 +412,17 @@ export function importTree(root: string): ImportTreeReport {
     );
   }
 
-  columnGuard(rDir);
-  const rebuilt = rebuild({ recordDir: rDir });
+  const guard = columnGuard(rDir);
+  // Only what the walk landed (plus both sides of any merge rule it re-applied) —
+  // a folder import must not re-derive every event in the record to file its rows.
+  const touched = [
+    ...new Set([
+      ...mergedSources,
+      ...guard.autoMerged.flatMap((o) => [splitColumnKey(o.from).source, splitColumnKey(o.into).source]),
+    ]),
+  ].filter(Boolean);
+  const dailyRows = landDailySources(touched, { recordDir: rDir });
+  landInboxStream({ recordDir: rDir });
   const pending = readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
 
   return {
@@ -421,7 +435,7 @@ export function importTree(root: string): ImportTreeReport {
     residue,
     summary: receipt.text,
     notificationId,
-    dailyRows: rebuilt.daily,
+    dailyRows,
     pending,
   };
 }

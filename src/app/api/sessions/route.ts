@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
-import { appendSession, readSessionsFromRecord, rebuild, removeSessionFromRecord } from "@/lib/record";
+import {
+  appendSession,
+  landSessionDelete,
+  landSessionWrite,
+  readSessionsFromRecord,
+  removeSessionFromRecord,
+} from "@/lib/record";
 import { resolveSkill } from "@/lib/skills-store";
 import type { LlmMessage } from "@/lib/llm";
 import {
@@ -116,7 +122,7 @@ export async function POST(req: Request) {
       },
       { recordDir: rDir },
     );
-    rebuild({ recordDir: rDir });
+    landSessionWrite([item], { recordDir: rDir });
     return NextResponse.json({ ok: true, via: "provided", session: toView(item) });
   }
 
@@ -153,12 +159,12 @@ export async function POST(req: Request) {
     },
     { recordDir: rDir },
   );
-  rebuild({ recordDir: rDir });
+  landSessionWrite([item], { recordDir: rDir });
 
   return NextResponse.json({ ok: true, via, session: toView(item) });
 }
 
-/** Delete a session from the record by id, then rebuild so it leaves the timeline. */
+/** Delete a session from the record by id, then drop its cache row so it leaves the timeline. */
 export async function DELETE(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -173,6 +179,6 @@ export async function DELETE(req: Request) {
   if (!removed) {
     return NextResponse.json({ error: "No such session." }, { status: 404 });
   }
-  rebuild({ recordDir: rDir });
+  landSessionDelete([id], { recordDir: rDir });
   return NextResponse.json({ ok: true, id });
 }

@@ -1,12 +1,13 @@
 import fs from "fs";
 import { ensureIndexes, openReadonly } from "./db";
+import { cacheStamp } from "./cache-stamp";
 import { dbPath } from "./paths";
 
 /**
  * Coverage: the shape of the whole record at a glance — every source, how much it
- * holds, its date span, and a per-year row histogram. This is the "front door" data:
- * the Overview tab renders it as a source×year heatmap so a user sees what they have
- * and where the holes are, instead of only the flat Journal table. Pure and sync
+ * holds, its date span, and a per-year row histogram. The Pipeline tab renders it as
+ * a source×year heatmap under the source list, so a user sees what they have and
+ * where the holes are, instead of only the flat Journal table. Pure and sync
  * (mirrors `coverageBySource` in daily.ts): reads the rebuilt `daily` cache, no LLM,
  * no network, so any face (UI, API, CLI, MCP) can call it.
  */
@@ -36,23 +37,8 @@ const EMPTY: CoverageReport = {
   span: { first: null, last: null },
 };
 
-/** Fingerprint of the cache file (and its WAL) — changes on any commit. Coverage is
- *  a pure function of that file, so an unchanged fingerprint means an unchanged
- *  report. */
-function cacheStamp(file: string): string {
-  const part = (p: string): string => {
-    try {
-      const st = fs.statSync(p);
-      return `${st.size}:${Math.floor(st.mtimeMs)}`;
-    } catch {
-      return "-";
-    }
-  };
-  return `${part(file)}|${part(`${file}-wal`)}`;
-}
-
-/** Last report, keyed by the cache file it was built from. The Overview tab is the
- *  app's front door and every visitor asks the same question of a file that changes
+/** Last report, keyed by the cache file it was built from. Every Pipeline visit (and
+ *  every agent calling `coverage`) asks the same question of a file that changes
  *  a few times a day; two full GROUP BYs over a 200k-row table per page view is
  *  work nobody asked for. Capped in age as well as keyed on the stamp, so even a
  *  write the stamp somehow missed self-heals within a minute. */

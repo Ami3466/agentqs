@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
-import { recordDir } from "@/lib/paths";
-import { applyDailyEdits, rebuild, type DailyEdit } from "@/lib/record";
+import { journalEdit } from "@/lib/cli-core";
+import { type DailyEdit } from "@/lib/record";
 import { readJournal } from "@/lib/journal";
 
 export const runtime = "nodejs";
@@ -27,8 +27,10 @@ function asEdit(raw: unknown): DailyEdit | null {
 
 /** Batch-edit the daily record from the Journal table's Edit mode: set/clear
  * cells, delete columns, delete rows. Writes record/daily/*.csv (the source of
- * truth), rebuilds the cache, and returns the fresh journal so the table can
- * swap its data without a second fetch. */
+ * truth) through the same `journalEdit` core the CLI uses — which patches only
+ * the sources the edit rewrote instead of re-deriving the whole cache — and
+ * returns the fresh journal so the table can swap its data without a second
+ * fetch. */
 export async function POST(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -43,8 +45,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `Too many edits (max ${MAX_EDITS}).` }, { status: 400 });
   }
 
-  const result = applyDailyEdits(edits, { recordDir: recordDir() });
-  rebuild({ recordDir: recordDir() });
+  const result = journalEdit(edits);
 
   return NextResponse.json({ ok: true, ...result, journal: readJournal({ days: 180 }) });
 }

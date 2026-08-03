@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { effectiveProviders, linkedApiKey, readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItem, readRecord, rebuild } from "@/lib/record";
+import { appendInboxItem, landInboxCaptures, readInboxFromRecord } from "@/lib/record";
 import { autoStructureNewItem } from "@/lib/structure-run";
 import { describeStt, transcribeMemo, type SttEnv } from "@/lib/voice";
 import { whisperInstalled } from "@/lib/whisper-local";
@@ -140,12 +140,14 @@ export async function POST(req: Request) {
     },
     { recordDir: rDir },
   );
-  // Auto-structure first: when it merges, structurePending rebuilds the cache
-  // itself — rebuilding here too would run the whole derivation twice per capture.
+  // Auto-structure first: when it merges, structurePending lands the capture
+  // itself — landing it here too would run the derivation twice per capture.
   const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
-  if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
+  if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
 
-  const pending = auto?.pending ?? readRecord(rDir).inbox.filter((i) => i.status === "pending").length;
+  // The inbox stream ONLY — readRecord would parse events.jsonl (hundreds of MB)
+  // to count pending captures.
+  const pending = auto?.pending ?? readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
   return NextResponse.json({
     ok: true,
     id: item.id,

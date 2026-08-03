@@ -24,8 +24,10 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-reset-"));
 // Set the data dir BEFORE any lib call — paths.dataDir() reads the env lazily.
 process.env.AGENTQS_DATA_DIR = root;
 
+import Database from "better-sqlite3";
 import { readConfig, writeConfig } from "../src/lib/config";
-import { mergeDailyCsv, rebuild, readDailyFromRecord } from "../src/lib/record";
+import { appendEvents, mergeDailyCsv, rebuild, readDailyFromRecord } from "../src/lib/record";
+import { dbPath } from "../src/lib/paths";
 import { coverageBySource } from "../src/lib/daily";
 import { disconnectSource, resetSource } from "../src/lib/cli-core";
 import { buildSources } from "../src/lib/source-registry";
@@ -39,6 +41,23 @@ function check(label: string, cond: boolean, detail = "") {
 
 const SRC = "fitwatch";
 const rDir = () => recordDir();
+
+/** What the cache holds, across every table a source removal has to clean. Two
+ *  caches that agree on this agree on everything a reader can see. */
+function cacheCounts(): { daily: number; events: number; dailySearch: number; eventSearch: number } {
+  const db = new Database(dbPath(), { readonly: true });
+  try {
+    const n = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+    return {
+      daily: n("SELECT COUNT(*) AS n FROM daily"),
+      events: n("SELECT COUNT(*) AS n FROM events"),
+      dailySearch: n("SELECT COUNT(*) AS n FROM search WHERE kind = 'daily'"),
+      eventSearch: n("SELECT COUNT(*) AS n FROM search WHERE kind = 'event'"),
+    };
+  } finally {
+    db.close();
+  }
+}
 const dailyFile = () => path.join(rDir(), "daily", `${SRC}.csv`);
 /** Steps the RECORD (the source of truth, plain text) holds for a day — undefined = no row. */
 const stepsOn = (date: string): number | null | undefined =>
@@ -108,7 +127,26 @@ function main() {
   check("the source still holds its data and its key", Boolean(row?.hasData));
 
   console.log("\nScenario 5 — reset is NOT disconnect: disconnect still takes the key");
+  // Removing a source PATCHES the cache — it used to rebuild it, which re-reads the
+  // whole record and re-indexes every event (minutes of frozen server on a real
+  // record, for a delete). The patch only earns that if it leaves the same cache a
+  // rebuild would, including the event layer and the FTS index, so that is asserted
+  // rather than assumed. The source lands an event first, so the check has one to lose.
+  appendEvents(
+    [{ id: `${SRC}-evt-1`, date: "2026-06-10", source: SRC, text: "a step-count sync", ts: "2026-06-10T08:00:00.000Z" }],
+    { recordDir: rDir() },
+  );
+  rebuild({ recordDir: rDir() });
+  check("the source has an event to lose", cacheCounts().events === 1);
   disconnectSource(SRC);
+  const patched = cacheCounts();
+  rebuild({ recordDir: rDir() });
+  check(
+    "the patched cache after disconnect is identical to a full rebuild's",
+    JSON.stringify(patched) === JSON.stringify(cacheCounts()),
+    `${JSON.stringify(patched)} vs ${JSON.stringify(cacheCounts())}`,
+  );
+  check("the source's events left with it", patched.events === 0 && patched.eventSearch === 0);
   const after = readConfig()!;
   check("disconnect drops the credential", !after.sourceCreds?.[SRC] && !after.sourceOAuth?.[SRC]);
   check("disconnect drops the data too", !fs.existsSync(dailyFile()));

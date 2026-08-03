@@ -3,8 +3,9 @@ import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
 import {
   applyDailyEdits,
-  readRecord,
-  rebuild,
+  landInboxCaptures,
+  readInboxFromRecord,
+  refreshSyncCache,
   revertEditsFromAppliedMeta,
   updateInboxItems,
 } from "@/lib/record";
@@ -26,7 +27,9 @@ export async function POST(req: Request) {
   }
 
   const rDir = recordDir();
-  const item = readRecord(rDir).inbox.find((i) => i.id === id);
+  // The inbox stream ONLY — readRecord would also parse events.jsonl (hundreds of
+  // MB) just to look up one capture by id.
+  const item = readInboxFromRecord(rDir).find((i) => i.id === id);
   if (!item) {
     return NextResponse.json({ error: "No log item with that id." }, { status: 404 });
   }
@@ -37,18 +40,28 @@ export async function POST(req: Request) {
   // Undo the merge: replay the recorded cell changes in reverse (restore the
   // prior value; clear cells that didn't exist before).
   let reverted = 0;
+  let touched: string[] = [];
   if (item.status === "structured") {
     const edits = revertEditsFromAppliedMeta(item.meta);
     const result = applyDailyEdits(edits, { recordDir: rDir });
     reverted = result.sets + result.clears;
+    touched = result.sources;
   }
 
-  const meta = item.meta && typeof item.meta === "object" ? item.meta : {};
-  updateInboxItems(
-    [{ id, status: "discarded", meta: { ...meta, rejectedAt: new Date().toISOString() } }],
-    { recordDir: rDir },
-  );
-  rebuild({ recordDir: rDir });
+  const rejected = {
+    ...item,
+    status: "discarded",
+    meta: {
+      ...(item.meta && typeof item.meta === "object" ? item.meta : {}),
+      rejectedAt: new Date().toISOString(),
+    },
+  };
+  updateInboxItems([{ id, status: rejected.status, meta: rejected.meta }], { recordDir: rDir });
+  // Patch the cells this reject touched, then the one inbox row — a full rebuild
+  // re-derives every event in the record (minutes of frozen server) to undo one
+  // merge. landInboxCaptures falls back to that rebuild only when no cache exists.
+  refreshSyncCache({ sources: touched }, { recordDir: rDir });
+  landInboxCaptures([rejected], { recordDir: rDir });
 
   return NextResponse.json({ ok: true, reverted });
 }

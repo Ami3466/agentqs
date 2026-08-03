@@ -19,6 +19,10 @@ import { prepareSql } from "./query-async";
 import {
   appendInboxItem,
   applyDailyEdits,
+  landDailySources,
+  landInboxCaptures,
+  landInboxStream,
+  landRemovedSources,
   mergeDailyCsv,
   parseCsv,
   rebuild,
@@ -92,6 +96,7 @@ import {
   applySavedMerges,
   columnGuard,
   dropMergeRuleFor,
+  splitColumnKey,
   type MergeOutcome,
   type QualityFinding,
   type QualityOutcome,
@@ -221,12 +226,22 @@ export function journalEdit(edits: DailyEdit[]) {
 /** Patch the cache for a set of daily sources a journal edit / revert rewrote, or
  *  fall back to the one full rebuild when no cache exists yet. */
 function landDailyEditInCache(rDir: string, sources: string[]): number {
-  if (sources.length === 0) {
-    const cached = refreshSyncCache({ sources: [] }, { recordDir: rDir });
-    return cached ? cached.dailyRows : rebuild({ recordDir: rDir }).daily;
+  return landDailySources(sources, { recordDir: rDir });
+}
+
+/** Which daily sources a set of column-merge outcomes rewrote — both sides of every
+ *  rule, since a merge moves values out of one column and into another. */
+function mergeOutcomeSources(outcomes: Array<{ from: string; into: string }>): string[] {
+  const out = new Set<string>();
+  for (const o of outcomes) {
+    out.add(splitColumnKey(o.from).source);
+    out.add(splitColumnKey(o.into).source);
   }
-  const patched = refreshSyncCache({ sources }, { recordDir: rDir });
-  return patched ? patched.dailyRows : rebuild({ recordDir: rDir }).daily;
+  return [...out];
+}
+
+function landInboxInCache(rDir: string): void {
+  landInboxStream({ recordDir: rDir });
 }
 
 export function logItems(limit = 50) {
@@ -258,7 +273,8 @@ export function inboxResolve(id: string, action: "keep" | "discard") {
   const status = action === "keep" ? "reference" : "discarded";
   if (item.status !== status) {
     updateInboxItems([{ id, status }], { recordDir: rDir });
-    rebuild({ recordDir: rDir });
+    // One row changed status — patch that row, don't re-derive the record.
+    landInboxCaptures([{ ...item, status }], { recordDir: rDir });
   }
   return { id, status, pending: readInboxFromRecord(rDir).filter((i) => i.status === "pending").length };
 }
@@ -277,19 +293,29 @@ export function logReject(id: string) {
   const item = readInboxFromRecord(rDir).find((i) => i.id === id);
   if (!item) throw new Error(`No log item "${id}".`);
   let reverted = 0;
+  let touched: string[] = [];
   if (item.status === "structured") {
     const result = applyDailyEdits(revertEditsFromAppliedMeta(item.meta), { recordDir: rDir });
     reverted = result.sets + result.clears;
+    touched = result.sources;
   }
   // Rejecting a column merge must also forget its rule, or the next import would
   // silently redo what the user just undid.
   dropMergeRuleFor(item.meta);
-  updateInboxItems(
-    [{ id, status: "discarded", meta: { ...(item.meta && typeof item.meta === "object" ? item.meta : {}), rejectedAt: new Date().toISOString() } }],
-    { recordDir: rDir },
-  );
-  const rebuilt = rebuild({ recordDir: rDir });
-  return { id, discarded: true, reverted, dailyRows: rebuilt.daily };
+  const rejected = {
+    ...item,
+    status: "discarded",
+    meta: {
+      ...(item.meta && typeof item.meta === "object" ? item.meta : {}),
+      rejectedAt: new Date().toISOString(),
+    },
+  };
+  updateInboxItems([{ id, status: rejected.status, meta: rejected.meta }], { recordDir: rDir });
+  // Only the cells this reject rewrote plus the one inbox row — a full rebuild
+  // re-derives every event in the record to undo one merge.
+  const dailyRows = landDailyEditInCache(rDir, touched);
+  landInboxCaptures([rejected], { recordDir: rDir });
+  return { id, discarded: true, reverted, dailyRows };
 }
 
 export function whisperStatus() {
@@ -337,7 +363,7 @@ export function pipeline() {
 }
 
 /** The record's shape: every source with total rows, day-span and a per-year
- *  histogram, plus the year axis and totals. Powers the Overview heatmap. */
+ *  histogram, plus the year axis and totals. Powers the Pipeline heatmap. */
 export function coverage() {
   return buildCoverage();
 }
@@ -905,7 +931,7 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
     const cfg = requireConfig();
     forgetSourceConfigs(cfg, [id, ...bundleSourceIds]);
     writeConfig(cfg);
-    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    const dailyRows = landRemovedSources(bundleSourceIds, { recordDir: rDir });
     return { id, removed: true, dailyRows };
   }
   removeDailySourceFile(rDir, id);
@@ -917,7 +943,7 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
       forgetSourceConfig(latest, id);
       writeConfig(latest);
     }
-    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    const dailyRows = landRemovedSources([id], { recordDir: rDir });
     return { id, removed: true, dailyRows };
   }
   const cfg = requireConfig();
@@ -942,7 +968,7 @@ export function disconnectSource(id: string): { id: string; removed: boolean; da
   }
   forgetSourceConfig(cfg, id);
   writeConfig(cfg);
-  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  const dailyRows = landRemovedSources([id], { recordDir: rDir });
   return { id, removed: true, dailyRows };
 }
 
@@ -1011,7 +1037,7 @@ export function resetSource(id: string): {
   if (cfg.sourceSyncedAt) delete cfg.sourceSyncedAt[id];
   if (id === "github") delete cfg.githubSyncedAt;
   writeConfig(cfg);
-  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  const dailyRows = landRemovedSources(ids, { recordDir: rDir });
   return { id, reset: true, sources: ids, dailyRows };
 }
 
@@ -1464,8 +1490,11 @@ async function syncFileSourceInner(opts: {
         "check this is the right file (and the right export format); nothing was written to the record.",
     );
   }
-  applySavedMerges(rDir);
-  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  const merges = applySavedMerges(rDir);
+  const dailyRows = landDailyEditInCache(rDir, [
+    ...new Set([summary.source, ...mergeOutcomeSources(merges)]),
+  ]);
+  if (merges.length) landInboxInCache(rDir);
   persistSync(importer.id, undefined, new Date().toISOString());
   return {
     id: importer.id, name: importer.name, from: summary.from, to: summary.to,
@@ -1573,8 +1602,11 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
     );
     // A dropped CSV is structuring too — run the column check so a manual
     // re-import folds into accepted merges and new duplicates get notified.
-    columnGuard(rDir);
-    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    const guard = columnGuard(rDir);
+    const dailyRows = landDailyEditInCache(rDir, [
+      ...new Set([source, ...mergeOutcomeSources(guard.autoMerged)]),
+    ]);
+    landInboxInCache(rDir);
     return {
       inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source,
       metrics: merge.metrics, cells: merge.cells, dailyRows,
@@ -1584,10 +1616,11 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
   }
 
   // Auto-structure (Settings): prose skips the pending queue via the LLM route.
-  // Runs before the rebuild — structurePending rebuilds itself when it merges.
+  // Runs first — structurePending lands its own merge when it structures, so we
+  // only have to land the raw capture when it didn't.
   const auto = await autoStructureNewItem(item.id);
   const autoHit = auto?.results.find((r) => r.id === item.id && r.status === "structured");
-  if (!auto || auto.structured === 0) rebuild({ recordDir: rDir });
+  if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
   if (auto && autoHit) {
     return {
       inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source: autoHit.source,
@@ -1807,14 +1840,20 @@ export function scan(opts: { fix?: boolean } = {}): ScanResult {
       f.notificationStatus = "structured";
     }
   }
-  const mutated = guard.autoMerged.length > 0 || guard.notified > 0 || fixed.length > 0;
-  const rebuilt = mutated ? rebuild({ recordDir: rDir }) : null;
+  // Patch exactly what moved: the columns a merge/fix rewrote, plus the inbox rows
+  // the scan appended. Rebuilding here meant a scan that only QUEUED a notification
+  // froze the server for minutes re-deriving every event in the record.
+  const touched = [...new Set([...mergeOutcomeSources(guard.autoMerged), ...fixed.map((f) => f.source)])].filter(
+    Boolean,
+  );
+  const dailyRows = touched.length ? landDailyEditInCache(rDir, touched) : null;
+  if (guard.notified > 0 || fixed.length > 0) landInboxInCache(rDir);
   return {
     findings: guard.findings,
     autoMerged: guard.autoMerged,
     notified: guard.notified,
     fixed,
-    dailyRows: rebuilt?.daily ?? null,
+    dailyRows,
   };
 }
 
@@ -1998,7 +2037,9 @@ function persistSync(id: string, freshCredential: string | undefined, at: string
 }
 
 function countPending(rDir: string): number {
-  return readRecord(rDir).inbox.filter((i) => i.status === "pending").length;
+  // The inbox stream ONLY — readRecord would also parse events.jsonl (hundreds of
+  // MB on a real record) just to count pending captures.
+  return readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
 }
 
 /** A fetch stand-in that replays a JSON fixture file — offline sync for tests. */

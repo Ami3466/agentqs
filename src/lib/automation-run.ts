@@ -8,12 +8,18 @@
  * missing the runner throws an actionable message instead of a stack trace.
  *
  * Pipeline: launch chromium → goto(url) → replay steps (fill/click/wait/press) →
- * extractTable → wide daily table → mergeDailyCsv(daily/<id>.csv) → rebuild. A
+ * extractTable → wide daily table → mergeDailyCsv(daily/<id>.csv) → cache patch. A
  * table whose first column is a date merges into the daily table; anything else
  * lands raw in the inbox for the Structure step. Same idempotent write every other
  * importer uses, so re-running is safe.
  */
-import { appendInboxItem, mergeDailyCsv, rebuild, serializeCsv } from "./record";
+import {
+  appendInboxItem,
+  landDailySources,
+  landInboxCaptures,
+  mergeDailyCsv,
+  serializeCsv,
+} from "./record";
 import { recordDir } from "./paths";
 import { getAutomation, getCreds, recordRun } from "./automation";
 import { interpolateCreds, type AutomationStep } from "./automation-types";
@@ -145,7 +151,7 @@ export async function runAutomation(
     // Force the first column to the canonical "date" so it merges into the timeline.
     table.header[0] = "date";
     const merge = mergeDailyCsv(rDir, id, table);
-    const dailyRows = rebuild({ recordDir: rDir }).daily;
+    const dailyRows = landDailySources([id], { recordDir: rDir });
     recordRun(id, { status: "ok", rows: merge.cells, at });
     return {
       id, name: recipe.name, landed: "daily", rows: merge.cells, dailyRows,
@@ -155,11 +161,12 @@ export async function runAutomation(
 
   // Not a dated table — keep it raw in the inbox for the Structure step.
   const csv = serializeCsv(header, rows);
-  appendInboxItem(
+  const item = appendInboxItem(
     { text: csv, source: "automation", kind: "csv", meta: { automation: id, filename: `${id}.csv` } },
     { recordDir: rDir },
   );
-  const dailyRows = rebuild({ recordDir: rDir }).daily;
+  landInboxCaptures([item], { recordDir: rDir });
+  const dailyRows = landDailySources([], { recordDir: rDir });
   recordRun(id, { status: "ok", rows: Buffer.byteLength(csv), at });
   return {
     id, name: recipe.name, landed: "inbox", rows: rows.length, dailyRows,

@@ -1,5 +1,6 @@
 import fs from "fs";
 import { openReadonly, type DB } from "./db";
+import { cacheStamp } from "./cache-stamp";
 import { dbPath } from "./paths";
 
 /**
@@ -108,6 +109,30 @@ export interface ReadJournalOptions {
   numericOnly?: boolean;
 }
 
+/**
+ * Last payload per (cache file, window, today) — the Journal is the app's heaviest
+ * read: on a lifetime record the full-history window pivots ~230k daily rows into
+ * megabytes of JSON, and better-sqlite3 is SYNCHRONOUS, so every millisecond of it
+ * is a millisecond in which no other request in the process can be served. The
+ * Journal and Graphs tabs both ask for it, twice each on a cold load, and it was
+ * recomputed every time — that pile-up is what turned a 0.4s query into pages that
+ * sat on "Loading…".
+ *
+ * Keyed on the cache fingerprint, so a write invalidates it the instant it lands,
+ * and capped in age so a write the stamp somehow missed self-heals within a minute.
+ * Bounded to a handful of entries (the app only ever asks for a few windows) so a
+ * long-lived server can't grow a payload cache without limit.
+ */
+const memo = new Map<string, { stamp: string; at: number; data: JournalData }>();
+const MEMO_MAX_AGE_MS = 60_000;
+const MEMO_MAX_ENTRIES = 8;
+
+/** The identity of a journal read: same key + same cache stamp → same answer. */
+export function journalKey(opts: ReadJournalOptions = {}): string {
+  const today = opts.today ?? new Date().toISOString().slice(0, 10);
+  return `${opts.file ?? dbPath()}|${opts.days ?? "all"}|${opts.numericOnly ? 1 : 0}|${today}`;
+}
+
 /** Pivot the rebuilt cache into per-day records + column metadata for the Journal.
  * Future-dated days (date > `today`) are dropped so the Log and Timeline only ever
  * show up to the present. Returns an empty view when the cache doesn't exist yet or
@@ -117,6 +142,21 @@ export function readJournal(opts: ReadJournalOptions = {}): JournalData {
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
   const windowDays = opts.days ?? "all";
   if (!fs.existsSync(file)) return EMPTY;
+
+  const key = journalKey({ ...opts, file, today });
+  const stamp = cacheStamp(file);
+  const hit = memo.get(key);
+  if (hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS) return hit.data;
+  const data = computeJournal({ ...opts, file, today, days: windowDays });
+  memo.set(key, { stamp, at: Date.now(), data });
+  // Oldest-first eviction — Map preserves insertion order.
+  while (memo.size > MEMO_MAX_ENTRIES) memo.delete(memo.keys().next().value as string);
+  return data;
+}
+
+function computeJournal(opts: ReadJournalOptions & { file: string; today: string }): JournalData {
+  const { file, today } = opts;
+  const windowDays = opts.days ?? "all";
   let db: DB;
   try {
     db = openReadonly(file);

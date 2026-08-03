@@ -1,5 +1,8 @@
+import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { cachedJson } from "@/lib/api";
+import { fileStamp } from "@/lib/cache-stamp";
 import { recordDir } from "@/lib/paths";
 import { readInboxFromRecord } from "@/lib/record";
 
@@ -24,10 +27,17 @@ interface LogMeta {
 /** The Data-tab Log: every capture that entered the record — dropped files,
  * memos, photos — newest first, with what Structure made of each one. Read
  * straight from record/inbox.jsonl (the source of truth), all statuses. */
-export async function GET() {
+export async function GET(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  // Read straight from inbox.jsonl, so THAT file — not the derived cache — is what
+  // versions this view. Half a megabyte of log was re-parsed and re-sent on every
+  // visit to the tab; now an unchanged inbox answers 304 without reading it.
+  return cachedJson(req, buildLog, [fileStamp(path.join(recordDir(), "inbox.jsonl"))]);
+}
+
+function buildLog() {
   const inbox = readInboxFromRecord(recordDir());
   const items = inbox
     .slice(-LIMIT)
@@ -70,5 +80,5 @@ export async function GET() {
         rejectedAt: typeof meta.rejectedAt === "string" ? meta.rejectedAt : null,
       };
     });
-  return NextResponse.json({ total: inbox.length, items });
+  return { total: inbox.length, items };
 }
