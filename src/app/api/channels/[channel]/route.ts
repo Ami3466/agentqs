@@ -47,7 +47,7 @@ function seenWebhook(id: string | undefined): boolean {
  * the session cookie.
  */
 
-export async function GET(_req: Request, { params }: { params: { channel: string } }) {
+export async function GET(req: Request, { params }: { params: { channel: string } }) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
@@ -58,6 +58,18 @@ export async function GET(_req: Request, { params }: { params: { channel: string
   const env = channelEnv();
   const status = adapter.describe(env);
   const deliveries = readChannelDeliveries(adapter.id);
+
+  // ?discover=1 — every conversation the bot can see, newest traffic first. The
+  // answer to "I logged all week and nothing arrived": almost always the messages
+  // are in a conversation the poll was never pointed at, and this shows which.
+  // Opt-in because it costs a handful of API calls.
+  if (new URL(req.url).searchParams.get("discover") && adapter.conversations) {
+    try {
+      return NextResponse.json({ ...status, deliveries, conversations: await adapter.conversations(env) });
+    } catch (e) {
+      return NextResponse.json({ ...status, deliveries, error: (e as Error).message }, { status: 400 });
+    }
+  }
   // The probe answers "is this bot wired up?" — which is only half the question.
   // "Has anything actually ARRIVED, and what happened to it?" is the half that was
   // missing when the bot went quiet, so it ships in the same response.
