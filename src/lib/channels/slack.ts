@@ -186,14 +186,52 @@ export const slackAdapter: ChannelAdapter = {
   async conversations(env: ChannelEnv): Promise<ChannelConversation[]> {
     const call = slackCaller(env);
     const out: ChannelConversation[] = [];
+
+    // im/mpim are included on purpose: a DM to the bot is the single most common
+    // place "my messages vanished" turns out to mean "they went somewhere the poll
+    // was never pointed at". But each type needs its OWN read scope, and Slack fails
+    // the WHOLE call if any one is missing — so a token without `im:read` would
+    // answer "missing_scope" and hide the channels it could perfectly well list.
+    // Narrow until it answers, and say which kinds were unavailable.
+    const LADDER = [
+      "public_channel,private_channel,im,mpim",
+      "public_channel,private_channel",
+      "public_channel",
+    ];
+    let types = "";
+    for (const t of LADDER) {
+      try {
+        await call("conversations.list", { limit: "1", types: t, exclude_archived: "true" });
+        types = t;
+        break;
+      } catch (e) {
+        if (!/missing_scope/.test((e as Error).message)) throw e;
+      }
+    }
+    if (!types) {
+      throw new Error(
+        "Slack conversations.list failed: missing_scope — the bot token cannot list anything. Add channels:read " +
+          "(plus groups:read for private channels, im:read + mpim:read for DMs) at api.slack.com → OAuth & Permissions, " +
+          "then reinstall the app to the workspace.",
+      );
+    }
+    if (types !== LADDER[0]) {
+      // Not fatal, but it MUST be visible: the conversation someone is hunting for
+      // may be exactly the kind we were not allowed to enumerate.
+      out.push({
+        id: "",
+        name: `⚠ could not list DMs/private channels — token is missing im:read / mpim:read / groups:read (listed: ${types})`,
+        kind: "public",
+        member: false,
+        lastMessageAt: null,
+      });
+    }
+
     let cursor = "";
     do {
       const page = await call("conversations.list", {
         limit: "200",
-        // im/mpim included on purpose: a DM to the bot is the single most common
-        // place "my messages vanished" turns out to mean "they went somewhere the
-        // poll was never pointed at".
-        types: "public_channel,private_channel,im,mpim",
+        types,
         exclude_archived: "true",
         ...(cursor ? { cursor } : {}),
       });
@@ -211,7 +249,7 @@ export const slackAdapter: ChannelAdapter = {
 
     // Last-activity needs one cheap history call each, so only the ones the bot can
     // actually read, and bounded — this is a diagnostic, not a crawl.
-    const readable = out.filter((c) => c.member).slice(0, 40);
+    const readable = out.filter((c) => c.member && c.id).slice(0, 40);
     await Promise.all(
       readable.map(async (c) => {
         try {
