@@ -1,5 +1,8 @@
 services:
   agentqs:
+    # The published multi-arch image (amd64 + arm64). `docker compose pull` fetches
+    # it; `docker compose up --build` builds this repo instead and tags it the same.
+    image: ghcr.io/ami3466/agentqs:latest
     build: .
     container_name: agentqs
     ports:
