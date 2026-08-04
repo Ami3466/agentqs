@@ -1,5 +1,6 @@
 import fs from "fs";
 import { ensureIndexes, openReadonly, type DB } from "./db";
+import { cacheStamp } from "./cache-stamp";
 import { dbPath } from "./paths";
 import type { SourceCoverage } from "./sources";
 
@@ -40,9 +41,32 @@ const EMPTY: DailySummary = { totalRows: 0, sources: [], recent: [] };
  * the Pipeline tab hangs each row's coverage line off this, and `pipeline`
  * reports it. A source missing from the map landed nothing.
  */
+const coverageMemo = new Map<string, { stamp: string; at: number; data: Map<string, SourceCoverage> }>();
+const COVERAGE_MEMO_MAX_AGE_MS = 60_000;
+
 export function coverageBySource(file: string = dbPath()): Map<string, SourceCoverage> {
+  if (!fs.existsSync(file)) return new Map();
+  // Both group-bys walk every (source, date) entry in the record — 2.5M of them on a
+  // lifetime one, ~345ms — and NOTHING about the answer changes until the cache does.
+  // The Pipeline tab, the pipeline report and the idle prefetcher all ask on every
+  // load, so this was the slowest thing left in the app purely by being recomputed.
+  // Keyed on the cache fingerprint like the other read views: a write invalidates it
+  // the instant it lands, and the age cap self-heals a stamp that somehow missed one.
+  // Copied out, so a caller mutating its map (buildSources fills in defaults) cannot
+  // poison the next reader.
+  const stamp = cacheStamp(file);
+  const hit = coverageMemo.get(file);
+  if (hit && hit.stamp === stamp && Date.now() - hit.at < COVERAGE_MEMO_MAX_AGE_MS) {
+    return new Map([...hit.data].map(([k, v]) => [k, { ...v }]));
+  }
+  const fresh = computeCoverageBySource(file);
+  coverageMemo.set(file, { stamp, at: Date.now(), data: fresh });
+  if (coverageMemo.size > 4) coverageMemo.delete(coverageMemo.keys().next().value as string);
+  return new Map([...fresh].map(([k, v]) => [k, { ...v }]));
+}
+
+function computeCoverageBySource(file: string): Map<string, SourceCoverage> {
   const out = new Map<string, SourceCoverage>();
-  if (!fs.existsSync(file)) return out;
   // Both GROUP BYs below are covered by (source, date). Without those indexes this
   // is a full scan of every event — the query that made the Pipeline tab time out.
   ensureIndexes(file);

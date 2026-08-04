@@ -10,7 +10,7 @@
  * response in its HTTP cache (net::ERR_CACHE_WRITE_FAILURE), so the tab hangs on its
  * skeleton, which is what "it takes five minutes to load" actually was.
  *
- * Four properties, against production code, no network:
+ * Five properties, against production code, no network:
  *
  *   1. A PAGE IS BOUNDED. One page of the journal is a page, whatever the record's
  *      size, and paging back through it never repeats or skips a day at the seam.
@@ -20,7 +20,12 @@
  *   3. A CHART PAYS FOR ITS OWN LINES. Asking for two series returns two series, its
  *      points identical to the same lines inside the full set, and the catalog (the
  *      picker's list) carries no numbers at all.
- *   4. THE COLUMN CATALOG IS INDEXED. The "which columns exist?" query that opens
+ *   4. COVERAGE IS MEMOIZED HONESTLY. Recomputing "what did each source land?" walks
+ *      every (source, date) entry — 2.5M of them, ~345ms — and the Pipeline tab, the
+ *      pipeline report and the prefetcher all ask on every load. Memoized, it must
+ *      still invalidate on a write and must not hand callers its own object to
+ *      mutate. A fast answer that is wrong is worse than a slow one.
+ *   5. THE COLUMN CATALOG IS INDEXED. The "which columns exist?" query that opens
  *      every journal read must not full-scan the daily table.
  *
  * Run: npm run paging:test
@@ -134,6 +139,30 @@ async function main(): Promise<void> {
       return (s.d ?? s.v.map((_, i) => i)).map((di, i) => `${d.dates[di]}=${s.v[i]}`).join(",");
     };
     check("…with identical points after reindexing", pts(full, two[0]) === pts(sub, two[0]));
+
+    console.log("\nCoverage is memoized without going stale or leaking…\n");
+    {
+      const { coverageBySource } = await import("../src/lib/daily");
+      const first = coverageBySource();
+      const again = coverageBySource();
+      check(
+        "a repeat call returns the same answer",
+        JSON.stringify([...first].sort()) === JSON.stringify([...again].sort()),
+        `${first.size} sources`,
+      );
+      // buildSources fills defaults into the map it gets back. If that were the
+      // memo's own object, the next reader would inherit the mutation.
+      const k = [...first.keys()][0];
+      first.get(k)!.events = 987654;
+      check("a caller mutating its copy cannot poison the memo", coverageBySource().get(k)!.events !== 987654);
+
+      // A write must invalidate it — a fast answer that is WRONG is the worst outcome.
+      const before = coverageBySource().get("src0")?.days ?? 0;
+      fs.appendFileSync(path.join(rDir, "daily", "src0.csv"), "1999-01-01,1,2,3,4\n");
+      rebuild({ recordDir: rDir });
+      const after = coverageBySource().get("src0")?.days ?? 0;
+      check("a rebuild invalidates it", after === before + 1, `${before} -> ${after} days`);
+    }
 
     console.log("\nThe column catalog is answered from an index…\n");
     const db = openReadonly(dbPath());
