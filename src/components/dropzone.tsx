@@ -3,6 +3,10 @@
 import { useCallback, useRef, useState, type DragEvent } from "react";
 import { Spinner, Upload } from "@/components/icons";
 import { cn } from "@/components/ui";
+// The zero-dependency leaf, NOT `@/lib/pdf-text`: importing the brain from here
+// makes webpack emit its 1.6MB pdf.js chunk into static/ for a parse that only
+// ever happens on the server.
+import { MAX_PDF_BYTES, PDF_MIME, looksPdfName } from "@/lib/pdf-limits";
 
 const TEXT_EXT = /\.(csv|tsv|tab|psv|txt|md|markdown|json|jsonl|ndjson|log|ics|vcf|xml|yaml|yml)$/i;
 type UploadItem = { file: File; path: string };
@@ -23,7 +27,8 @@ function isBinary(text: string): boolean {
   return false;
 }
 
-/** Read a file as a data URL (used to embed photos verbatim into the inbox). */
+/** Read a file as a data URL (used to embed photos verbatim into the inbox, and
+ *  to base64 a PDF for the server to parse). */
 function readDataUrl(f: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -99,8 +104,9 @@ async function droppedItems(dataTransfer: DataTransfer): Promise<UploadItem[]> {
 
 /**
  * The one manual ingest path. Drag & drop — or click to browse — ANY file,
- * including folders and images. Text files land verbatim in the pending inbox;
- * images are read as a data URL and land there too (embedded on Structure). This is
+ * including folders, images and PDFs. Text files land verbatim in the pending inbox;
+ * images are read as a data URL and land there too (embedded on Structure); a PDF
+ * is posted as base64 and the SERVER extracts its text layer. This is
  * the ONLY drop target on the page: sources are live feeds, a dropped file is not a
  * connection. Bumps the shared `version` so the inbox refetches.
  */
@@ -122,14 +128,18 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
       if (!list.length) return;
       setBusy(true);
       let ok = 0;
-      const skipped: string[] = [];
-      async function post(body: Record<string, unknown>): Promise<boolean> {
+      // A refusal carries its REASON when the server gave one (a scanned PDF, an
+      // encrypted one) — "couldn't read it" is only for a file we never got.
+      const skipped: { name: string; why?: string }[] = [];
+      async function post(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
         const res = await fetch("/api/inbox", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ source: "drop", ...body }),
         });
-        return res.ok;
+        if (res.ok) return { ok: true };
+        const detail = (await res.json().catch(() => ({}))) as { error?: string };
+        return { ok: false, error: detail.error };
       }
       try {
         for (const item of list) {
@@ -140,7 +150,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
             try {
               dataUrl = await readDataUrl(f);
             } catch {
-              skipped.push(filename);
+              skipped.push({ name: filename });
               continue;
             }
             const done = await post({
@@ -148,19 +158,42 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
               kind: "image",
               meta: { filename, bytes: f.size, mime: f.type },
             });
-            if (done) ok++;
-            else skipped.push(filename);
+            if (done.ok) ok++;
+            else skipped.push({ name: filename, why: done.error });
+            continue;
+          }
+          // A PDF is binary here and text on the server: ship the BYTES and let
+          // /api/inbox extract the text layer. The browser never parses a PDF.
+          if (looksPdfName(f.name, f.type)) {
+            if (f.size > MAX_PDF_BYTES) {
+              skipped.push({ name: filename, why: "PDF too large — use `agentqs import <file>`" });
+              continue;
+            }
+            let dataUrl = "";
+            try {
+              dataUrl = await readDataUrl(f);
+            } catch {
+              skipped.push({ name: filename });
+              continue;
+            }
+            const done = await post({
+              pdfBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+              kind: "file",
+              meta: { filename, bytes: f.size, mime: PDF_MIME },
+            });
+            if (done.ok) ok++;
+            else skipped.push({ name: filename, why: done.error });
             continue;
           }
           let text = "";
           try {
             text = await f.text();
           } catch {
-            skipped.push(filename);
+            skipped.push({ name: filename });
             continue;
           }
           if (!text.trim() || (!looksTextual(f) && isBinary(text))) {
-            skipped.push(filename);
+            skipped.push({ name: filename });
             continue;
           }
           const done = await post({
@@ -168,15 +201,24 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
             kind: kindOf(filename),
             meta: { filename, bytes: f.size },
           });
-          if (done) ok++;
-          else skipped.push(filename);
+          if (done.ok) ok++;
+          else skipped.push({ name: filename, why: done.error });
         }
         if (ok) {
           say("ok", `${ok} file${ok === 1 ? "" : "s"} added — Structure below.`);
           onUploaded();
         }
         if (skipped.length) {
-          say(ok ? "ok" : "error", `Couldn't read ${skipped.join(", ")}.`);
+          const explained = skipped.filter((s) => s.why);
+          say(
+            ok ? "ok" : "error",
+            explained.length
+              ? explained.map((s) => `${s.name}: ${s.why}`).join(" · ") +
+                  (explained.length < skipped.length
+                    ? ` · couldn't read ${skipped.filter((s) => !s.why).map((s) => s.name).join(", ")}`
+                    : "")
+              : `Couldn't read ${skipped.map((s) => s.name).join(", ")}.`,
+          );
         }
       } finally {
         setBusy(false);
@@ -239,7 +281,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           {busy ? "Adding…" : "Drop data here"}
         </p>
         <p className="max-w-md text-sm text-muted-fg">
-          Files or folders. Photos will be embedded.
+          Files or folders. Photos embed, PDFs extract to text.
         </p>
       </div>
       <input

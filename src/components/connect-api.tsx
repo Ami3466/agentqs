@@ -31,6 +31,7 @@ export const skillSnip = (b: string, k: string) =>
     "",
     "Common flows:",
     '- Capture: POST /api/inbox {"text":"…"}. Structure it yourself: read GET /api/inbox, extract dated metrics to CSV, POST /api/structure {"id","csv"} (date column YYYY-MM-DD; each fact on ITS OWN date).',
+    '- A PDF: POST /api/inbox {"pdfBase64":"<base64>","kind":"file","meta":{"filename":"statement.pdf"}} — the SERVER extracts the text layer and lands that, so structure it exactly like any other capture. A scanned PDF (no text layer) is refused 400 with that reason; there is no OCR.',
     '- Connect a source: POST /api/import/<id> {"credential"} (tested before saved; syncs as a background job — poll GET). OAuth source: POST /api/oauth/<id> {"clientId","clientSecret"}.',
     '- Data quality: POST /api/scan {} → findings; apply one with POST /api/structure {"id":"<notificationId>"}.',
     '- Backups: GET /api/backup · POST /api/backup {"target":"github"|"drive"} · migrate onto a fresh instance: {"target":"restore","confirm":"replace-record"}.',

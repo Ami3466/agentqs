@@ -91,6 +91,7 @@ import { doctorReport, migrateStore } from "./store-doctor";
 import { structureCsv, sourceName } from "./structure";
 import { autoStructureNewItem, csvLossText, notifyCsvLoss, structurePending } from "./structure-run";
 import { looksText, sniffHead, MAX_INBOX_BYTES, MAX_STRUCTURE_BYTES } from "./import-tree";
+import { extractPdfText, looksPdf, MAX_PDF_BYTES, PDF_MIME, PDF_SCANNED_NOTE } from "./pdf-text";
 import {
   acceptQualityAction,
   applySavedMerges,
@@ -1528,26 +1529,52 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
   let text = opts.text;
   let hint = opts.name;
   let oversized = false;
+  /** Extra inbox meta a non-text original leaves behind (a PDF's page count) —
+   *  the raw body is text, but the record must still say where it came from. */
+  let originMeta: Record<string, unknown> | null = null;
   if (opts.file) {
     const st = fs.statSync(opts.file);
     if (st.isDirectory()) {
       throw new Error("That's a folder — `agentqs import <folder>` (or the MCP `import_tree` tool) runs the fully accounted folder import.");
     }
     if (st.size === 0) throw new Error("Nothing to import — the file is empty.");
-    // Refuse loudly what can't land as text — utf8-reading a binary would put
-    // silent garbage in the record.
-    if (!looksText(sniffHead(opts.file))) {
-      throw new Error(
-        `Binary file — no importer claims it, nothing landed. Try \`agentqs import <folder>\` to route known formats, or a dedicated importer.`,
-      );
+    const head = sniffHead(opts.file);
+    if (looksPdf(head)) {
+      // A PDF is binary, but its TEXT LAYER is a first-class capture: extract it
+      // here so everything downstream (structure, search, undo) sees plain text.
+      if (st.size > MAX_PDF_BYTES) {
+        throw new Error(`PDF too large (over ${MAX_PDF_BYTES} bytes) — needs a dedicated importer, nothing landed.`);
+      }
+      const pdf = await extractPdfText(fs.readFileSync(opts.file)); // throws readably on encrypted/corrupt
+      if (pdf.scanned) {
+        // Never the generic binary message: the user must learn WHY a file they
+        // can read on screen landed nothing. No OCR — out of scope.
+        throw new Error(`${PDF_SCANNED_NOTE} (${pdf.pages} page(s)), nothing landed.`);
+      }
+      text = pdf.text;
+      hint = hint ?? path.basename(opts.file);
+      originMeta = {
+        mime: PDF_MIME,
+        pages: pdf.pages,
+        bytes: st.size,
+        ...(pdf.truncated ? { truncated: true } : {}),
+      };
+    } else {
+      // Refuse loudly what can't land as text — utf8-reading a binary would put
+      // silent garbage in the record.
+      if (!looksText(head)) {
+        throw new Error(
+          `Binary file — no importer claims it, nothing landed. Try \`agentqs import <folder>\` to route known formats, or a dedicated importer.`,
+        );
+      }
+      if (st.size > MAX_STRUCTURE_BYTES) {
+        throw new Error("Text too large — needs a dedicated importer, nothing landed.");
+      }
+      // Bigger than a memo may be, but clean CSV never lands raw — it structures.
+      oversized = st.size > MAX_INBOX_BYTES;
+      text = fs.readFileSync(opts.file, "utf8");
+      hint = hint ?? path.basename(opts.file);
     }
-    if (st.size > MAX_STRUCTURE_BYTES) {
-      throw new Error("Text too large — needs a dedicated importer, nothing landed.");
-    }
-    // Bigger than a memo may be, but clean CSV never lands raw — it structures.
-    oversized = st.size > MAX_INBOX_BYTES;
-    text = fs.readFileSync(opts.file, "utf8");
-    hint = hint ?? path.basename(opts.file);
   }
   if (text == null || text.trim() === "") throw new Error("Nothing to import — pass a file or --text.");
   // The {text} path gets the same guards as the file path — a face must not
@@ -1576,7 +1603,7 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
       text: oversized ? `[${hint ?? "import"}: ${Buffer.byteLength(text).toLocaleString()} bytes of clean CSV — merged, body not kept raw]` : text,
       source: "drop",
       kind: "file",
-      meta: hint ? { filename: hint } : null,
+      meta: hint || originMeta ? { ...(hint ? { filename: hint } : {}), ...(originMeta ?? {}) } : null,
     },
     { recordDir: rDir },
   );
@@ -1633,7 +1660,10 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
   return {
     inboxId: item.id, bytes: Buffer.byteLength(text), structured: false,
     pending: countPending(rDir),
-    note: "Landed raw in the inbox — run `agentqs structure` (needs an AI key for prose).",
+    note:
+      (originMeta
+        ? `Extracted ${originMeta.pages} page(s) of PDF text${originMeta.truncated ? " (TRUNCATED — the tail was cut)" : ""}. `
+        : "") + "Landed raw in the inbox — run `agentqs structure` (needs an AI key for prose).",
   };
 }
 

@@ -171,7 +171,7 @@ export async function startMcpServer(): Promise<void> {
     "import_file",
     {
       title: "Import an arbitrary file",
-      description: "The escape hatch: land any file in the record. Clean CSV structures instantly; prose waits for `structure`.",
+      description: "The escape hatch: land any file in the record. Clean CSV structures instantly; prose waits for `structure`. A PDF is extracted to its text layer and lands as text (a scanned PDF has none and is refused BY NAME — no OCR).",
       inputSchema: { file: z.string().optional(), text: z.string().optional(), name: z.string().optional() },
     },
     async ({ file, text, name }) => guard(() => core.importRaw({ file, text, name })),
@@ -207,7 +207,7 @@ export async function startMcpServer(): Promise<void> {
       title: "Import a whole folder, fully accounted",
       description:
         "Walk a folder and land everything: clean CSVs structure instantly, text lands raw for the structuring agent, " +
-        "known formats (Takeout zips, Chrome History, iPhone backups, photos) are routed to their importer commands. " +
+        "known formats (Takeout zips, Chrome History, iPhone backups, photos) are routed to their importer commands, and a PDF lands as its extracted text. " +
         "EVERY file ends in exactly one bucket; residue (files nothing claims) is returned AND persisted as a pending " +
         "inbox notification — nothing is ever silently skipped. Idempotent: re-importing the same folder adds nothing twice.",
       inputSchema: { dir: z.string() },

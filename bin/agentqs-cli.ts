@@ -642,12 +642,12 @@ automation
 // ---- import (escape hatch) + structure ------------------------------------
 program
   .command("import <path>")
-  .description("import a file or a whole folder (CSV structures instantly; a folder gets a full accounting — exit 1 on residue)")
+  .description("import a file or a whole folder (CSV structures instantly; a PDF lands as its extracted text; a folder gets a full accounting — exit 1 on residue)")
   .option("-n, --name <source>", "source name for the daily table (single file only)")
   .action(async (target: string, opts: { name?: string }) => {
     try {
       if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
-        const r = core.importTree(target);
+        const r = await core.importTree(target);
         // Print the persisted receipt itself — console and inbox must never
         // tell different stories about the same run.
         out(r, (d) =>

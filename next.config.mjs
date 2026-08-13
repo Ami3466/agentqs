@@ -9,8 +9,9 @@ const nextConfig = {
   redirects: async () => [{ source: "/data", destination: "/pipeline", permanent: false }],
   // Native / heavy server-only deps must stay external (not webpack-bundled): the
   // local embedders (transformers.js + onnxruntime), image tooling (sharp, exifr),
-  // and the sqlite-vec loadable extension all ship native binaries or resolve model
-  // files at runtime.
+  // the sqlite-vec loadable extension, and unpdf (a pdf.js build that resolves its
+  // own font/cmap data from disk) all ship native binaries or resolve model files
+  // at runtime.
   experimental: {
     // Boots the standalone ingest listener (src/instrumentation.ts) once per
     // server process.
@@ -22,6 +23,7 @@ const nextConfig = {
       "exifr",
       "better-sqlite3",
       "sqlite-vec",
+      "unpdf",
     ],
   },
   webpack: (config, { dev }) => {

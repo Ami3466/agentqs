@@ -33,6 +33,7 @@
     "granola:test": "tsx scripts/granola.ts",
     "files:test": "tsx scripts/import-files-test.ts",
     "tree:test": "tsx scripts/import-tree-test.ts",
+    "pdf:test": "tsx scripts/pdf-test.ts",
     "truncation:test": "tsx scripts/truncation-test.ts",
     "connection:test": "tsx scripts/connection-test.ts",
     "audit:test": "tsx scripts/audit-test.ts",
@@ -87,6 +88,7 @@
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.9",
     "tailwind-merge": "^3.6.0",
+    "unpdf": "^1.8.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

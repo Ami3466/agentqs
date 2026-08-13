@@ -1,6 +1,7 @@
 import type { AppConfig } from "./config";
 import { readConfig, writeConfig } from "./config";
 import { netFetch, type FetchLike } from "./importers/plugin";
+import { extractPdfText, PDF_MIME, PDF_SCANNED_NOTE } from "./pdf-text";
 
 /**
  * Google Drive as a READABLE data source — the pull-on-request sibling of the
@@ -37,10 +38,11 @@ export interface DriveFileEntry {
   isFolder: boolean;
 }
 
-/** A pulled file. `text` is present when the content was extractable (text-like or
- *  a Google Doc/Sheet exported to plain text); `binary` marks a file whose bytes
- *  we won't inline (an image, an archive) — the agent gets the metadata and a note,
- *  not megabytes of base64. `truncated` = the file was over MAX_PULL_BYTES. */
+/** A pulled file. `text` is present when the content was extractable (text-like, a
+ *  Google Doc/Sheet exported to plain text, or a PDF's text layer); `binary` marks
+ *  a file whose bytes we won't inline (an image, an archive, a scanned PDF) — the
+ *  agent gets the metadata and a note, not megabytes of base64. `truncated` = the
+ *  file was over MAX_PULL_BYTES, or a huge PDF's text was cut. */
 export interface DrivePull {
   id: string;
   name: string;
@@ -88,6 +90,13 @@ async function driveText(url: string, token: string, fetchImpl: FetchLike): Prom
   const res = await netFetch(url, { headers: bearer(token) }, fetchImpl);
   const body = await res.text();
   return { res, body };
+}
+
+/** Same call, raw bytes — a PDF must not be decoded as UTF-8 before it is parsed. */
+async function driveBytes(url: string, token: string, fetchImpl: FetchLike): Promise<{ res: Response; bytes: Uint8Array }> {
+  const res = await netFetch(url, { headers: bearer(token) }, fetchImpl);
+  if (!res.ok) throw driveError(res, await res.text().catch(() => ""));
+  return { res, bytes: new Uint8Array(await res.arrayBuffer()) };
 }
 
 function driveError(res: Response, body: string): Error {
@@ -183,8 +192,9 @@ function exportMimeFor(mimeType: string): string | null {
   return null;
 }
 
-/** Bytes we can hand to a model as text. Everything else (images, zips, native
- *  binaries) is returned as metadata + a note, never inlined. */
+/** Bytes we can hand to a model as text AS THEY ARE. Everything else (images,
+ *  zips, native binaries) is returned as metadata + a note, never inlined — except
+ *  a PDF, which is extracted to its text layer first (see pullDriveFile). */
 function isTextual(mimeType: string): boolean {
   return (
     mimeType.startsWith("text/") ||
@@ -239,6 +249,35 @@ export async function pullDriveFile(
     const { res, body } = await driveText(url, token, fetchImpl);
     if (!res.ok) throw driveError(res, body);
     return { ...base, bytes: Buffer.byteLength(body), text: body };
+  }
+
+  // A PDF is the whole point of the raw folder (statements, contracts, papers),
+  // so it is EXTRACTED, not stubbed: the bytes are downloaded, parsed here, and
+  // only the text comes back. Still read-only — nothing lands in the record.
+  if (mimeType === PDF_MIME) {
+    const url = `${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`;
+    const { bytes } = await driveBytes(url, token, fetchImpl);
+    // Drive may not report `size` (so the ceiling above could not fire) — the
+    // downloaded length is the one that is always true.
+    if (bytes.length > MAX_PULL_BYTES) {
+      return { ...base, bytes: bytes.length, binary: true, truncated: true, note: `over ${MAX_PULL_BYTES} bytes — not pulled` };
+    }
+    try {
+      const pdf = await extractPdfText(bytes);
+      if (pdf.scanned) {
+        return { ...base, bytes: bytes.length, binary: true, note: `${PDF_SCANNED_NOTE} (${pdf.pages} page(s))` };
+      }
+      return {
+        ...base,
+        bytes: bytes.length,
+        text: pdf.text,
+        truncated: pdf.truncated || undefined,
+        note: `PDF — ${pdf.pages} page(s) of text extracted${pdf.truncated ? " (TRUNCATED)" : ""}`,
+      };
+    } catch (e) {
+      // Encrypted / corrupt: the reason travels verbatim, never a generic stub.
+      return { ...base, bytes: bytes.length, binary: true, note: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   if (!isTextual(mimeType)) {

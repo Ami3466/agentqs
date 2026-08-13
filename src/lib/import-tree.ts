@@ -14,6 +14,7 @@ import {
 import { structureCsv, sourceName } from "./structure";
 import { notifyCsvLoss } from "./structure-run";
 import { columnGuard, splitColumnKey } from "./column-scan";
+import { extractPdfText, looksPdf, MAX_PDF_BYTES, PDF_MIME, PDF_SCANNED_NOTE } from "./pdf-text";
 import { wipeDemoOnImport } from "./demo";
 import { isStreamingHistoryFile } from "./importers/files/spotify-export";
 
@@ -178,7 +179,7 @@ function walk(root: string, dir: string, out: TreeFileOutcome[], files: string[]
   }
 }
 
-export function importTree(root: string): ImportTreeReport {
+export async function importTree(root: string): Promise<ImportTreeReport> {
   const abs = path.resolve(root);
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
     throw new Error(`Not a directory: ${abs}`);
@@ -270,6 +271,62 @@ export function importTree(root: string): ImportTreeReport {
       }
       if (IMAGE_EXT.has(ext(name))) {
         push("importer", `agentqs photos import ${shq(path.dirname(file))}`, bytes);
+        continue;
+      }
+      // A PDF is binary bytes around a TEXT LAYER — an importable file, not
+      // residue. What lands is the extracted text (same shape as any dropped
+      // memo), so structure/search/undo need no PDF awareness. A scan has no
+      // text layer: it is `ignored` WITH THE REASON, never a silent skip and
+      // never the generic binary line.
+      if (looksPdf(head)) {
+        if (bytes > MAX_PDF_BYTES) {
+          push("residue", `PDF too large (over ${MAX_PDF_BYTES} bytes) — needs a dedicated importer`, bytes);
+          continue;
+        }
+        let pdf;
+        try {
+          pdf = await extractPdfText(fs.readFileSync(file));
+        } catch (e) {
+          push("residue", `unreadable PDF — ${e instanceof Error ? e.message : String(e)}`, bytes);
+          continue;
+        }
+        if (pdf.scanned) {
+          push("ignored", `${PDF_SCANNED_NOTE} (${pdf.pages} page(s))`, bytes);
+          continue;
+        }
+        // The ceiling that matters is the TEXT's, not the file's — a fat PDF
+        // usually extracts to a small memo.
+        if (Buffer.byteLength(pdf.text) > MAX_INBOX_BYTES) {
+          push("residue", "PDF text too large to land raw — needs a dedicated importer", bytes);
+          continue;
+        }
+        const pdfId = stableId(rel, pdf.text);
+        if (known.has(pdfId)) {
+          push("ignored", "unchanged — already imported", bytes);
+          continue;
+        }
+        known.add(pdfId);
+        land(
+          {
+            id: pdfId,
+            text: pdf.text,
+            source: "drop",
+            kind: "file",
+            meta: {
+              filename: name,
+              mime: PDF_MIME,
+              pages: pdf.pages,
+              bytes,
+              ...(pdf.truncated ? { truncated: true } : {}),
+            },
+          },
+          Buffer.byteLength(pdf.text),
+        );
+        push(
+          "inbox",
+          `PDF text extracted (${pdf.pages} page(s))${pdf.truncated ? ", TRUNCATED" : ""} — structure or keep it`,
+          bytes,
+        );
         continue;
       }
 
