@@ -4,7 +4,8 @@
  *
  *   MAIN: over the deployed URL — drop a CSV capture (POST /api/inbox),
  *   Structure it (POST /api/structure), see it in the Log with revert armed
- *   (GET /api/log), hand-edit the daily table (POST /api/journal/edit: set a
+ *   (GET /api/log), open the row for its full text + cell diff
+ *   (GET /api/log?id=), hand-edit the daily table (POST /api/journal/edit: set a
  *   cell, add a manual column, delete a row), then Reject the capture
  *   (POST /api/log/reject) and assert the cells it wrote are gone while the
  *   manual column survives.
@@ -112,11 +113,12 @@ async function main() {
     // 1. Drop a CSV capture, exactly like the Dropzone does. Structuring it is a
     //    real import — it must wipe every trace of the demo record first.
     console.log("\nDrop → Structure");
+    const csv = "date,steps\n2026-07-01,1000\n2026-07-02,2000";
     const drop = await fetch(`${base}/api/inbox`, {
       method: "POST",
       headers: json,
       body: JSON.stringify({
-        text: "date,steps\n2026-07-01,1000\n2026-07-02,2000",
+        text: csv,
         source: "drop",
         kind: "csv",
         meta: { filename: "steps.csv" },
@@ -132,20 +134,47 @@ async function main() {
     const sBody = (await structure.json()) as { structured: number };
     check("structured via the free CSV path", structure.ok && sBody.structured === 1);
 
-    // 2. The Log shows the capture with what it became, revert armed.
+    // 2. The Log shows the capture with what it became, revert armed. The list is
+    //    a LIST: a short preview per row and the cell COUNT — the capture in full
+    //    and the cell diff itself belong to the expanded row (GET /api/log?id=).
     console.log("\nLog");
     const log1 = (await (await fetch(`${base}/api/log`, { headers: { cookie } })).json()) as {
-      items: Array<{ id: string; status: string; filename: string | null; structured: { source: string | null; cells: number | null; canRevert: boolean; applied: Array<{ d: string; m: string; before: string | null; after: string }> } | null }>;
+      items: Array<{ id: string; status: string; filename: string | null; text: string; textLength: number; structured: { source: string | null; cells: number | null; canRevert: boolean; appliedCount: number; applied?: unknown } | null }>;
     };
     const item = log1.items[0];
     check("demo wiped on real import — log holds only the real capture", log1.items.length === 1 && item.filename === "steps.csv");
     check("log shows structured → steps, 2 cells, revert armed",
       item.status === "structured" && item.structured?.source === "steps" && item.structured?.cells === 2 && item.structured?.canRevert === true);
-    const diff = item.structured?.applied ?? [];
-    check("log carries the reviewable diff (before → after per cell)",
+    check("list row carries the preview and the true length, not the cell diff",
+      item.text === csv && item.textLength === csv.length && item.structured?.applied === undefined);
+    check("list row still counts the cells it wrote", item.structured?.appliedCount === 2);
+
+    // 2b. The expanded row: the capture in full plus the reviewable diff, fetched
+    //     on demand for the ONE row the user opened.
+    console.log("\nLog detail");
+    type Detail = {
+      id: string;
+      text: string;
+      textLength: number;
+      applied: Array<{ d: string; m: string; before: string | null; after: string }>;
+      appliedTruncated: boolean;
+    };
+    const detailRes = await fetch(`${base}/api/log?id=${encodeURIComponent(item.id)}`, { headers: { cookie } });
+    const detail = (await detailRes.json()) as Detail;
+    check("detail returns the capture in full",
+      detailRes.ok && detail.id === item.id && detail.text === csv && detail.textLength === csv.length);
+    const diff = detail.applied ?? [];
+    check("detail carries the reviewable diff (before → after per cell)",
       diff.length === 2 &&
         diff.some((c) => c.d === "2026-07-01" && c.m === "steps" && c.before === null && c.after === "1000") &&
         diff.some((c) => c.d === "2026-07-02" && c.m === "steps" && c.before === null && c.after === "2000"));
+    check("the move lost nothing — as many cells as the list counts, none dropped",
+      diff.length === item.structured?.appliedCount && detail.appliedTruncated === false);
+
+    const bogus = await fetch(`${base}/api/log?id=no-such-capture`, { headers: { cookie } });
+    const bogusBody = (await bogus.json()) as Detail;
+    check("an unknown id is an empty detail, not an error",
+      bogus.ok && bogusBody.text === "" && bogusBody.textLength === 0 && bogusBody.applied.length === 0);
 
     // 3. Edit the table: change a cell, add a manual column, delete a row.
     console.log("\nJournal edit");
@@ -170,7 +199,11 @@ async function main() {
     check("manual column written", day1?.values["manual.mood"]?.text === "good");
     check("row deleted", !eBody.journal.days.some((d) => d.date === "2026-07-02"));
 
-    // 4. Reject the capture: its cells go, the manual column stays.
+    // 4. Reject the capture: nothing it wrote is left in the table, and the hand
+    //    edits stand. Both its cells were changed AFTER the merge (07-01 retyped
+    //    as 1111, 07-02's row deleted), so the undo is conditional and takes back
+    //    neither: a value the user typed is theirs, not the capture's. `reverted`
+    //    counts cells this reject actually moved — 0, honestly.
     console.log("\nReject");
     const reject = await fetch(`${base}/api/log/reject`, {
       method: "POST",
@@ -178,19 +211,109 @@ async function main() {
       body: JSON.stringify({ id: item.id }),
     });
     const rBody = (await reject.json()) as { reverted: number };
-    check("reject reverted the merge's cells", reject.ok && rBody.reverted === 2);
+    check("reject counts only the cells it actually moved", reject.ok && rBody.reverted === 0);
 
     const journal = (await (await fetch(`${base}/api/journal`, { headers: { cookie } })).json()) as {
       metrics: Array<{ key: string }>;
       days: Array<{ date: string; values: Record<string, { text: string }> }>;
     };
-    check("rejected capture's column is gone", !journal.metrics.some((m) => m.key === "steps.steps"));
+    check("no value the capture wrote is left in the table",
+      journal.days.find((d) => d.date === "2026-07-01")?.values["steps.steps"]?.text !== "1000" &&
+        !journal.days.some((d) => d.date === "2026-07-02"));
+    check("the hand-typed cell stood through the undo",
+      journal.days.find((d) => d.date === "2026-07-01")?.values["steps.steps"]?.text === "1111");
     check("manual edit survived the reject", journal.days.find((d) => d.date === "2026-07-01")?.values["manual.mood"]?.text === "good");
 
     const log2 = (await (await fetch(`${base}/api/log`, { headers: { cookie } })).json()) as {
       items: Array<{ status: string; rejectedAt: string | null }>;
     };
     check("log marks it rejected", log2.items[0]?.status === "discarded" && Boolean(log2.items[0]?.rejectedAt));
+
+    // 4b. The undo itself, on cells nobody touched: a second capture, rejected
+    //     straight away, must take back every cell it wrote — its column with
+    //     them — report that true count, and leave the other sources alone.
+    console.log("\nReject (untouched cells)");
+    const drop2 = await fetch(`${base}/api/inbox`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({
+        text: "date,sleep\n2026-07-03,7\n2026-07-04,8",
+        source: "drop",
+        kind: "csv",
+        meta: { filename: "sleep.csv" },
+      }),
+    });
+    const structure2 = await fetch(`${base}/api/structure`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ all: true }),
+    });
+    const s2Body = (await structure2.json()) as { structured: number };
+    check("second capture structured", drop2.ok && structure2.ok && s2Body.structured === 1);
+
+    const log3 = (await (await fetch(`${base}/api/log`, { headers: { cookie } })).json()) as {
+      items: Array<{ id: string; filename: string | null; structured: { source: string | null } | null }>;
+    };
+    const fresh = log3.items.find((i) => i.filename === "sleep.csv");
+    const sleepKey = `${fresh?.structured?.source}.sleep`;
+    const mid = (await (await fetch(`${base}/api/journal`, { headers: { cookie } })).json()) as {
+      metrics: Array<{ key: string }>;
+    };
+    check("the untouched capture's column landed", Boolean(fresh) && mid.metrics.some((m) => m.key === sleepKey));
+
+    const reject2 = await fetch(`${base}/api/log/reject`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ id: fresh?.id }),
+    });
+    const r2Body = (await reject2.json()) as { reverted: number };
+    check("reject took back every cell it wrote", reject2.ok && r2Body.reverted === 2);
+
+    const after = (await (await fetch(`${base}/api/journal`, { headers: { cookie } })).json()) as {
+      metrics: Array<{ key: string }>;
+      days: Array<{ date: string; values: Record<string, { text: string }> }>;
+    };
+    check("rejected capture's column is gone", !after.metrics.some((m) => m.key === sleepKey));
+    check("its dates are gone with it",
+      !after.days.some((d) => d.date === "2026-07-03" || d.date === "2026-07-04"));
+    check("the undo took its own cells and nothing else",
+      after.days.find((d) => d.date === "2026-07-01")?.values["manual.mood"]?.text === "good" &&
+        after.days.find((d) => d.date === "2026-07-01")?.values["steps.steps"]?.text === "1111");
+
+    // 5. The point of the split, in bytes: the list ships one short line per row,
+    //    the details ship the captures — and only for the row someone opened.
+    console.log("\nPayload");
+    const filler = "a long capture line the list has no reason to ship.".repeat(120);
+    for (let n = 0; n < 5; n++) {
+      const landed = await fetch(`${base}/api/inbox`, {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ text: `memo ${n}\n${filler}`, source: "memo", kind: "note" }),
+      });
+      if (!landed.ok) check(`long memo ${n} landed`, false, await landed.text());
+    }
+    const listRaw = await (await fetch(`${base}/api/log`, { headers: { cookie } })).text();
+    const listBytes = Buffer.byteLength(listRaw);
+    const list = JSON.parse(listRaw) as { items: Array<{ id: string; text: string; textLength: number }> };
+
+    let detailBytes = 0;
+    for (const row of list.items) {
+      const r = await fetch(`${base}/api/log?id=${encodeURIComponent(row.id)}`, { headers: { cookie } });
+      detailBytes += Buffer.byteLength(await r.text());
+    }
+    check("the list costs a fraction of the details it stopped shipping",
+      listBytes * 4 < detailBytes, `list ${listBytes}B for ${list.items.length} rows vs ${detailBytes}B of details`);
+
+    const big = list.items.find((i) => i.text.startsWith("memo 0"));
+    check("the long memos reached the log", Boolean(big));
+    if (big) {
+      check("a long capture is a short preview in the list, with its true length",
+        big.text.length <= 200 && big.textLength === `memo 0\n${filler}`.length,
+        `preview ${big.text.length} chars of ${big.textLength}`);
+      const bigDetail = (await (await fetch(`${base}/api/log?id=${encodeURIComponent(big.id)}`, { headers: { cookie } })).json()) as Detail;
+      check("the detail hands back the whole capture the list truncated",
+        bigDetail.text === `memo 0\n${filler}` && bigDetail.textLength === big.textLength);
+    }
   } finally {
     server.kill();
     fs.rmSync(root, { recursive: true, force: true });

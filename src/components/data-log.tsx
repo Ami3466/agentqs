@@ -24,7 +24,14 @@ interface LogStructured {
   metrics: string[];
   at: string | null;
   canRevert: boolean;
+}
+
+/** What an expanded row needs, fetched on demand from /api/log?id=. */
+interface LogDetail {
+  text: string;
+  textLength: number;
   applied: AppliedCell[];
+  appliedTruncated: boolean;
 }
 
 interface LogItem {
@@ -59,6 +66,9 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
   // Like every long list here: a fixed-height scrollable box with its own search.
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
+  // Full text + cell diff for the opened row only. The list payload carries one
+  // line per row; everything an expanded row shows is fetched when it is opened.
+  const [detail, setDetail] = useState<Record<string, LogDetail>>({});
   const [armed, setArmed] = useState<string | null>(null); // reject needs a second click
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,14 +86,37 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
     }
   }, []);
 
+  /** The full capture + cell diff for one row, cached under its id. */
+  const loadDetail = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/log?id=${encodeURIComponent(id)}`);
+      if (!res.ok) return;
+      const d = (await res.json()) as LogDetail;
+      setDetail((cur) => ({ ...cur, [id]: d }));
+    } catch {
+      /* the row still shows its one-line preview and its actions */
+    }
+  }, []);
+
   // Mount reads through the cache (instant when the warmer got there first); a
   // `version` bump means something WROTE, so that read must ignore the cache or the
   // panel would keep showing the record as it was before the write.
   const mounted = useRef(false);
+  const openRef = useRef<string | null>(null);
+  openRef.current = open;
   useEffect(() => {
     void load(mounted.current);
+    // That same write makes every cached detail a possible lie — a capture opened
+    // while pending has a cell diff now. Drop them all, keep only the row being
+    // read (so it never blanks) and refresh THAT one in place: no loading flag, no
+    // unmount, the panel just becomes correct.
+    if (mounted.current) {
+      const id = openRef.current;
+      setDetail((cur) => (id && cur[id] ? { [id]: cur[id] } : {}));
+      if (id) void loadDetail(id);
+    }
     mounted.current = true;
-  }, [load, version]);
+  }, [load, loadDetail, version]);
 
   const q = query.trim().toLowerCase();
   const filteredItems = q
@@ -96,6 +129,9 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
     setOpen((cur) => (cur === id ? null : id));
     setArmed(null);
     setError(null);
+    // Pull the full capture the first time this row is opened. Cached per id until
+    // the record changes, so closing and reopening a row never refetches.
+    if (!detail[id]) void loadDetail(id);
   }
 
   async function reject(it: LogItem) {
@@ -213,10 +249,10 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
                         {s.via ? ` · via ${s.via === "llm" ? "AI" : s.via === "csv" || s.via === "agent" ? "CSV" : s.via}` : ""}
                       </p>
                     ) : null}
-                    {s && s.applied.length ? (
+                    {(detail[it.id]?.applied.length ?? 0) > 0 ? (
                       <table className="mt-2 w-full text-xs">
                         <tbody>
-                          {s.applied.map((c) => (
+                          {detail[it.id]!.applied.map((c) => (
                             <tr key={`${c.d}:${c.m}`} className="border-t border-border first:border-t-0">
                               <td className="py-1 pr-3 font-mono text-muted-fg">{c.d}</td>
                               <td className="py-1 pr-3 text-fg">{c.m}</td>
@@ -238,8 +274,8 @@ export function DataLog({ version, onChanged }: { version: number; onChanged: ()
                     ) : null}
 
                     <pre className="scrollbar-thin mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/40 px-2.5 py-2 font-mono text-xs text-fg">
-                      {it.text}
-                      {it.textLength > it.text.length ? "\n…" : ""}
+                      {detail[it.id]?.text ?? it.text}
+                      {(detail[it.id]?.textLength ?? it.textLength) > (detail[it.id]?.text ?? it.text).length ? "\n…" : ""}
                     </pre>
 
                     {it.status !== "discarded" ? (

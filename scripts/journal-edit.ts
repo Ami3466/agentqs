@@ -19,10 +19,11 @@ import {
   mergeDailyCsv,
   readInboxFromRecord,
   rebuild,
+  updateInboxItems,
   type DailyEdit,
 } from "../src/lib/record";
 import { dbPath } from "../src/lib/paths";
-import { inboxResolve, journalEdit, query } from "../src/lib/cli-core";
+import { inboxResolve, journalEdit, logReject, query } from "../src/lib/cli-core";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -164,6 +165,38 @@ const afterRebuild = query("SELECT date,source,metric,value_num,value_text FROM 
 check("patched cache is byte-identical to a full rebuild", JSON.stringify(afterPatch.rows) === JSON.stringify(afterRebuild.rows));
 delete process.env.AGENTQS_DATA_DIR;
 fs.rmSync(dataDir3, { recursive: true, force: true });
+
+// ---- 8. logReject: conditional undo, and its cache patch equals a rebuild ----
+console.log("\nlogReject undoes only the cells that still hold what it wrote");
+const dataDir4 = fs.mkdtempSync(path.join(os.tmpdir(), "agentqs-reject-"));
+process.env.AGENTQS_DATA_DIR = dataDir4;
+const rDir4 = path.join(dataDir4, "record");
+const merged = mergeDailyCsv(rDir4, "steps", {
+  header: ["date", "steps"],
+  rows: [["2026-07-01", "1000"], ["2026-07-02", "2000"]],
+});
+const capture = appendInboxItem({ text: "date,steps\n2026-07-01,1000\n2026-07-02,2000" }, { recordDir: rDir4 });
+updateInboxItems(
+  [{ id: capture.id, status: "structured", meta: { source: "steps", applied: merged.applied } }],
+  { recordDir: rDir4 },
+);
+rebuild({ recordDir: rDir4, dbPath: dbPath() });
+// The user retypes one of the merged cells — that value is now theirs.
+journalEdit([{ op: "set", source: "steps", metric: "steps", date: "2026-07-01", value: "1111" }]);
+const rej = logReject(capture.id);
+check("reverted counts only the untouched cell it actually cleared", rej.reverted === 1, JSON.stringify(rej));
+const cells = query("SELECT date,value_num FROM daily WHERE source='steps' AND metric='steps' ORDER BY date");
+check("the hand-typed cell survived, the untouched one is gone",
+  cells.rows.length === 1 && cells.rows[0]?.date === "2026-07-01" && Number(cells.rows[0]?.value_num) === 1111,
+  JSON.stringify(cells.rows));
+check("the item is discarded", readInboxFromRecord(rDir4).find((i) => i.id === capture.id)?.status === "discarded");
+const rejPatch = query("SELECT date,source,metric,value_num,value_text FROM daily ORDER BY source,metric,date");
+rebuild({ recordDir: rDir4, dbPath: dbPath() });
+const rejRebuild = query("SELECT date,source,metric,value_num,value_text FROM daily ORDER BY source,metric,date");
+check("reject's patched cache is byte-identical to a full rebuild",
+  JSON.stringify(rejPatch.rows) === JSON.stringify(rejRebuild.rows));
+delete process.env.AGENTQS_DATA_DIR;
+fs.rmSync(dataDir4, { recursive: true, force: true });
 
 fs.rmSync(rDir, { recursive: true, force: true });
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed");

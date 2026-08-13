@@ -10,7 +10,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const LIMIT = 200;
-const PREVIEW_CHARS = 4_000;
+/** The list shows ONE line per row (`text.split("\n",1)[0]`), so that is what the
+ *  list payload carries. It used to send 4,000 characters of every capture plus a
+ *  hundred cell diffs each — half a megabyte to render 200 single-line rows, all of
+ *  it thrown away by the renderer. */
+const LIST_PREVIEW_CHARS = 200;
+/** What an EXPANDED row shows: the raw capture in a scrollable pre. */
+const DETAIL_CHARS = 20_000;
 const APPLIED_PREVIEW = 100;
 
 interface LogMeta {
@@ -31,10 +37,48 @@ export async function GET(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const stamp = fileStamp(path.join(recordDir(), "inbox.jsonl"));
+  // ?id=<id> — one capture in full, for the row the user just opened. Detail is
+  // fetched when it is actually looked at rather than shipped for all 200 rows.
+  const id = new URL(req.url).searchParams.get("id");
+  if (id) return cachedJson(req, () => buildLogDetail(id), [stamp, id]);
   // Read straight from inbox.jsonl, so THAT file — not the derived cache — is what
-  // versions this view. Half a megabyte of log was re-parsed and re-sent on every
-  // visit to the tab; now an unchanged inbox answers 304 without reading it.
-  return cachedJson(req, buildLog, [fileStamp(path.join(recordDir(), "inbox.jsonl"))]);
+  // versions this view: an unchanged inbox answers 304 without reading it.
+  return cachedJson(req, buildLog, [stamp]);
+}
+
+/** One capture in full: the raw text and the reviewable cell diff. */
+function buildLogDetail(id: string) {
+  const item = readInboxFromRecord(recordDir()).find((i) => i.id === id);
+  // An id that is gone (rejected away, a stale open row) is an EMPTY detail, not an
+  // error: the row keeps its list preview instead of the panel showing a failure.
+  if (!item) return { id, text: "", textLength: 0, applied: [] as AppliedCell[], appliedTruncated: false };
+  const meta = (item.meta && typeof item.meta === "object" ? item.meta : {}) as LogMeta;
+  const applied = Array.isArray(meta.applied) ? meta.applied : [];
+  return {
+    id,
+    text: item.text.slice(0, DETAIL_CHARS),
+    textLength: item.text.length,
+    applied: appliedCells(applied),
+    appliedTruncated: applied.length > APPLIED_PREVIEW,
+  };
+}
+
+interface AppliedCell {
+  d: string;
+  m: string;
+  before: string | null;
+  after: string;
+}
+
+/** The reviewable diff: date/metric cells this item changed, before → after. */
+function appliedCells(applied: unknown[]): AppliedCell[] {
+  return applied.slice(0, APPLIED_PREVIEW).flatMap((c) => {
+    if (!c || typeof c !== "object") return [];
+    const { d, m, p, v } = c as { d?: unknown; m?: unknown; p?: unknown; v?: unknown };
+    if (typeof d !== "string" || typeof m !== "string" || typeof v !== "string") return [];
+    return [{ d, m, before: typeof p === "string" ? p : null, after: v }];
+  });
 }
 
 function buildLog() {
@@ -45,22 +89,15 @@ function buildLog() {
     .map((i) => {
       const meta = (i.meta && typeof i.meta === "object" ? i.meta : {}) as LogMeta;
       const applied = Array.isArray(meta.applied) ? meta.applied : [];
-      // The reviewable diff: date/metric cells this item changed, before → after.
       // Items structured before `v` was recorded fall back to the counts line.
       const revertableCount = applied.filter((c) => c && typeof c === "object" && typeof (c as { v?: unknown }).v === "string").length;
-      const cells = applied.slice(0, APPLIED_PREVIEW).flatMap((c) => {
-        if (!c || typeof c !== "object") return [];
-        const { d, m, p, v } = c as { d?: unknown; m?: unknown; p?: unknown; v?: unknown };
-        if (typeof d !== "string" || typeof m !== "string" || typeof v !== "string") return [];
-        return [{ d, m, before: typeof p === "string" ? p : null, after: v }];
-      });
       return {
         id: i.id,
         ts: i.ts,
         source: i.source,
         kind: i.kind,
         status: i.status,
-        text: i.text.slice(0, PREVIEW_CHARS),
+        text: i.text.slice(0, LIST_PREVIEW_CHARS),
         textLength: i.text.length,
         filename: typeof meta.filename === "string" ? meta.filename : null,
         structured:
@@ -74,7 +111,6 @@ function buildLog() {
                 canRevert: revertableCount > 0,
                 appliedCount: applied.length,
                 appliedTruncated: applied.length > APPLIED_PREVIEW,
-                applied: cells,
               }
             : null,
         rejectedAt: typeof meta.rejectedAt === "string" ? meta.rejectedAt : null,
