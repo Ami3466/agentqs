@@ -28,6 +28,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV AGENTQS_DATA_DIR=/data
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# V8 sizes its old-space from the container's RAM and will grow toward roughly half of
+# it before collecting hard — on a 4GB container that is the drift to ~2GB of JS heap.
+# Cap it so the JS side collects at a sane ceiling instead.
+# HONEST SCOPE: this bounds the JS HEAP ONLY. The local models (embedder, captioner,
+# Whisper) hold their weights and onnxruntime arenas in NATIVE memory, which this flag
+# does not touch and cannot reclaim — that cost is handled by the idle eviction in
+# src/lib/model-slot.ts, not here.
+ENV NODE_OPTIONS=--max-old-space-size=1536
 
 # git + tar are FEATURES here, not conveniences: `backup github` pushes a snapshot
 # branch with git plumbing, and `backup drive` streams the store through tar.

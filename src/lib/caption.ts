@@ -1,4 +1,5 @@
 import { modelsDir } from "./embedder";
+import { createModelSlot } from "./model-slot";
 
 /**
  * Optional local image captioning (Batch C · Photos, tier ③). A small on-device model
@@ -8,6 +9,10 @@ import { modelsDir } from "./embedder";
  * photos" against mood and sleep. No key, runs locally, gated behind `--caption`.
  * Returns null gracefully if the model/library can't load — EXIF, thumbnails and CLIP
  * recall still work without it.
+ *
+ * The pipeline lives in a model-slot, so captioning one photo no longer raises the
+ * process floor for good: it is disposed after AGENTQS_MODEL_IDLE_MS idle and reloaded
+ * on the next caption. Whether the model is AVAILABLE is probed once and remembered.
  */
 
 export const CAPTION_MODEL = "Xenova/vit-gpt2-image-captioning";
@@ -16,34 +21,51 @@ export interface Captioner {
   caption(filePath: string): Promise<string | null>;
 }
 
-async function loadCaptioner(): Promise<Captioner | null> {
-  try {
-    const tf = await import("@huggingface/transformers");
-    tf.env.cacheDir = modelsDir();
-    tf.env.localModelPath = modelsDir();
-    if (process.env.AGENTQS_MODELS_OFFLINE === "1") tf.env.allowRemoteModels = false;
-    const pipe = await tf.pipeline("image-to-text", CAPTION_MODEL, { dtype: "q8" });
-    return {
-      async caption(filePath: string) {
-        try {
-          const out = (await pipe(filePath, { max_new_tokens: 24 })) as { generated_text?: string }[];
-          const text = out?.[0]?.generated_text?.trim();
-          return text ? text.replace(/\s+/g, " ") : null;
-        } catch {
-          return null;
-        }
-      },
-    };
-  } catch {
-    return null;
-  }
+type CaptionPipe = (
+  filePath: string,
+  opts: { max_new_tokens: number },
+) => Promise<{ generated_text?: string }[]>;
+
+async function loadCaptionPipe(): Promise<CaptionPipe> {
+  const tf = await import("@huggingface/transformers");
+  tf.env.cacheDir = modelsDir();
+  tf.env.localModelPath = modelsDir();
+  if (process.env.AGENTQS_MODELS_OFFLINE === "1") tf.env.allowRemoteModels = false;
+  const pipe = await tf.pipeline("image-to-text", CAPTION_MODEL, { dtype: "q8" });
+  return pipe as unknown as CaptionPipe;
 }
+
+const captionSlot = createModelSlot<CaptionPipe>({ name: "captioner", load: loadCaptionPipe });
+
+const captioner: Captioner = {
+  async caption(filePath: string) {
+    try {
+      return await captionSlot.use(async (pipe) => {
+        const out = await pipe(filePath, { max_new_tokens: 24 });
+        const text = out?.[0]?.generated_text?.trim();
+        return text ? text.replace(/\s+/g, " ") : null;
+      });
+    } catch {
+      return null;
+    }
+  },
+};
 
 let cached: Promise<Captioner | null> | null = null;
 
 export function getCaptioner(): Promise<Captioner | null> {
-  if (!cached) cached = loadCaptioner();
+  if (!cached) {
+    cached = captionSlot
+      .use(async () => captioner)
+      .catch(() => null); // no library / no weights → callers skip captioning
+  }
   return cached;
+}
+
+/** Drop any warm caption pipeline and the availability probe (tests only). */
+export function _resetCaptioner(): void {
+  cached = null;
+  void captionSlot.release();
 }
 
 // ---- Caption → scene tags -------------------------------------------------

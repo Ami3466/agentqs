@@ -26,8 +26,11 @@ import fs from "fs";
 import net from "net";
 import os from "os";
 import path from "path";
+import Database from "better-sqlite3";
 import { appendInboxItem } from "../src/lib/record";
-import { buildIndex, chunkText, collectItems, indexStatus, semanticSearch, ensureIndex } from "../src/lib/embeddings";
+import { buildIndex, chunkText, collectItems, indexStatus, semanticSearch, ensureIndex, rankJsCosine, type RankedItem } from "../src/lib/embeddings";
+import { blobToVector, cosine, vectorToBlob } from "../src/lib/embed";
+import { getTextEmbedder } from "../src/lib/embedder";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = "") {
@@ -142,6 +145,33 @@ function seedDailyText(recordDir: string) {
       `2026-06-12,"Long walk by the river and it finally felt quiet in my head.","${url}"\n` +
       `2026-06-13,"Argued with myself all morning about the same decision again.","${url}"\n`,
   );
+}
+
+/**
+ * The js-cosine fallback EXACTLY as it was written before it learned to stream:
+ * materialise every row of the index (text and all), score, stable descending sort,
+ * slice. The reference the new bounded ranker has to match hit for hit — same refs,
+ * same order, same scores — or the "sqlite-vec didn't load" host silently gets
+ * different search results from everyone else.
+ */
+function oldRankJsCosine(db: Database.Database, qvec: Float32Array, candidates: number): RankedItem[] {
+  const rows = db.prepare("SELECT ref, kind, date, text, vector FROM items").all() as {
+    ref: string;
+    kind: string;
+    date: string;
+    text: string;
+    vector: Buffer;
+  }[];
+  return rows
+    .map((r) => ({
+      ref: r.ref,
+      kind: r.kind,
+      date: r.date,
+      text: r.text,
+      score: cosine(qvec, blobToVector(r.vector)),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, candidates);
 }
 
 function seedRecord(recordDir: string) {
@@ -271,6 +301,67 @@ async function main() {
   check("ensureIndex is a no-op when the index is fresh", (await ensureIndex({ recordDir: rDir, vecFile })) === null);
   const st = await indexStatus({ recordDir: rDir, vecFile });
   check("indexStatus reports built + fresh", st.built && !st.stale && st.count === expected, `${st.count} entries`);
+
+  // --- The js-cosine fallback (hosts where the sqlite-vec extension can't load) ---
+  // It no longer pulls the WHOLE index — every vector AND every chunk of text — into
+  // JS on every search; it streams and keeps only the candidate pool. The thing that
+  // must not move is the ANSWER, so the bounded ranker is held against a literal
+  // re-implementation of the old full-table scan, on the real index just built.
+  console.log("\n  The js-cosine fallback (no sqlite-vec) must rank identically…\n");
+  {
+    const embedder = await getTextEmbedder();
+    // Opened WITHOUT the sqlite-vec extension — exactly what the fallback host has.
+    const plain = new Database(vecFile);
+    const pools = [7, 3 * 24, 5 * 24, 10_000]; // below, around, and far above the index size
+    let identical = 0;
+    for (const [q] of semantic) {
+      const qv = (await embedder.embed([q], "query"))[0];
+      for (const pool of pools) {
+        const now = rankJsCosine(plain, qv, pool);
+        const before = oldRankJsCosine(plain, qv, pool);
+        if (JSON.stringify(now) === JSON.stringify(before)) identical++;
+        else console.log(`      ✗ diverged: "${q}" @ pool ${pool}`);
+      }
+    }
+    plain.close();
+    check(
+      "the streaming fallback returns the SAME ranked hits as the old full-table scan",
+      identical === semantic.length * pools.length,
+      `${identical}/${semantic.length * pools.length} (query × pool size)`,
+    );
+
+    // Real embeddings almost never tie, so stable order is untested by them. This
+    // fixture is nothing BUT ties: 200 rows over 4 distinct vectors, so 50 rows share
+    // every score and rowid order is the only tiebreak there is. Get that wrong and
+    // the fallback quietly reorders results the moment two chunks score alike.
+    const tieFile = path.join(root, "ties.db");
+    const tdb = new Database(tieFile);
+    tdb.exec(
+      "CREATE TABLE items (rowid INTEGER PRIMARY KEY, ref TEXT NOT NULL, kind TEXT NOT NULL, date TEXT NOT NULL, text TEXT NOT NULL, vector BLOB NOT NULL);",
+    );
+    const ins = tdb.prepare("INSERT INTO items (ref, kind, date, text, vector) VALUES (?,?,?,?,?)");
+    const basis = [0, 1, 2, 3].map((k) => {
+      const v = new Float32Array(8);
+      v[k] = 1;
+      return v;
+    });
+    for (let i = 0; i < 200; i++) {
+      ins.run(`tie:${i}`, "memo", "2026-01-01", `row ${i}`, vectorToBlob(basis[i % 4]));
+    }
+    const tq = new Float32Array(8);
+    tq[0] = 0.8;
+    tq[1] = 0.6; // ranks basis[0] > basis[1] > basis[2] == basis[3] (both exactly 0)
+    const tiePools = [1, 7, 50, 51, 199, 200, 400];
+    let tieOk = 0;
+    for (const pool of tiePools) {
+      const now = rankJsCosine(tdb, tq, pool);
+      const before = oldRankJsCosine(tdb, tq, pool);
+      if (JSON.stringify(now) === JSON.stringify(before)) tieOk++;
+      else console.log(`      ✗ tie order diverged @ pool ${pool}`);
+    }
+    tdb.close();
+    check("…including exact ties, where only stable rowid order decides", tieOk === tiePools.length, `${tieOk}/${tiePools.length} pool sizes`);
+  }
 
   // ---- 2. End to end over the built app, NO AI key. ----
   const port = await freePort();

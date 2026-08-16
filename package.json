@@ -60,6 +60,7 @@
     "paging:test": "tsx scripts/journal-paging-test.ts",
     "rules:test": "tsx scripts/rules-test.ts",
     "semantic:test": "tsx scripts/embeddings.ts",
+    "slot:test": "tsx scripts/model-slot-test.ts",
     "flags:test": "tsx scripts/auto-flags.ts",
     "photos:test": "tsx scripts/photos.ts",
     "agent:test": "tsx scripts/agent-brain.ts",

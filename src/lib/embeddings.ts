@@ -37,6 +37,12 @@ interface VecDb {
   vec: boolean; // did the sqlite-vec extension load?
 }
 
+// The JS-cosine fallback is a real degradation (every search scans the index instead
+// of a KNN), and it used to happen in total silence — the only trace was a `backend`
+// string in the index meta that nobody reads until search is already slow. Say it once
+// per process, in the log an operator actually looks at.
+let warnedNoVec = false;
+
 /** Open a vec-index connection, loading the sqlite-vec extension when available.
  *  Uses the default rollback journal (not WAL) so a build leaves no -wal/-shm
  *  sidecars to rename around. */
@@ -47,8 +53,16 @@ function openVec(file: string): VecDb {
     sqliteVec.load(db);
     db.prepare("SELECT vec_version()").get();
     vec = true;
-  } catch {
+  } catch (err) {
     vec = false; // fall back to JS cosine over the stored BLOBs
+    if (!warnedNoVec) {
+      warnedNoVec = true;
+      console.warn(
+        `[agentqs] sqlite-vec extension did not load (${(err as Error)?.message ?? err}) — ` +
+          "semantic search is running the js-cosine fallback: it scans the whole index per query. " +
+          "Settings → Embeddings shows backend=js-cosine.",
+      );
+    }
   }
   return { db, vec };
 }
@@ -379,6 +393,56 @@ function snippetOf(text: string, max = 160): string {
   return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
 }
 
+export interface RankedItem {
+  ref: string;
+  kind: string;
+  date: string;
+  text: string;
+  score: number;
+}
+
+/**
+ * The js-cosine fallback's ranker — used when the sqlite-vec extension can't load on
+ * the host, which happens silently (openVec warns once; the index meta records
+ * `backend: "js-cosine"`).
+ *
+ * It used to `.all()` the WHOLE items table — every vector AND every chunk of `text` —
+ * into JS on EVERY search, i.e. the entire corpus resident per query. It streams now
+ * and holds only the `candidates` best, so peak memory is the pool size (a few hundred
+ * rows) instead of the index size. `text` is by far the heaviest column, so a row that
+ * can't reach the cut drops its text immediately.
+ *
+ * The ordering is bit-for-bit what `.all().map().sort((a,b)=>b.score-a.score).slice(n)`
+ * produced: rows arrive in rowid order, an equal score inserts AFTER the ones already
+ * held (exactly what a stable descending sort does), and a candidate pushed past the
+ * cut can never re-enter — nothing later can raise it. Exported so the test can hold it
+ * against a literal re-implementation of the old code on a real index.
+ */
+export function rankJsCosine(db: Database.Database, qvec: Float32Array, candidates: number): RankedItem[] {
+  const stmt = db.prepare("SELECT ref, kind, date, text, vector FROM items");
+  const top: RankedItem[] = [];
+  for (const row of stmt.iterate() as Iterable<{
+    ref: string;
+    kind: string;
+    date: string;
+    text: string;
+    vector: Buffer;
+  }>) {
+    const score = cosine(qvec, blobToVector(row.vector));
+    if (top.length >= candidates && score <= top[top.length - 1].score) continue;
+    let lo = 0;
+    let hi = top.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (top[mid].score >= score) lo = mid + 1;
+      else hi = mid;
+    }
+    top.splice(lo, 0, { ref: row.ref, kind: row.kind, date: row.date, text: row.text, score });
+    if (top.length > candidates) top.pop();
+  }
+  return top;
+}
+
 export interface SearchOptions {
   recordDir?: string;
   vecFile?: string;
@@ -438,23 +502,7 @@ export async function semanticSearch(query: string, opts: SearchOptions = {}): P
       // Unit vectors → L2² = 2 - 2·cos, so cos = 1 - d²/2.
       raw = rows.map((r) => ({ ...r, score: 1 - (r.distance * r.distance) / 2 }));
     } else {
-      const rows = db.prepare("SELECT ref, kind, date, text, vector FROM items").all() as {
-        ref: string;
-        kind: string;
-        date: string;
-        text: string;
-        vector: Buffer;
-      }[];
-      raw = rows
-        .map((r) => ({
-          ref: r.ref,
-          kind: r.kind,
-          date: r.date,
-          text: r.text,
-          score: cosine(qvec, blobToVector(r.vector)),
-        }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, candidates);
+      raw = rankJsCosine(db, qvec, candidates);
     }
   } finally {
     db.close();

@@ -1,6 +1,7 @@
 import path from "path";
 import { dataDir } from "./paths";
 import { embed as hashEmbed, EMBED_DIM as HASH_DIM, EMBED_MODEL_ID as HASH_ID } from "./embed";
+import { createModelSlot } from "./model-slot";
 
 /**
  * The local text embedder (Batch C). Default-on, no key, no cost, private — turns a
@@ -28,8 +29,12 @@ import { embed as hashEmbed, EMBED_DIM as HASH_DIM, EMBED_MODEL_ID as HASH_ID } 
  *
  * The chosen backend's `id` versions the vector space and its `dim` sizes the
  * sqlite-vec table, so switching backends (or bumping the model) forces a clean
- * reindex via the staleness check in embeddings.ts. The model is loaded once and
- * cached for the process.
+ * reindex via the staleness check in embeddings.ts.
+ *
+ * WHICH backend is in play is decided once and remembered for the process (it costs
+ * nothing to remember a string). The PIPELINE itself lives in a model-slot: loaded on
+ * first use, reused while warm, and disposed after AGENTQS_MODEL_IDLE_MS of idleness
+ * so ~560MB of onnxruntime memory isn't parked forever between searches.
  */
 
 /** A stored document ("passage") or a search string ("query") — E5 scores them
@@ -66,53 +71,77 @@ function withRole(texts: string[], role: EmbedRole): string[] {
   return texts.map((t) => `${role}: ${t}`);
 }
 
-/** Try to load the neural sentence-transformer. Returns null (→ hash fallback) if the
- *  library or the model isn't available (e.g. never downloaded and offline). */
-async function loadNeural(): Promise<TextEmbedder | null> {
-  if (process.env.AGENTQS_EMBED_BACKEND === "hash") return null;
+type FeaturePipe = (
+  texts: string[],
+  opts: { pooling: "mean"; normalize: boolean },
+) => Promise<{ dims: number[]; data: Float32Array }>;
+
+/** Load the neural sentence-transformer. Throws when the library or the weights
+ *  aren't available (e.g. never downloaded and offline) — the caller falls back to
+ *  the hash embedder. */
+async function loadNeuralPipe(): Promise<FeaturePipe> {
+  const tf = await import("@huggingface/transformers");
+  tf.env.cacheDir = modelsDir();
+  tf.env.localModelPath = modelsDir();
+  if (process.env.AGENTQS_MODELS_OFFLINE === "1") tf.env.allowRemoteModels = false;
+  const pipe = await tf.pipeline("feature-extraction", NEURAL_MODEL, { dtype: "q8" });
+  return pipe as unknown as FeaturePipe;
+}
+
+/** The pipeline's home: warm while in use, disposed after the idle TTL. */
+const neuralSlot = createModelSlot<FeaturePipe>({ name: "text-embedder", load: loadNeuralPipe });
+
+const neuralEmbedder: TextEmbedder = {
+  id: NEURAL_ID,
+  dim: NEURAL_DIM,
+  async embed(texts, role: EmbedRole = "passage") {
+    if (texts.length === 0) return [];
+    const tagged = withRole(texts, role);
+    // ONE borrow for the whole batch loop: the slot stays pinned until the last
+    // sub-batch is done, so an eviction can never land mid-embed.
+    return neuralSlot.use(async (pipe) => {
+      const res: Float32Array[] = [];
+      const batchSize = Number(process.env.AGENTQS_EMBED_BATCH || 32);
+      for (let start = 0; start < tagged.length; start += batchSize) {
+        // truncation: the model's window is finite, so anything longer is CLIPPED
+        // here. Callers must chunk long text (embeddings.ts) or the tail of a long
+        // document is never embedded at all.
+        const out = await pipe(tagged.slice(start, start + batchSize), {
+          pooling: "mean",
+          normalize: true,
+        });
+        const [n, d] = out.dims as [number, number];
+        const data = out.data as Float32Array;
+        for (let i = 0; i < n; i++) res.push(Float32Array.from(data.subarray(i * d, i * d + d)));
+      }
+      return res;
+    });
+  },
+};
+
+/** Which backend this process uses. Decided by one probe load and then remembered —
+ *  a string, not a model, so it costs nothing to hold and keeps `id`/`dim` stable
+ *  across evictions (the vector space must not change under a built index). */
+let cached: Promise<TextEmbedder> | null = null;
+
+async function pickBackend(): Promise<TextEmbedder> {
+  if (process.env.AGENTQS_EMBED_BACKEND === "hash") return hashEmbedder;
   try {
-    const tf = await import("@huggingface/transformers");
-    tf.env.cacheDir = modelsDir();
-    tf.env.localModelPath = modelsDir();
-    if (process.env.AGENTQS_MODELS_OFFLINE === "1") tf.env.allowRemoteModels = false;
-    const pipe = await tf.pipeline("feature-extraction", NEURAL_MODEL, { dtype: "q8" });
-    return {
-      id: NEURAL_ID,
-      dim: NEURAL_DIM,
-      async embed(texts, role: EmbedRole = "passage") {
-        if (texts.length === 0) return [];
-        const tagged = withRole(texts, role);
-        const res: Float32Array[] = [];
-        const batchSize = Number(process.env.AGENTQS_EMBED_BATCH || 32);
-        for (let start = 0; start < tagged.length; start += batchSize) {
-          // truncation: the model's window is finite, so anything longer is CLIPPED
-          // here. Callers must chunk long text (embeddings.ts) or the tail of a long
-          // document is never embedded at all.
-          const out = await pipe(tagged.slice(start, start + batchSize), {
-            pooling: "mean",
-            normalize: true,
-          });
-          const [n, d] = out.dims as [number, number];
-          const data = out.data as Float32Array;
-          for (let i = 0; i < n; i++) res.push(Float32Array.from(data.subarray(i * d, i * d + d)));
-        }
-        return res;
-      },
-    };
+    await neuralSlot.use(async () => undefined);
+    return neuralEmbedder;
   } catch {
-    return null;
+    return hashEmbedder;
   }
 }
 
-let cached: Promise<TextEmbedder> | null = null;
-
-/** The active text embedder — neural when available, hash otherwise. Loaded once. */
+/** The active text embedder — neural when available, hash otherwise. */
 export function getTextEmbedder(): Promise<TextEmbedder> {
-  if (!cached) cached = loadNeural().then((n) => n ?? hashEmbedder);
+  if (!cached) cached = pickBackend();
   return cached;
 }
 
-/** Reset the cached embedder (tests only). */
+/** Reset the cached backend choice and drop any warm pipeline (tests only). */
 export function _resetEmbedder(): void {
   cached = null;
+  void neuralSlot.release();
 }

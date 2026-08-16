@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { modelsDir } from "./embedder";
+import { createModelSlot, type ModelSlot } from "./model-slot";
 
 /**
  * The built-in local Whisper — speech-to-text that installs INTO the project, the
@@ -48,8 +49,10 @@ export function whisperInstalled(model: string): boolean {
 type AsrOutput = { text?: string } | { text?: string }[];
 type AsrPipe = (audio: Float32Array, opts?: Record<string, unknown>) => Promise<AsrOutput>;
 
-// One loaded pipeline per model, cached for the process (like the embedder).
-const pipes = new Map<string, Promise<AsrPipe>>();
+// One slot per model size: warm while transcribing, disposed after the idle TTL
+// (AGENTQS_MODEL_IDLE_MS) so a single voice memo doesn't park Whisper in RSS forever.
+// The map holds slots, not models — an idle slot is empty.
+const slots = new Map<string, ModelSlot<AsrPipe>>();
 
 async function loadPipe(model: string): Promise<AsrPipe> {
   const repo = whisperRepoFor(model);
@@ -62,27 +65,28 @@ async function loadPipe(model: string): Promise<AsrPipe> {
   return pipe as unknown as AsrPipe;
 }
 
-function getPipe(model: string): Promise<AsrPipe> {
-  let p = pipes.get(model);
-  if (!p) {
-    p = loadPipe(model);
-    p.catch(() => pipes.delete(model)); // a failed load isn't cached — retry next call
-    pipes.set(model, p);
+function slotFor(model: string): ModelSlot<AsrPipe> {
+  let s = slots.get(model);
+  if (!s) {
+    s = createModelSlot<AsrPipe>({ name: `whisper-${model}`, load: () => loadPipe(model) });
+    slots.set(model, s);
   }
-  return p;
+  return s;
 }
 
 /** Install = load the pipeline once; transformers.js downloads the weights into
  *  data/models on the way (a no-op re-verify when they're already there). */
 export async function installWhisperModel(model: string): Promise<void> {
-  await getPipe(model);
+  await slotFor(model).use(async () => undefined);
 }
 
 /** Delete a model's weights from data/models (Settings "Remove"). */
 export function removeWhisperModel(model: string): void {
   const repo = whisperRepoFor(model);
   if (!repo) return;
-  pipes.delete(model);
+  const s = slots.get(model);
+  slots.delete(model);
+  void s?.release(); // frees as soon as any in-flight transcription returns
   fs.rmSync(path.join(modelsDir(), repo), { recursive: true, force: true });
 }
 
@@ -91,10 +95,11 @@ export function removeWhisperModel(model: string): void {
  *  auto-detect yet, so it's a Settings choice defaulting to English. */
 export async function transcribeWhisper(audio: Buffer, model: string, lang = "en"): Promise<string> {
   const pcm = decodeWavToMono16k(audio);
-  const pipe = await getPipe(model);
-  const out = await pipe(pcm, { chunk_length_s: 30, stride_length_s: 5, language: lang || "en" });
-  const text = Array.isArray(out) ? out.map((o) => o.text ?? "").join(" ") : (out.text ?? "");
-  return text.trim();
+  return slotFor(model).use(async (pipe) => {
+    const out = await pipe(pcm, { chunk_length_s: 30, stride_length_s: 5, language: lang || "en" });
+    const text = Array.isArray(out) ? out.map((o) => o.text ?? "").join(" ") : (out.text ?? "");
+    return text.trim();
+  });
 }
 
 // ---- WAV → Float32 mono 16 kHz ---------------------------------------------
