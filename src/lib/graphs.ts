@@ -37,9 +37,39 @@ export interface GraphSeriesData {
 
 const EMPTY_SERIES: GraphSeriesData = { dates: [], series: [], totalDays: 0 };
 
-const memo = new Map<string, { stamp: string; at: number; data: GraphSeriesData }>();
+const memo = new Map<string, { stamp: string; at: number; data: GraphSeriesData; size: number }>();
 const catalogMemo = new Map<string, { stamp: string; at: number; data: GraphSeriesData }>();
 const MEMO_MAX_AGE_MS = 60_000;
+const MEMO_MAX_ENTRIES = 2;
+/** Cache budget in bytes for the FULL-series memo only (approximate — see
+ *  estimateGraphSeriesBytes). catalogMemo holds a few KB and keeps its own
+ *  small entry cap below — no budget needed there. */
+const MEMO_BUDGET_BYTES = 48 * 1024 * 1024;
+/** Running total of `size` across every entry in `memo`, kept in lockstep with
+ *  every insert/evict/replace below — do not let this drift. */
+let memoBytes = 0;
+
+/**
+ * Cheap, ORDER-OF-MAGNITUDE estimate of a GraphSeriesData's live heap
+ * footprint. Not a measurement — walks array lengths instead of serializing.
+ * Constants are guesses (V8 array/number overhead), not measured facts.
+ */
+function estimateGraphSeriesBytes(data: GraphSeriesData): number {
+  const BYTES_PER_DATE = 24; // one date string ("YYYY-MM-DD") + array slot
+  const BYTES_PER_SERIES_BASE = 150; // GraphSeries object shell + key string
+  const BYTES_PER_POINT = 150; // one v[] number: array slot + V8 per-small-array/
+  // per-series overhead at this cardinality (hundreds of thousands of points across
+  // hundreds of series) — measured live cost runs well above the raw 8-byte double
+  const BYTES_PER_INDEX = 8; // one d[] index, when present
+
+  let bytes = data.dates.length * BYTES_PER_DATE;
+  for (const s of data.series) {
+    bytes += BYTES_PER_SERIES_BASE + s.label.length * 2;
+    bytes += s.v.length * BYTES_PER_POINT;
+    if (s.d) bytes += s.d.length * BYTES_PER_INDEX;
+  }
+  return bytes;
+}
 
 /** Every numeric daily series plus the per-day counts the tab offers, straight
  *  from the cache. Memoized on the cache fingerprint like the other read views. */
@@ -72,8 +102,21 @@ export function readGraphSeries(
   const data =
     hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS ? hit.data : computeGraphSeries(file, today);
   if (data !== hit?.data) {
-    memo.set(key, { stamp, at: Date.now(), data });
-    if (memo.size > 4) memo.delete(memo.keys().next().value as string);
+    if (hit) memoBytes -= hit.size;
+    const size = estimateGraphSeriesBytes(data);
+    if (size > MEMO_BUDGET_BYTES) {
+      // Too big to cache alone — serve it, forget it.
+      memo.delete(key);
+    } else {
+      memo.set(key, { stamp, at: Date.now(), data, size });
+      memoBytes += size;
+      while ((memo.size > MEMO_MAX_ENTRIES || memoBytes > MEMO_BUDGET_BYTES) && memo.size > 0) {
+        const oldestKey = memo.keys().next().value as string;
+        const oldest = memo.get(oldestKey)!;
+        memoBytes -= oldest.size;
+        memo.delete(oldestKey);
+      }
+    }
   }
   return projectSeries(data, opts);
 }

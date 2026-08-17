@@ -141,9 +141,50 @@ export interface ReadJournalOptions {
  * Bounded to a handful of entries (the app only ever asks for a few windows) so a
  * long-lived server can't grow a payload cache without limit.
  */
-const memo = new Map<string, { stamp: string; at: number; data: JournalData }>();
+const memo = new Map<string, { stamp: string; at: number; data: JournalData; size: number }>();
 const MEMO_MAX_AGE_MS = 60_000;
-const MEMO_MAX_ENTRIES = 8;
+const MEMO_MAX_ENTRIES = 4;
+/** Cache budget in bytes (approximate — see estimateJournalBytes). A `days=all`
+ *  payload on a lifetime record runs ~240MB live, and MEMO_MAX_ENTRIES alone
+ *  can't stop 8 of those from adding up to ~2GB next to a 4GB container. */
+const MEMO_BUDGET_BYTES = 48 * 1024 * 1024;
+/** Running total of `size` across every entry in `memo` — kept in lockstep with
+ *  every insert/evict/replace below. Do not let this drift: it's the only thing
+ *  standing between the memo and the entry-count cap alone. */
+let memoBytes = 0;
+
+/**
+ * Cheap, ORDER-OF-MAGNITUDE estimate of a JournalData's live heap footprint.
+ * Not a measurement — JSON.stringify-ing the payload to size it would cost as
+ * much as the payload itself, which defeats the point. Constants below are
+ * guesses (V8 object/array shell overhead, UTF-16 chars), not measured facts;
+ * being roughly right and O(days) cheap is the whole job.
+ */
+function estimateJournalBytes(data: JournalData): number {
+  const BYTES_PER_METRIC = 100; // MetricColumn object shell + short strings
+  const BYTES_PER_DAY_BASE = 200; // JournalDay object + its 4 array shells
+  const BYTES_PER_VALUE = 400; // one values[key] = {text,num} entry: object shell + key
+  // string + V8 per-small-object/hidden-class overhead at this cardinality (hundreds
+  // of thousands of entries) — measured live cost runs well above the raw struct size
+  const BYTES_PER_MEMO_BASE = 120; // JournalMemo object shell, excl. text
+  const BYTES_PER_SESSION_BASE = 200; // JournalSession object shell, excl. text fields
+  const BYTES_PER_CHAR = 2; // UTF-16 code unit
+
+  let bytes = data.metrics.length * BYTES_PER_METRIC;
+  for (const day of data.days) {
+    bytes += BYTES_PER_DAY_BASE;
+    bytes += Object.keys(day.values).length * BYTES_PER_VALUE;
+    for (const m of day.memos) bytes += BYTES_PER_MEMO_BASE + m.text.length * BYTES_PER_CHAR;
+    for (const s of day.sessions) {
+      bytes +=
+        BYTES_PER_SESSION_BASE +
+        ((s.title?.length ?? 0) + (s.summary?.length ?? 0)) * BYTES_PER_CHAR +
+        s.insights.reduce((n, v) => n + v.length, 0) * BYTES_PER_CHAR +
+        s.commitments.reduce((n, v) => n + v.length, 0) * BYTES_PER_CHAR;
+    }
+  }
+  return bytes;
+}
 
 /** The identity of a journal read: same key + same cache stamp → same answer. */
 export function journalKey(opts: ReadJournalOptions = {}): string {
@@ -166,9 +207,24 @@ export function readJournal(opts: ReadJournalOptions = {}): JournalData {
   const hit = memo.get(key);
   if (hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS) return hit.data;
   const data = computeJournal({ ...opts, file, today, days: windowDays });
-  memo.set(key, { stamp, at: Date.now(), data });
-  // Oldest-first eviction — Map preserves insertion order.
-  while (memo.size > MEMO_MAX_ENTRIES) memo.delete(memo.keys().next().value as string);
+  if (hit) memoBytes -= hit.size;
+  const size = estimateJournalBytes(data);
+  if (size > MEMO_BUDGET_BYTES) {
+    // Too big to cache alone (days=all on a lifetime record) — serve it, forget
+    // it. A full-history read is rare and already the slow path either way.
+    memo.delete(key);
+  } else {
+    memo.set(key, { stamp, at: Date.now(), data, size });
+    memoBytes += size;
+    // Oldest-first eviction by count AND running memory budget — Map preserves
+    // insertion order.
+    while ((memo.size > MEMO_MAX_ENTRIES || memoBytes > MEMO_BUDGET_BYTES) && memo.size > 0) {
+      const oldestKey = memo.keys().next().value as string;
+      const oldest = memo.get(oldestKey)!;
+      memoBytes -= oldest.size;
+      memo.delete(oldestKey);
+    }
+  }
   return data;
 }
 
