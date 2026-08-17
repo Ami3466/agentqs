@@ -184,7 +184,7 @@ export function InboxPanel({
 
   return (
     <div className="p-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 gap-y-3">
         <TabBar<Tab>
           tabs={[
             { value: "inbox", label: "Pending inbox", count: pending ?? undefined },
@@ -194,7 +194,7 @@ export function InboxPanel({
           onChange={setTab}
         />
         {tab === "inbox" ? (
-          <div className="ml-auto flex items-center gap-3">
+          <div className="flex w-full items-center gap-3 sm:ml-auto sm:w-auto">
             <label
               className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs font-medium text-muted-fg hover:text-fg"
               title="New captures merge straight into the daily table — nothing waits here."

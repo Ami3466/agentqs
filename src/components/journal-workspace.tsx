@@ -298,8 +298,8 @@ export function JournalWorkspace() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <p className="text-sm text-muted-fg">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <p className="min-w-0 text-sm text-muted-fg">
           {data
             ? `${data.totalDays.toLocaleString()} day${data.totalDays === 1 ? "" : "s"} · ${(data.totalCells + (data.totalEvents || 0)).toLocaleString()} data points` +
               ((data.totalEvents || 0) > 0 ? ` (${data.totalEvents.toLocaleString()} events · ${data.totalCells.toLocaleString()} daily)` : "") +

@@ -179,7 +179,7 @@ export function TabBar<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="inline-flex shrink-0 rounded-lg border border-border bg-muted p-0.5 text-[13px]">
+    <div className="inline-flex max-w-full shrink-0 overflow-x-auto rounded-lg border border-border bg-muted p-0.5 text-[13px] scrollbar-thin">
       {tabs.map((t) => (
         <button
           key={t.value}

@@ -18,36 +18,33 @@ const TABS = [
 ];
 
 /**
- * What each tab needs, in the order a warm-up should fetch it. These ARE the cache
- * keys the panels read (they key on their own url), so a warmed entry is picked up
+ * The two cheap views only, warmed ONCE per page load. These ARE the cache keys
+ * the panels read (they key on their own url), so a warmed entry is picked up
  * as-is — the panel renders from it and never shows a loading state.
  *
- * Cheapest first: the small views land while the megabyte-scale journal payloads
- * are still on the wire, so the tabs a user is most likely to click next are ready
- * first. The list is deliberately not exhaustive — this warms the ONE payload that
- * dominates each tab, not every panel on it.
+ * `/api/sources`, `/api/log` and `/api/journal?days=180` used to be warmed here
+ * too, but prod is a single Node process with a SYNCHRONOUS better-sqlite3, and
+ * those cost 1.6-2.4s and up to 2.5MB each — every one of them was a warm-up
+ * blocking the click it was meant to speed up. And they were paying that cost
+ * on EVERY navigation, not once: prod writes constantly (Slack capture, syncs,
+ * the extension), so the 60s cache-fingerprint memo they leaned on was busted
+ * far more often than it hit. Those tabs now just fetch on first visit, same as
+ * before this warmer existed — slower the first time, never in the way.
  */
-const WARM_URLS = [
-  "/api/coverage",
-  "/api/sources",
-  "/api/log",
-  // The picker's key+label list, NOT every plottable line. Warming the unfiltered
-  // series meant prefetching 11MB on a million-cell record — for a tab the user
-  // might never open — which is worse than the cold load it was meant to avoid.
-  // Graphs asks for the numbers of the lines it actually draws once it mounts.
-  "/api/graphs/series?catalog=1",
-  "/api/journal?days=180",
-];
+const WARM_URLS = ["/api/coverage", "/api/graphs/series?catalog=1"];
+
+let warmed = false;
 
 export function TabNav() {
   const pathname = usePathname();
 
-  // Warm the other tabs once this one is drawn and the browser is idle. Sequential
-  // and skip-if-fresh/in-flight (see warmCache), so the current tab's own requests
-  // are never crowded out — whatever it is already fetching is simply skipped here.
-  // Re-runs per navigation: fresh entries are a no-op, and anything a write
-  // invalidated gets refilled before the user walks over to it.
+  // Warm once per page load, not once per navigation — a module-level guard so a
+  // tab change never re-triggers it (the module dies with the tab, which is the
+  // right lifetime). Runs once the browser is idle so it never competes with the
+  // render the user is waiting on.
   useEffect(() => {
+    if (warmed) return;
+    warmed = true;
     let stop: (() => void) | undefined;
     const cancelIdle = whenIdle(() => {
       stop = warmCache(WARM_URLS);
@@ -56,10 +53,10 @@ export function TabNav() {
       cancelIdle();
       stop?.();
     };
-  }, [pathname]);
+  }, []);
 
   return (
-    <nav className="flex items-center gap-1">
+    <nav className="flex w-full items-center gap-1 sm:w-auto">
       {TABS.map(({ href, label, Icon, match }) => {
         const active = match(pathname);
         return (
@@ -69,14 +66,15 @@ export function TabNav() {
             id={`tour-tab-${label.toLowerCase()}`}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "relative inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+              "relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-[11px] font-medium transition-colors",
+              "sm:flex-none sm:flex-row sm:gap-2 sm:px-3 sm:py-2 sm:text-sm",
               active
                 ? "bg-muted text-fg"
                 : "text-muted-fg hover:bg-muted/60 hover:text-fg",
             )}
           >
             <Icon width={16} height={16} />
-            {label}
+            <span className="truncate">{label}</span>
           </Link>
         );
       })}

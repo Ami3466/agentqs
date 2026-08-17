@@ -38,6 +38,7 @@ export interface GraphSeriesData {
 const EMPTY_SERIES: GraphSeriesData = { dates: [], series: [], totalDays: 0 };
 
 const memo = new Map<string, { stamp: string; at: number; data: GraphSeriesData }>();
+const catalogMemo = new Map<string, { stamp: string; at: number; data: GraphSeriesData }>();
 const MEMO_MAX_AGE_MS = 60_000;
 
 /** Every numeric daily series plus the per-day counts the tab offers, straight
@@ -49,6 +50,23 @@ export function readGraphSeries(
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
   if (!fs.existsSync(file)) return EMPTY_SERIES;
   const key = `${file}|${today}`;
+
+  // The picker only needs KEYS and LABELS, never a number — so it has its own cheap
+  // query path and its own memo entry. Routing it through computeGraphSeries would
+  // load every numeric cell in the record just to throw the numbers away, which is
+  // what made `catalog=1` cost as much as the full series fetch it exists to avoid.
+  if (opts.catalogOnly) {
+    const stamp = cacheStamp(file);
+    const hit = catalogMemo.get(key);
+    const data =
+      hit && hit.stamp === stamp && Date.now() - hit.at < MEMO_MAX_AGE_MS ? hit.data : computeGraphCatalog(file, today);
+    if (data !== hit?.data) {
+      catalogMemo.set(key, { stamp, at: Date.now(), data });
+      if (catalogMemo.size > 4) catalogMemo.delete(catalogMemo.keys().next().value as string);
+    }
+    return data;
+  }
+
   const stamp = cacheStamp(file);
   const hit = memo.get(key);
   const data =
@@ -64,23 +82,14 @@ export function readGraphSeries(
  * Narrow the full series set to what the caller will actually draw.
  *
  * A record with fifty sources has ~300 plottable lines and thousands of days; sending
- * all of them is 11MB to render two. But the picker still needs to KNOW the lines
- * exist, so the two questions are answered separately: `catalogOnly` returns every
- * key and label with no numbers (a few KB), and `keys` returns the numbers for just
- * the lines on screen. Neither costs another query — the full set is computed once
- * and memoized; this only decides how much of it crosses the wire.
+ * all of them is 11MB to render two. `keys` returns the numbers for just the lines on
+ * screen. The full set is computed once and memoized; this only decides how much of
+ * it crosses the wire.
  */
 function projectSeries(
   data: GraphSeriesData,
-  opts: { keys?: string[]; catalogOnly?: boolean },
+  opts: { keys?: string[] },
 ): GraphSeriesData {
-  if (opts.catalogOnly) {
-    return {
-      dates: [],
-      totalDays: data.totalDays,
-      series: data.series.map((s) => ({ key: s.key, label: s.label, v: [] })),
-    };
-  }
   if (!opts.keys?.length) return data;
   const want = new Set(opts.keys);
   const series = data.series.filter((s) => want.has(s.key));
@@ -104,6 +113,51 @@ function projectSeries(
       v: [...s.v],
     })),
   };
+}
+
+/** Keys and labels only — no numbers, no per-day scan. The picker needs to know
+ *  every plottable line exists; it does not need a single value until the user
+ *  actually adds one to a chart. `daily_metric_catalog` (source, metric, date,
+ *  value_num) makes the DISTINCT source/metric scan index-only, so this is a
+ *  handful of small aggregates instead of the full-series computation. */
+function computeGraphCatalog(file: string, today: string): GraphSeriesData {
+  let db;
+  try {
+    db = openReadonly(file);
+  } catch {
+    return EMPTY_SERIES;
+  }
+  try {
+    const metrics = db
+      .prepare(
+        `SELECT DISTINCT source, metric FROM daily WHERE date <= ? AND value_num IS NOT NULL ORDER BY source, metric`,
+      )
+      .all(today) as Array<{ source: string; metric: string }>;
+    const sources = db
+      .prepare("SELECT DISTINCT source FROM daily WHERE date <= ? ORDER BY source")
+      .all(today) as Array<{ source: string }>;
+    const totalDays = (
+      db.prepare("SELECT COUNT(DISTINCT date) AS n FROM daily WHERE date <= ?").get(today) as { n: number }
+    ).n;
+
+    const series: GraphSeries[] = [];
+    for (const { source, metric } of metrics) {
+      series.push({ key: `metric:${source}.${metric}`, label: `${source} · ${metric}`, v: [] });
+    }
+    series.push({ key: "count:data-points", label: "Count · data points per day", v: [] });
+    series.push({ key: "count:logs", label: "Count · logs per day", v: [] });
+    series.push({ key: "count:sessions", label: "Count · sessions per day", v: [] });
+    series.push({ key: "count:activity", label: "Count · all activity per day", v: [] });
+    for (const { source } of sources) {
+      series.push({ key: `count:source:${source}`, label: `Count · ${source} points per day`, v: [] });
+    }
+
+    return { dates: [], series, totalDays };
+  } catch {
+    return EMPTY_SERIES; // stale/older schema
+  } finally {
+    db.close();
+  }
 }
 
 function computeGraphSeries(file: string, today: string): GraphSeriesData {

@@ -247,33 +247,57 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
       commitments: string | null;
     }[];
 
-    const inboxRaw = db
-      .prepare(
-        `SELECT id, ts, source, kind, text, status
-         FROM raw_inbox WHERE status != 'discarded' ORDER BY ts`,
-      )
-      .all() as {
-      id: string;
-      ts: string;
-      source: string;
-      kind: string;
-      text: string;
-      status: string;
-    }[];
+    // Same predicate the JS loops below used to apply after the fact: date >= minDate,
+    // plus date < ceiling when the page is exclusive. days=0 (minDate "9999-99-99")
+    // needs none of these rows — the JS loop discarded every one of them anyway.
+    const inboxRaw =
+      minDate === "9999-99-99"
+        ? []
+        : ((exclusive
+            ? db
+                .prepare(
+                  `SELECT id, ts, source, kind, text, status
+                   FROM raw_inbox
+                   WHERE status != 'discarded' AND kind != 'notification'
+                     AND substr(ts, 1, 10) >= ? AND substr(ts, 1, 10) < ?
+                   ORDER BY ts`,
+                )
+                .all(minDate, ceiling)
+            : db
+                .prepare(
+                  `SELECT id, ts, source, kind, text, status
+                   FROM raw_inbox
+                   WHERE status != 'discarded' AND kind != 'notification'
+                     AND substr(ts, 1, 10) >= ?
+                   ORDER BY ts`,
+                )
+                .all(minDate)) as {
+            id: string;
+            ts: string;
+            source: string;
+            kind: string;
+            text: string;
+            status: string;
+          }[]);
 
     let eventCounts: Array<{
       date: string;
       count: number;
     }> = [];
-    try {
-      eventCounts = db
-        .prepare(
-          `SELECT date, COUNT(*) AS count
-           FROM events GROUP BY date`,
-        )
-        .all() as Array<{ date: string; count: number }>;
-    } catch {
-      eventCounts = [];
+    if (minDate !== "9999-99-99") {
+      try {
+        eventCounts = (
+          exclusive
+            ? db
+                .prepare(`SELECT date, COUNT(*) AS count FROM events WHERE date >= ? AND date < ? GROUP BY date`)
+                .all(minDate, ceiling)
+            : db
+                .prepare(`SELECT date, COUNT(*) AS count FROM events WHERE date >= ? GROUP BY date`)
+                .all(minDate)
+        ) as Array<{ date: string; count: number }>;
+      } catch {
+        eventCounts = [];
+      }
     }
 
     // Column metadata + per-day values.
@@ -313,10 +337,9 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
 
     for (const it of inboxRaw) {
       // Scanner notifications are app plumbing, not life captures — they live in
-      // the Inbox panel and the Log, never on the Journal as memos.
-      if (it.kind === "notification") continue;
+      // the Inbox panel and the Log, never on the Journal as memos. Both this and
+      // the date window are now applied in SQL (see inboxRaw above).
       const date = (it.ts || "").slice(0, 10);
-      if (!date || date < minDate || (exclusive && date >= ceiling)) continue;
       ensure(date).memos.push({
         id: it.id,
         ts: it.ts,
@@ -328,7 +351,6 @@ function computeJournal(opts: ReadJournalOptions & { file: string; today: string
     }
 
     for (const e of eventCounts) {
-      if (!e.date || e.date < minDate || (exclusive && e.date >= ceiling)) continue;
       ensure(e.date).eventCount = e.count;
     }
 
