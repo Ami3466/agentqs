@@ -1,24 +1,22 @@
 services:
   agentqs:
-    # The published multi-arch image (amd64 + arm64). `docker compose pull` fetches
-    # it; `docker compose up --build` builds this repo instead and tags it the same.
     image: ghcr.io/ami3466/agentqs:latest
     build: .
+    pull_policy: missing
     container_name: agentqs
     ports:
       - "3000:3000"
     environment:
       - AGENTQS_DATA_DIR=/data
-      - SESSION_SECRET=${SESSION_SECRET:-}
+      - SESSION_SECRET=${SESSION_SECRET:?Set SESSION_SECRET to a stable random value}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY:-}
     volumes:
-      # Your record + SQLite + config live here. Persist it.
       - agentqs-data:/data
       # Optional: mount local file sources read-only (only works when this
       # container runs on the machine that holds the files). Otherwise run the
-      # local daemon on that machine — `npm run daemon -- run --push` — and let
+      # local daemon on that machine, `npm run daemon -- run --push`, and let
       # this instance pull the record via git. The importer probes these paths:
       # - "$HOME/Library/Application Support/Google/Chrome:/host/chrome:ro"
       # - "$HOME/Library/Application Support/MobileSync/Backup:/host/iphone-backup:ro"

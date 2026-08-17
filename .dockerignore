@@ -4,6 +4,9 @@ node_modules
 .gitignore
 # data, data.nosync, "data 2" — never copy a real record into the build context
 data*
+# A root-level record store (if someone runs agentqs with its data dir at the checkout root).
+# Anchored so samples/record/ stays tracked.
+/record/
 *.db
 .env*
 npm-debug.log*

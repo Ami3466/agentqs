@@ -4,6 +4,9 @@ node_modules
 !.env.example
 # /data* also catches iCloud resurrections/renames ("data 2", data.stray-*)
 /data*
+# A root-level record store (if someone runs agentqs with its data dir at the checkout root).
+# Anchored so samples/record/ stays tracked.
+/record/
 /tmp/
 *.db
 .DS_Store

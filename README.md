@@ -16,7 +16,17 @@ agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your
 
 ## Quick start
 
-agentqs is a CLI-first platform: the recommended (and free) setup needs no API keys and no environment variables. Clone the repo and ask an AI coding agent to set everything up for you.
+**Run the app with Docker:** the fastest way to a running app.
+
+```bash
+docker run -d --name agentqs -p 3000:3000 -v agentqs-data:/data -e SESSION_SECRET=$(openssl rand -hex 32) ghcr.io/ami3466/agentqs:latest
+```
+
+The SESSION_SECRET must stay the same across restarts or you get logged out.
+
+Open [http://localhost:3000](http://localhost:3000).
+
+**Develop or use the CLI from source:** agentqs is a CLI-first platform, so the recommended (and free) setup needs no API keys and no environment variables. Clone the repo and ask an AI coding agent to set everything up for you.
 
 ```bash
 git clone https://github.com/Ami3466/agentqs.git && cd agentqs
@@ -175,13 +185,7 @@ Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`
 
 ### Docker
 
-A prebuilt image is published on every commit to `main`, for `linux/amd64` and `linux/arm64`. It's public - no login, no build:
-
-```bash
-docker run -d -p 3000:3000 -v agentqs-data:/data \
-  -e SESSION_SECRET=$(openssl rand -hex 32) \
-  ghcr.io/ami3466/agentqs:latest
-```
+The image is rebuilt and published on every push to `main`, and it is public, so there is no `docker login` and no build step. It supports `linux/amd64` and `linux/arm64`; use the [Quick start](#quick-start) to run it directly.
 
 Version tags (`:0.2.2`, `:0.2`) and per-commit tags (`:sha-abc1234`) are there too, so a rollback is one tag away. The repo's `docker-compose.yml` uses the same image and passes provider keys through:
 

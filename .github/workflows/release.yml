@@ -1,8 +1,8 @@
 # Build + publish the agentqs image to GHCR:
 #   - push to `main`           -> :latest (+ :sha-<short>)
 #   - `git tag vX.Y.Z && push` -> :X.Y.Z + :X.Y + :latest
-# The package is PUBLIC (any host can pull it anonymously); the source repo stays
-# private. Nothing here publishes to npm, and nothing here knows about any specific
+# The package is PUBLIC (any host can pull it anonymously), as is the source repo.
+# Nothing here publishes to npm, and nothing here knows about any specific
 # host - deploying/redeploying is the host's job (whatever pulls this image decides
 # when to roll it), which keeps this repo free of deploy credentials or coupling.
 #

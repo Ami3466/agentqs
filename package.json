@@ -1,8 +1,26 @@
 {
   "name": "agentqs",
-  "version": "0.2.0",
+  "version": "0.2.2",
+  "description": "The source-available pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
+  "author": "Amit",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ami3466/agentqs.git"
+  },
+  "homepage": "https://github.com/Ami3466/agentqs#readme",
+  "bugs": {
+    "url": "https://github.com/Ami3466/agentqs/issues"
+  },
+  "keywords": [
+    "agents",
+    "activity-record",
+    "local-first",
+    "mcp",
+    "personal-data",
+    "source-available"
+  ],
   "bin": {
     "agentqs": "bin/agentqs.mjs"
   },
