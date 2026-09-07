@@ -314,6 +314,67 @@ async function main() {
       check("the detail hands back the whole capture the list truncated",
         bigDetail.text === `memo 0\n${filler}` && bigDetail.textLength === big.textLength);
     }
+
+    // 6. A PHOTO, over the real route, exactly as the dropzone posts one: the whole
+    //    file as a base64 data URL in `text`. The dropzone has advertised this
+    //    since it shipped and this record has never held a single image capture,
+    //    which is not the kind of thing to take on trust.
+    console.log("\nImage capture");
+    {
+      const bytes = 3 * 1024 * 1024; // a normal phone photo
+      const dataUrl = `data:image/jpeg;base64,${"A".repeat(Math.ceil(bytes / 3) * 4)}`;
+      const posted = await fetch(`${base}/api/inbox`, {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ text: dataUrl, source: "drop", kind: "image", meta: { filename: "beach.jpg", bytes, mime: "image/jpeg" } }),
+      });
+      const body = (await posted.json().catch(() => ({}))) as { ok?: boolean; id?: string; error?: string };
+      check("a 3MB photo lands through the real route", posted.ok === true && body.ok === true, body.error ?? String(posted.status));
+      // The body IS the file. A list that ships it hands the browser the whole
+      // photo back so the panel can clamp it to two lines of base64.
+      const pendingRaw = await (await fetch(`${base}/api/inbox`, { headers: { cookie } })).text();
+      const pending = JSON.parse(pendingRaw) as { items: Array<{ id: string; kind: string; text: string }> };
+      const shot = pending.items.find((i) => i.kind === "image");
+      check("the photo is in the pending queue", Boolean(shot), pending.items.map((i) => i.kind).join(","));
+      check("…described, not dumped", shot?.text === "beach.jpg · image/jpeg · 3.0 MB", shot?.text.slice(0, 60));
+      check(
+        "…so the pending list stays small (it used to carry every photo)",
+        Buffer.byteLength(pendingRaw) < 256 * 1024,
+        `${Math.round(Buffer.byteLength(pendingRaw) / 1024)}KB for ${pending.items.length} items`,
+      );
+      // An image over the ceiling must be refused in the FILE's own terms. The
+      // message named a PDF limit and pointed at a CSV importer — two lies at once.
+      const huge = `data:image/jpeg;base64,${"A".repeat(26 * 1024 * 1024)}`;
+      const refused = await fetch(`${base}/api/inbox`, {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ text: huge, source: "drop", kind: "image", meta: { filename: "huge.jpg" } }),
+      });
+      const why = ((await refused.json().catch(() => ({}))) as { error?: string }).error ?? "";
+      check("an oversized image is refused", !refused.ok, String(refused.status));
+      check("…in image terms, pointing at the photos importer", /image/i.test(why) && /photos import/.test(why) && !/PDF/.test(why), why.slice(0, 120));
+    }
+
+    // 7. Re-dropping a file you DISCARDED is you asking for it back. An inert
+    //    "already have that" is the file silently vanishing — hit on the live
+    //    instance: dropped a PDF, nothing landed, no error.
+    console.log("\nRe-dropping a discarded file");
+    {
+      const text = "the report I threw away\nsecond line";
+      const drop = (await (await fetch(`${base}/api/inbox`, { method: "POST", headers: json, body: JSON.stringify({ text, source: "drop", kind: "file" }) })).json()) as { id: string };
+      const gone = await fetch(`${base}/api/inbox?id=${encodeURIComponent(drop.id)}`, { method: "DELETE", headers: { cookie } });
+      check("the capture was discarded", gone.ok);
+      const redrop = await fetch(`${base}/api/inbox`, { method: "POST", headers: json, body: JSON.stringify({ text, source: "drop", kind: "file" }) });
+      const rr = (await redrop.json().catch(() => ({}))) as { ok?: boolean; duplicate?: boolean; revived?: boolean; id?: string; pending?: number };
+      check("re-dropping it answers ok, not an error", redrop.ok === true && rr.ok === true, String(redrop.status));
+      check("…and says it was REVIVED, not inertly duplicated", rr.revived === true && rr.duplicate === true, JSON.stringify(rr));
+      const back = (await (await fetch(`${base}/api/inbox`, { headers: { cookie } })).json()) as { items: Array<{ id: string }> };
+      check("…and it is actually back in the pending queue", back.items.some((i) => i.id === drop.id), back.items.map((i) => i.id).join(",").slice(0, 80));
+      // A capture that is merely PENDING must stay exactly as it is.
+      const third = await fetch(`${base}/api/inbox`, { method: "POST", headers: json, body: JSON.stringify({ text, source: "drop", kind: "file" }) });
+      const t3 = (await third.json().catch(() => ({}))) as { duplicate?: boolean; revived?: boolean };
+      check("a pending duplicate is still inert", t3.duplicate === true && t3.revived !== true, JSON.stringify(t3));
+    }
   } finally {
     server.kill();
     fs.rmSync(root, { recursive: true, force: true });

@@ -140,10 +140,14 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ source: "drop", ...body }),
         });
-        const detail = (await res.json().catch(() => ({}))) as { error?: string; duplicate?: boolean };
+        const detail = (await res.json().catch(() => ({}))) as { error?: string; duplicate?: boolean; revived?: boolean };
         // A dropped file is keyed by its content, so the same file again is already
         // in the record. That is not a failure — it used to be a 500.
-        if (res.ok) return { ok: true, duplicate: detail.duplicate === true };
+        //
+        // A REVIVED one is not a duplicate either: it had been discarded and this
+        // drop put it back in the pending queue. Counting it as "already there"
+        // told the user nothing happened when something did.
+        if (res.ok) return { ok: true, duplicate: detail.duplicate === true && detail.revived !== true };
         return { ok: false, error: detail.error };
       }
       try {

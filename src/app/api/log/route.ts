@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/session";
 import { cachedJson } from "@/lib/api";
 import { fileStamp } from "@/lib/cache-stamp";
 import { recordDir } from "@/lib/paths";
-import { readInboxFromRecord } from "@/lib/record";
+import { captureSummary, readInboxFromRecord } from "@/lib/record";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,7 +57,9 @@ function buildLogDetail(id: string) {
   const applied = Array.isArray(meta.applied) ? meta.applied : [];
   return {
     id,
-    text: item.text.slice(0, DETAIL_CHARS),
+    // Same rule as the list: 20,000 characters of a base64 data URL is 20,000
+    // characters of nothing. The bytes stay in the record either way.
+    text: captureSummary(item).slice(0, DETAIL_CHARS),
     textLength: item.text.length,
     applied: appliedCells(applied),
     appliedTruncated: applied.length > APPLIED_PREVIEW,
@@ -97,7 +99,9 @@ function buildLog() {
         source: i.source,
         kind: i.kind,
         status: i.status,
-        text: i.text.slice(0, LIST_PREVIEW_CHARS),
+        // An image capture's body is a base64 data URL, so 200 characters of it is
+        // 200 characters of gibberish. The summary says what the row IS.
+        text: captureSummary(i).slice(0, LIST_PREVIEW_CHARS),
         textLength: i.text.length,
         filename: typeof meta.filename === "string" ? meta.filename : null,
         structured:

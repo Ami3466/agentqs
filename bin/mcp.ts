@@ -245,7 +245,8 @@ export async function startMcpServer(): Promise<void> {
     {
       title: "Read pending inbox items",
       description:
-        "Every capture waiting to be structured, FULL TEXT included — the input for the key-free `structure {id, csv}` agent route.",
+        "Every capture waiting to be structured, FULL TEXT included — the input for the key-free `structure {id, csv}` agent route. " +
+        "An image capture is summarized (name · type · size) rather than dumped: its body is the whole file as a base64 data URL and it cannot be structured.",
       inputSchema: {},
     },
     async () => guard(() => core.inboxPending()),
@@ -258,8 +259,9 @@ export async function startMcpServer(): Promise<void> {
       description:
         "The other half of the structuring workflow, for items with no dated metrics to extract: " +
         "action \"keep\" files the capture as a reference memo (searchable + recall-able, out of the pending queue — living documents, plans, notes); " +
-        "action \"discard\" drops it from the record and every index (empty or junk captures).",
-      inputSchema: { id: z.string(), action: z.enum(["keep", "discard"]) },
+        "action \"discard\" drops it from the record and every index (empty or junk captures); " +
+        "action \"restore\" puts a discarded or filed capture back in the pending queue (the undo of the other two; a STRUCTURED item needs log_reject instead, which also takes its cells back).",
+      inputSchema: { id: z.string(), action: z.enum(["keep", "discard", "restore"]) },
     },
     async ({ id, action }) => guard(() => core.inboxResolve(id, action)),
   );

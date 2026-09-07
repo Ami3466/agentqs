@@ -85,7 +85,7 @@ Give the AI a persona - mentor, coach, therapist, or your own prompt. Skills run
 
 ### Memos
 
-Text or voice, from the app, CLI or a channel. They land in your inbox - structure them into daily rows or keep them as searchable notes. A dropped file is keyed by its contents, so dropping the same one again says it is already there instead of failing, and a filename your alphabet doesn't survive (Hebrew, Arabic, Chinese) falls back to a real source name rather than becoming a daily column called `2`.
+Text or voice, from the app, CLI or a channel. They land in your inbox - structure them into daily rows or keep them as searchable notes. A dropped file is keyed by its contents, so dropping the same one again says it is already there instead of failing - and if you had *discarded* that file, dropping it again is taken as asking for it back and returns it to the queue. A filename your alphabet doesn't survive (Hebrew, Arabic, Chinese) falls back to a real source name rather than becoming a daily column called `2`. A dropped photo lands as a capture too; lists describe it (`beach.jpg · image/jpeg · 3.0 MB`) instead of shipping the whole file back to your browser, and a photo too big for a raw capture is told so in a photo's own terms, pointing at `agentqs photos import`.
 
 ### Channels
 

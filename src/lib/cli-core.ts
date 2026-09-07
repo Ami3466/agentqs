@@ -21,6 +21,7 @@ import {
   appendInboxItem,
   applyDailyEdits,
   buildInitialCache,
+  captureSummary,
   landDailySources,
   landInboxCaptures,
   landInboxIds,
@@ -259,7 +260,10 @@ export function logItems(limit = 50) {
  *  supplying the structured CSV to `structure({id, csv})`. */
 export function inboxPending() {
   const items = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending");
-  return { pending: items.length, items };
+  // An image capture's body is the whole file as a base64 data URL. An agent
+  // cannot structure one (structurePending skips them), so handing it megabytes of
+  // base64 to read is pure waste — it gets a line saying what the capture is.
+  return { pending: items.length, items: items.map((i) => ({ ...i, text: captureSummary(i) })) };
 }
 
 /** Resolve an inbox capture WITHOUT structuring it — the other half of the
@@ -268,8 +272,10 @@ export function inboxPending() {
  *  plans, open-items lists, notes with no dated metrics). "discard" drops an
  *  item of ANY status from every index (junk captures, dismissed
  *  notifications, un-keeping a reference memo) — idempotent, and it never
- *  touches merged cells: reverting a STRUCTURED item's data is `logReject`. */
-export function inboxResolve(id: string, action: "keep" | "discard") {
+ *  touches merged cells: reverting a STRUCTURED item's data is `logReject`.
+ *  "restore" puts a discarded or filed item BACK in the pending queue — the undo
+ *  of the other two, and what re-dropping a file you had discarded means. */
+export function inboxResolve(id: string, action: "keep" | "discard" | "restore") {
   if (!id.trim()) throw new Error("Pass an inbox item id.");
   const rDir = recordDir();
   const item = readInboxFromRecord(rDir).find((i) => i.id === id);
@@ -277,7 +283,13 @@ export function inboxResolve(id: string, action: "keep" | "discard") {
   if (action === "keep" && item.status !== "pending") {
     throw new Error(`Item "${id}" is ${item.status}, not pending${item.status === "structured" ? " — use log reject to revert it" : ""}.`);
   }
-  const status = action === "keep" ? "reference" : "discarded";
+  // Restoring a STRUCTURED item would put it back in the queue with its cells
+  // still merged — the record would then hold the data twice over if it were
+  // structured again. Undoing a structuring is log reject, which takes the cells back.
+  if (action === "restore" && item.status === "structured") {
+    throw new Error(`Item "${id}" is structured — use log reject to revert it and return it to the queue.`);
+  }
+  const status = action === "keep" ? "reference" : action === "restore" ? "pending" : "discarded";
   if (item.status !== status) {
     updateInboxItems([{ id, status }], { recordDir: rDir });
     // One row changed status — patch that row, don't re-derive the record.

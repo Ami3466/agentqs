@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItems, inboxItemId, readInboxFromRecord } from "@/lib/record";
+import { appendInboxItems, captureSummary, inboxItemId, readInboxFromRecord } from "@/lib/record";
 import { inboxResolve } from "@/lib/cli-core";
 import { INBOX_JOB, readSyncJob, startJobAndWait } from "@/lib/sync-jobs";
 import { MAX_INBOX_BYTES } from "@/lib/import-tree";
@@ -30,7 +30,10 @@ export async function GET(req: Request) {
   // `pending` counts captures only.
   const notifications = inbox.filter((i) => i.kind === "notification");
   const captures = inbox.filter((i) => i.kind !== "notification");
-  const wire = (i: (typeof inbox)[number]) => ({ id: i.id, ts: i.ts, source: i.source, kind: i.kind, text: i.text });
+  // `captureSummary`, not the raw body: an image capture IS its file, as a base64
+  // data URL, and shipping 200 of those made this endpoint hand the browser back
+  // every photo it had ever been given so a panel could clamp it to two lines.
+  const wire = (i: (typeof inbox)[number]) => ({ id: i.id, ts: i.ts, source: i.source, kind: i.kind, text: captureSummary(i) });
   return NextResponse.json({
     pending: captures.length,
     // The panel renders these in a fixed-height searchable box, so a real backlog
@@ -53,8 +56,16 @@ export async function POST(req: Request) {
   // largest legal PDF payload plus its JSON wrapper.
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) {
+    // Deliberately NOT worded as a PDF limit: an image posts its whole file here
+    // too (as a base64 data URL in `text`), and telling someone their photo failed
+    // a PDF ceiling — then pointing them at a CSV importer — is two lies in one
+    // sentence. The routes that own big files are named instead.
     return NextResponse.json(
-      { error: `Too large to land raw (over ${MAX_PDF_BYTES} bytes) — import it with \`agentqs import <file>\` instead.` },
+      {
+        error:
+          `Too large to post (over ${Math.round(MAX_BODY_BYTES / 1024 / 1024)}MB of request body). ` +
+          "Import a file with `agentqs import <file>`, or photos with `agentqs photos import <folder>`.",
+      },
       { status: 413 },
     );
   }
@@ -127,8 +138,19 @@ export async function POST(req: Request) {
     // This route lands the raw body verbatim (structuring is a separate,
     // optional step) — a megabody would sit in inbox.jsonl forever. Big clean
     // CSVs go through `agentqs import`, which merges without keeping the raw.
+    //
+    // An image is stored as a base64 data URL, so this ceiling on the STORED TEXT
+    // is a ceiling of about 18MB on the file itself (base64 inflates by 4/3). Say
+    // that in the file's own terms, and point at the importer that owns photos —
+    // `agentqs import` does not.
+    const isImage = (body.kind ?? "") === "image" || text.startsWith("data:image/");
     return NextResponse.json(
-      { error: "Text too large to land raw — import it with `agentqs import <file>` instead." },
+      {
+        error: isImage
+          ? `That image is too large to land as a capture (over ~${Math.floor((MAX_INBOX_BYTES * 3) / 4 / 1024 / 1024)}MB of file, since it is stored base64-encoded). ` +
+            "Import photos with `agentqs photos import <folder>` — it keeps the original on disk and indexes it."
+          : "Text too large to land raw — import it with `agentqs import <file>` instead.",
+      },
       { status: 400 },
     );
   }
@@ -142,12 +164,28 @@ export async function POST(req: Request) {
   if (!added) {
     // A dropped file is keyed by its CONTENT, so re-dropping the same file is a
     // duplicate by design. It is not an error and it is certainly not a 500 (which
-    // is what it used to be): the capture is already in the record, so say so and
-    // touch nothing — re-landing it would overwrite the status it has since got.
+    // is what it used to be).
+    const id = inboxItemId(capture);
+    const existing = readInboxFromRecord(recordDir()).find((i) => i.id === id);
+    // …unless you had DISCARDED it. Then dropping it again is you asking for it
+    // back, and an inert "already have that" is the file silently vanishing: it
+    // never reaches the pending queue and the dropzone says nothing happened.
+    // Restoring goes through the normal resolve path, so the cache patch and the
+    // undo trail are the same as any other status change.
+    if (existing?.status === "discarded") {
+      const { job, result, error } = await startJobAndWait(INBOX_JOB, async () => ({
+        result: inboxResolve(id, "restore"),
+      }));
+      if (error) return resolveError(error);
+      if (!result) return NextResponse.json({ ok: true, duplicate: true, revived: true, id, queued: true, job }, { status: 202 });
+      return NextResponse.json({ ok: true, duplicate: true, revived: true, id, pending: result.pending, structured: false });
+    }
+    // pending / reference / structured: leave it exactly as it is. Re-landing it
+    // would overwrite a status the item has since earned.
     return NextResponse.json({
       ok: true,
       duplicate: true,
-      id: inboxItemId(capture),
+      id,
       pending: readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length,
       structured: false,
     });

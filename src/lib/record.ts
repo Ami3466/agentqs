@@ -529,6 +529,31 @@ export function inboxItemId(input: AppendInboxInput): string {
     : crypto.randomUUID();
 }
 
+/**
+ * What a LIST shows for a capture.
+ *
+ * An image capture's body IS the file: `data:image/jpeg;base64,…`, megabytes of
+ * it. Shipping that verbatim means `GET /api/inbox` hands the browser the whole
+ * photo back so the panel can render two clamped lines of base64 — and the panel
+ * renders exactly that, a wall of gibberish where a picture should be. Neither the
+ * payload nor the wall is what anyone wanted, and no agent can structure a data
+ * URL either (`structurePending` skips them by design).
+ *
+ * So a list says what the capture IS. The full body is still in the record, and
+ * still one `GET /api/log?id=` away.
+ */
+export function captureSummary(item: Pick<InboxItem, "kind" | "text" | "meta">): string {
+  if (item.kind !== "image" && !item.text.startsWith("data:")) return item.text;
+  const m = (item.meta && typeof item.meta === "object" ? item.meta : {}) as Record<string, unknown>;
+  const name = typeof m.filename === "string" && m.filename.trim() ? m.filename.trim() : "image capture";
+  const mime =
+    typeof m.mime === "string" && m.mime.trim() ? m.mime.trim() : (/^data:([^;,]+)/.exec(item.text)?.[1] ?? "image");
+  const bytes =
+    typeof m.bytes === "number" && Number.isFinite(m.bytes) ? m.bytes : Math.round((item.text.length * 3) / 4);
+  const size = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${name} · ${mime} · ${size}`;
+}
+
 /** One capture. Returns the item as it now stands on disk — a duplicate `id` is a
  *  no-op, not an error, so callers can append blind.
  *

@@ -764,6 +764,17 @@ inboxCmd
     }
   });
 
+inboxCmd
+  .command("restore <id>")
+  .description("put a discarded or filed capture back in the pending queue (the undo of keep/discard)")
+  .action((id: string) => {
+    try {
+      out(core.inboxResolve(id, "restore"), (d) => `Back in the queue; ${d.pending} pending.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
 program
   .command("recall <query...>")
   .description("semantic recall over memos/sessions/journal text — local embeddings, no AI key")

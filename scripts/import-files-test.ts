@@ -22,7 +22,9 @@ import Database from "better-sqlite3";
 import { unixMsToWebkit } from "../src/lib/importers/files/chrome";
 import { unixMsToMacAbsolute } from "../src/lib/importers/files/safari";
 import { buildSources } from "../src/lib/source-registry";
-import { appendInboxItem, appendInboxItems, readInboxFromRecord, updateInboxItems } from "../src/lib/record";
+import { appendInboxItem, appendInboxItems, captureSummary, readInboxFromRecord, rebuild, updateInboxItems } from "../src/lib/record";
+import { MAX_INBOX_BYTES } from "../src/lib/import-tree";
+import { inboxResolve } from "../src/lib/cli-core";
 import { sourceName } from "../src/lib/structure";
 
 const REPO = process.cwd();
@@ -489,6 +491,73 @@ function main(): void {
       String(again?.status),
     );
     check("…and still only one copy exists", readInboxFromRecord(dr).filter((i) => i.source === "drop").length === 1);
+  }
+
+  console.log("\na re-dropped file you had DISCARDED comes back to the pending queue");
+  {
+    // Dropping a file you threw away is you asking for it back. An inert
+    // "already have that" is the file silently vanishing — it never reaches the
+    // queue and the dropzone says nothing happened. Hit on the live instance:
+    // dropped a PDF, nothing landed, no error.
+    // inboxResolve is the production path and resolves the record from the DATA
+    // DIR, so the store has to be shaped like a real one: <dataDir>/record.
+    const rvRoot = path.join(root, "revive-store");
+    const rv = path.join(rvRoot, "record");
+    fs.mkdirSync(rv, { recursive: true });
+    const priorDataDir = process.env.AGENTQS_DATA_DIR;
+    process.env.AGENTQS_DATA_DIR = rvRoot;
+    const dropped = appendInboxItem({ text: "the file I threw away", source: "drop", kind: "text" }, { recordDir: rv });
+    updateInboxItems([{ id: dropped.id, status: "discarded" }], { recordDir: rv });
+    const again = appendInboxItem({ text: "the file I threw away", source: "drop", kind: "text" }, { recordDir: rv });
+    check("the re-drop resolves to the same content-keyed row", again.id === dropped.id, `${again.id} vs ${dropped.id}`);
+    check("…which the record still holds as discarded", again.status === "discarded", again.status);
+    const restored = inboxResolve(again.id, "restore");
+    check("restore puts it back in the pending queue", restored.status === "pending", restored.status);
+    check("…and it is countable as pending again", restored.pending === 1, String(restored.pending));
+    check("…with exactly one copy in the record", readInboxFromRecord(rv).filter((i) => i.source === "drop").length === 1);
+    // A STRUCTURED item must NOT come back this way: its cells are merged, and
+    // structuring it again would write the data twice. That is log reject's job.
+    updateInboxItems([{ id: again.id, status: "structured" }], { recordDir: rv });
+    let refused = "";
+    try {
+      inboxResolve(again.id, "restore");
+    } catch (e) {
+      refused = (e as Error).message;
+    }
+    check("a structured capture refuses restore and names log reject", /log reject/.test(refused), refused);
+    process.env.AGENTQS_DATA_DIR = priorDataDir;
+  }
+
+  console.log("\nan image capture lands, and no face ships the base64 back");
+  {
+    const im = path.join(root, "record-image");
+    fs.mkdirSync(im, { recursive: true });
+    // A ~3MB photo, as the dropzone posts it: the whole file base64 in `text`.
+    const bytes = 3 * 1024 * 1024;
+    const dataUrl = `data:image/jpeg;base64,${"A".repeat(Math.ceil(bytes / 3) * 4)}`;
+    check(
+      "a 3MB photo is under the raw-capture ceiling",
+      Buffer.byteLength(dataUrl) < MAX_INBOX_BYTES,
+      `${(Buffer.byteLength(dataUrl) / 1024 / 1024).toFixed(1)}MB of ${MAX_INBOX_BYTES / 1024 / 1024}MB`,
+    );
+    check("…and carries no NUL, so the binary guard lets it through", !dataUrl.includes("\u0000"));
+    const photo = appendInboxItem(
+      { text: dataUrl, source: "drop", kind: "image", meta: { filename: "beach.jpg", bytes, mime: "image/jpeg" } },
+      { recordDir: im },
+    );
+    check("the photo landed as an image capture", photo.kind === "image" && photo.text.startsWith("data:image/"));
+    rebuild({ recordDir: im, dbPath: path.join(root, "image.db") });
+    const idb = new Database(path.join(root, "image.db"), { readonly: true });
+    const inboxRows = (idb.prepare("SELECT COUNT(*) AS n FROM raw_inbox").get() as { n: number }).n;
+    const searchRows = (idb.prepare("SELECT COUNT(*) AS n FROM search WHERE kind = 'inbox'").get() as { n: number }).n;
+    idb.close();
+    check("…and is in the cache", inboxRows === 1, `${inboxRows} row(s)`);
+    check("…but NOT in the search index (a base64 body is not text)", searchRows === 0, `${searchRows} search row(s)`);
+    // The body is the file. A list that ships it hands the browser the whole photo
+    // back to render two clamped lines of base64 — which is what the panel did.
+    const summary = captureSummary(photo);
+    check("a list shows what the capture IS, not its bytes", summary === "beach.jpg · image/jpeg · 3.0 MB", summary);
+    check("…and a text capture is untouched by that", captureSummary({ kind: "text", text: "plain note", meta: null }) === "plain note");
   }
 
   console.log("\na filename with no latin letters does not become a junk source name");
