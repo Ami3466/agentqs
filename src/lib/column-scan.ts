@@ -5,6 +5,7 @@ import {
   appendInboxItem,
   appendInboxItems,
   applyDailyEdits,
+  readDailyColumnNames,
   readDailyFromRecord,
   readInboxFromRecord,
   parseNumber,
@@ -67,12 +68,18 @@ export interface MergeOutcome {
   kept: number; // conflicting dates where the canonical (auto) value won
   cleared: number; // from-cells removed with the duplicate column
   applied: AppliedCell[]; // undo trail — replay in reverse via revertEditsFromAppliedMeta
+  /** The audit item applySavedMerges left in the log for this re-merge, so the
+   *  caller can land exactly that inbox row instead of re-upserting the stream. */
+  auditId?: string;
 }
 
 export interface ColumnGuardResult {
   autoMerged: MergeOutcome[]; // saved rules that re-applied on this run
   findings: QualityFinding[];
   notified: number; // NEW notifications appended (stable ids dedupe re-scans)
+  /** Every inbox row this guard wrote — merge audit items and finding
+   *  notifications. The caller lands these ids and nothing else. */
+  appended: string[];
 }
 
 /** First dot splits — the same `source.metric` convention as the Journal table. */
@@ -206,10 +213,36 @@ function pickInto(a: ColStats, b: ColStats, auto: Set<string>): [ColStats, ColSt
   return a.ref.key < b.ref.key ? [a, b] : [b, a];
 }
 
-/** Every daily column with its per-date values — the input all checks share. */
-function readColumns(rDir: string): Map<string, ColStats> {
+/**
+ * Which daily CSVs a scoped scan has to actually parse: the touched sources, plus
+ * any source holding a column whose NAME could pair with one of theirs. Names come
+ * from the CSV headers (one line per file), so deciding this is cheap even when the
+ * answer is "most of them" — and on a real record the answer is a handful.
+ */
+function relevantSources(rDir: string, scope: Set<string>): Set<string> {
+  const catalog = readDailyColumnNames(rDir);
+  const refs = (source: string) => (catalog.get(source) ?? []).map((metric) => ({ key: `${source}.${metric}`, source, metric }));
+  const touched = [...scope].flatMap(refs);
+  const out = new Set(scope);
+  for (const [source, metrics] of catalog) {
+    if (out.has(source) || isSidecarSource(source)) continue;
+    for (const metric of metrics) {
+      const other = { key: `${source}.${metric}`, source, metric };
+      if (touched.some((t) => similarName(t, other))) {
+        out.add(source);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Every daily column with its per-date values — the input all checks share.
+ *  `only` limits which daily CSVs are parsed at all: a scoped scan opens the files
+ *  it can possibly need and leaves the rest of the record on disk. */
+function readColumns(rDir: string, only?: Set<string>): Map<string, ColStats> {
   const cols = new Map<string, ColStats>();
-  for (const row of readDailyFromRecord(rDir)) {
+  for (const row of readDailyFromRecord(rDir, only)) {
     if (isSidecarSource(row.source)) continue;
     const key = `${row.source}.${row.metric}`;
     let c = cols.get(key);
@@ -232,7 +265,11 @@ function readColumns(rDir: string): Map<string, ColStats> {
 const byKey = (x: QualityFinding, y: QualityFinding) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0);
 
 /** merge check: duplicate / near-duplicate column pairs. */
-function duplicateFindings(cols: Map<string, ColStats>, cfg: AppConfig | null): QualityFinding[] {
+function duplicateFindings(
+  cols: Map<string, ColStats>,
+  cfg: AppConfig | null,
+  scope: Set<string> | null = null,
+): QualityFinding[] {
   const auto = autoSourceIds(cfg);
   const list = [...cols.values()];
   const ruleKeys = new Set(
@@ -244,6 +281,10 @@ function duplicateFindings(cols: Map<string, ColStats>, cfg: AppConfig | null): 
     for (let j = i + 1; j < list.length; j++) {
       const a = list[i];
       const b = list[j];
+      // A scoped run reports only pairs it could have created — one side has to be
+      // a column this run wrote. Pairs between two untouched sources were already
+      // reported (or dismissed) when they appeared.
+      if (scope && !scope.has(a.ref.source) && !scope.has(b.ref.source)) continue;
       if (a.ref.key === b.ref.key || !similarName(a.ref, b.ref)) continue;
 
       const [small, large] = a.values.size <= b.values.size ? [a, b] : [b, a];
@@ -344,14 +385,30 @@ function messyCells(values: Map<string, string>): Array<{ date: string; from: st
 
 /** Scan the daily record for every quality issue: duplicate columns (merge),
  *  dead columns (drop), messy numeric values (clean). Pure read. */
+/**
+ * Run the three checks. With no `sources`, that is the whole record — the Scan
+ * button and `agentqs scan`.
+ *
+ * With `sources`, it is the SCOPED scan every structure/import runs afterwards.
+ * That scan used to be identical to the full one: re-read every daily CSV in the
+ * record and compare every column against every other, on each structure of a
+ * handful of cells. Scoping loses nothing, because a problem this run could have
+ * CREATED must involve a column it wrote — but it still has to see the rest of the
+ * record to spot a cross-source duplicate. So the column NAMES are read from CSV
+ * headers alone (kilobytes), and only the files that can pair with a touched
+ * column are actually parsed.
+ */
 export function scanQuality(
   rDir: string = recordDir(),
   cfg: AppConfig | null = readConfig(),
+  opts: { sources?: string[] } = {},
 ): QualityFinding[] {
-  const cols = readColumns(rDir);
-  const findings = duplicateFindings(cols, cfg);
+  const scope = opts.sources ? new Set(opts.sources.filter(Boolean)) : null;
+  const cols = readColumns(rDir, scope ? relevantSources(rDir, scope) : undefined);
+  const findings = duplicateFindings(cols, cfg, scope);
   const merging = new Set(findings.map((f) => f.key));
   for (const c of cols.values()) {
+    if (scope && !scope.has(c.ref.source)) continue; // not written by this run
     if (merging.has(c.ref.key)) continue; // the duplicate side merges away anyway
     const blank = { into: null, intoAuto: false, overlap: 0, agree: 0, notificationStatus: "pending" };
     const dead = deadReason(c.values);
@@ -652,8 +709,7 @@ export function applySavedMerges(rDir: string = recordDir()): MergeOutcome[] {
   for (const rule of rules) {
     const o = applyColumnMerge(rDir, rule.from, rule.into);
     if (!o || !o.applied.length) continue;
-    out.push(o);
-    appendInboxItem(
+    const audit = appendInboxItem(
       {
         text: `Auto-merged ${o.from} into ${o.into} (saved column rule): ${o.moved} value${o.moved === 1 ? "" : "s"} moved, ${o.kept} conflict${o.kept === 1 ? "" : "s"} kept from ${o.into}.`,
         source: "scanner",
@@ -670,6 +726,7 @@ export function applySavedMerges(rDir: string = recordDir()): MergeOutcome[] {
       },
       { recordDir: rDir },
     );
+    out.push({ ...o, auditId: audit.id });
   }
   return out;
 }
@@ -765,9 +822,22 @@ function findingMeta(f: QualityFinding): Record<string, unknown> {
  * structure (the "AI also runs this check" hook) and behind the Scan buttons.
  * The caller rebuilds when anything changed.
  */
-export function columnGuard(rDir: string = recordDir()): ColumnGuardResult {
+export function columnGuard(
+  rDir: string = recordDir(),
+  opts: { sources?: string[] } = {},
+): ColumnGuardResult {
   const autoMerged = applySavedMerges(rDir);
-  const findings = scanQuality(rDir, readConfig());
+  // A re-merge rewrote both sides on disk, so those sources are in scope too —
+  // otherwise the guard would miss a duplicate its own merge just created.
+  const scope = opts.sources
+    ? [
+        ...new Set([
+          ...opts.sources,
+          ...autoMerged.flatMap((o) => [splitColumnKey(o.from).source, splitColumnKey(o.into).source]),
+        ]),
+      ]
+    : undefined;
+  const findings = scanQuality(rDir, readConfig(), scope ? { sources: scope } : {});
   const { added } = appendInboxItems(
     findings.map((f) => ({
       id: f.notificationId,
@@ -782,5 +852,13 @@ export function columnGuard(rDir: string = recordDir()): ColumnGuardResult {
     const statuses = new Map(readInboxFromRecord(rDir).map((i) => [i.id, i.status]));
     for (const f of findings) f.notificationStatus = statuses.get(f.notificationId) ?? "pending";
   }
-  return { autoMerged, findings, notified: added };
+  return {
+    autoMerged,
+    findings,
+    notified: added,
+    appended: [
+      ...autoMerged.flatMap((o) => (o.auditId ? [o.auditId] : [])),
+      ...findings.map((f) => f.notificationId),
+    ],
+  };
 }

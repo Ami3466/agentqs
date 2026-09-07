@@ -15,13 +15,15 @@ import path from "path";
 import { activeLlm, effectiveProviders, readConfig, writeConfig, type AppConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
 import { openReadonly } from "./db";
+import { runAsConverger } from "./record-context";
 import { prepareSql } from "./query-async";
 import {
   appendInboxItem,
   applyDailyEdits,
+  buildInitialCache,
   landDailySources,
   landInboxCaptures,
-  landInboxStream,
+  landInboxIds,
   landRemovedSources,
   mergeDailyCsv,
   parseCsv,
@@ -241,8 +243,12 @@ function mergeOutcomeSources(outcomes: Array<{ from: string; into: string }>): s
   return [...out];
 }
 
-function landInboxInCache(rDir: string): void {
-  landInboxStream({ recordDir: rDir });
+/** Land exactly the inbox rows a write touched. Naming them is always possible
+ *  here — a merge audit item, a scanner notification, the capture just structured —
+ *  and re-upserting the whole stream instead costs one FTS index scan per capture
+ *  the record has ever held. */
+function landInboxInCache(rDir: string, ids: string[]): void {
+  landInboxIds(ids.filter(Boolean), { recordDir: rDir });
 }
 
 export function logItems(limit = 50) {
@@ -1104,7 +1110,7 @@ export interface SyncSourceOpts {
  *  for minutes, which is how a 50-track Spotify pull took the app down. */
 function landSyncInCache(rDir: string, change: SyncCacheChange): number {
   const patched = refreshSyncCache(change, { recordDir: rDir });
-  return patched ? patched.dailyRows : rebuild({ recordDir: rDir }).daily;
+  return patched ? patched.dailyRows : buildInitialCache({ recordDir: rDir }).daily;
 }
 
 /**
@@ -1495,7 +1501,7 @@ async function syncFileSourceInner(opts: {
   const dailyRows = landDailyEditInCache(rDir, [
     ...new Set([summary.source, ...mergeOutcomeSources(merges)]),
   ]);
-  if (merges.length) landInboxInCache(rDir);
+  if (merges.length) landInboxInCache(rDir, merges.map((m) => m.auditId ?? ""));
   persistSync(importer.id, undefined, new Date().toISOString());
   return {
     id: importer.id, name: importer.name, from: summary.from, to: summary.to,
@@ -1612,7 +1618,7 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
     const merge = mergeDailyCsv(rDir, source, { header: structured.header, rows: structured.rows });
     // A partial parse must never read as a full landing — the loss becomes a
     // pending notification and is named in the return note.
-    notifyCsvLoss(rDir, hint, structured);
+    const lossId = notifyCsvLoss(rDir, hint, structured);
     const loss = csvLossText(structured);
     updateInboxItems(
       [{
@@ -1629,11 +1635,11 @@ export async function importRaw(opts: { file?: string; text?: string; name?: str
     );
     // A dropped CSV is structuring too — run the column check so a manual
     // re-import folds into accepted merges and new duplicates get notified.
-    const guard = columnGuard(rDir);
+    const guard = columnGuard(rDir, { sources: [source] });
     const dailyRows = landDailyEditInCache(rDir, [
       ...new Set([source, ...mergeOutcomeSources(guard.autoMerged)]),
     ]);
-    landInboxInCache(rDir);
+    landInboxInCache(rDir, [item.id, lossId, ...guard.appended]);
     return {
       inboxId: item.id, bytes: Buffer.byteLength(text), structured: true, source,
       metrics: merge.metrics, cells: merge.cells, dailyRows,
@@ -1877,7 +1883,9 @@ export function scan(opts: { fix?: boolean } = {}): ScanResult {
     Boolean,
   );
   const dailyRows = touched.length ? landDailyEditInCache(rDir, touched) : null;
-  if (guard.notified > 0 || fixed.length > 0) landInboxInCache(rDir);
+  if (guard.appended.length || fixed.length) {
+    landInboxInCache(rDir, [...guard.appended, ...guard.findings.map((f) => f.notificationId)]);
+  }
   return {
     findings: guard.findings,
     autoMerged: guard.autoMerged,
@@ -1999,17 +2007,23 @@ export function skillsRestoreDefaults(): { restored: number } {
 // ---- rebuild --------------------------------------------------------------
 
 /** Rebuild the SQLite cache from the record. `verify` asserts determinism
- *  (two rebuilds → identical record hash), the guarantee behind the cache. */
+ *  (two rebuilds → identical record hash), the guarantee behind the cache.
+ *
+ *  THE converger. It is the one entry point that opens a converger context on
+ *  purpose (record-context.ts), which is why `agentqs rebuild` still works from
+ *  anywhere while every request path that reaches `rebuild()` throws. */
 export function rebuildCache(opts: { verify?: boolean } = {}) {
   const rDir = recordDir();
-  const r = rebuild({ recordDir: rDir });
-  if (opts.verify) {
-    const h1 = recordHash(rDir);
-    const r2 = rebuild({ recordDir: rDir });
-    const ok = h1 === recordHash(rDir) && r.daily === r2.daily;
-    return { ...r, verified: ok };
-  }
-  return r;
+  return runAsConverger(() => {
+    const r = rebuild({ recordDir: rDir });
+    if (opts.verify) {
+      const h1 = recordHash(rDir);
+      const r2 = rebuild({ recordDir: rDir });
+      const ok = h1 === recordHash(rDir) && r.daily === r2.daily;
+      return { ...r, verified: ok };
+    }
+    return r;
+  });
 }
 
 // ---- photos ---------------------------------------------------------------

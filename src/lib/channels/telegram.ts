@@ -86,6 +86,11 @@ export const telegramAdapter: ChannelAdapter = {
       message: {
         channel: "telegram",
         eventId: update?.update_id == null ? undefined : `telegram:${String(update.update_id)}`,
+        // The MESSAGE's identity, not the delivery's: an update_id is minted per
+        // delivery, so keying the capture on it stores the same message twice if it
+        // ever reaches us a second way. Chat id + message id is stable per message.
+        messageId:
+          msg.message_id == null ? undefined : `telegram:${String(chatId)}:${String(msg.message_id)}`,
         target: String(chatId),
         userId: String(msg.from?.id ?? chatId),
         text,

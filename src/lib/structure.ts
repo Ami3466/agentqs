@@ -147,14 +147,21 @@ function detectDelimiter(firstLine: string): string {
   return best;
 }
 
-/** A filesystem-safe, lowercase record source stem, or "" when nothing usable. */
+/** A filesystem-safe, lowercase record source stem, or "" when nothing usable.
+ *
+ *  "Nothing usable" includes a name that survives only as digits. Every non-ASCII
+ *  character is stripped, so a Hebrew filename like `2תוצאות הבדיקה.pdf` came out
+ *  as the source name `"2"` — a daily table column called 2, with no way to tell
+ *  what it holds. A slug with no letters in it is not a name; the caller's default
+ *  ("notes" / "import") is. */
 export function slugSource(s: string): string {
-  return s
+  const slug = s
     .toLowerCase()
     .replace(/\.[a-z0-9]+$/, "") // drop a file extension
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 40);
+  return /[a-z]/.test(slug) ? slug : "";
 }
 
 /** Source name for a capture: slug of a filename hint, else the given fallback. */

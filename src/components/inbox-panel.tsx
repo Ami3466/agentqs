@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bookmark, Spinner, Wand, X } from "@/components/icons";
 import { ago, Button, cn, TabBar } from "@/components/ui";
-import { primeCache } from "@/lib/client-cache";
+import { followJob, primeCache } from "@/lib/client-cache";
 
 /** Shared cache entry for the inbox — other panels read the pending count from it. */
 const INBOX_KEY = "/api/inbox";
@@ -119,11 +119,24 @@ export function InboxPanel({
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
+        queued?: boolean;
         results?: StructResult[];
         scan?: { autoMerged: number; findings: number; notified: number };
       };
       if (!res.ok) {
         say("error", data.error || "Structuring failed.");
+        return;
+      }
+      // 202: the merge outlived the request and finishes on the server's job queue
+      // (the same one imports use). Follow it quietly, then refresh — nothing here
+      // unmounts, and closing the tab no longer kills the work.
+      if (data.queued) {
+        say("ok", "Structuring in the background — this list updates when it lands.");
+        const done = await followJob("/api/structure");
+        if (done.status === "error") say("error", done.error || "Structuring failed.");
+        else say("ok", "Structured.");
+        onChanged();
+        await load();
         return;
       }
       const rs = data.results ?? [];
@@ -152,11 +165,20 @@ export function InboxPanel({
     }
   }
 
+  /** Keep/discard both answer 200 with the new pending count, or 202 when the queue
+   *  was busy. Either way the panel stays mounted and refreshes quietly. */
+  async function resolve(id: string, res: Response) {
+    if (!res.ok) return;
+    const data = (await res.json().catch(() => ({}))) as { queued?: boolean };
+    if (data.queued) await followJob("/api/inbox?job=1");
+    onChanged();
+    await load();
+  }
+
   async function discard(id: string) {
     setBusy(id);
     try {
-      const res = await fetch(`/api/inbox?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (res.ok) onChanged();
+      await resolve(id, await fetch(`/api/inbox?id=${encodeURIComponent(id)}`, { method: "DELETE" }));
     } finally {
       setBusy(null);
     }
@@ -165,12 +187,14 @@ export function InboxPanel({
   async function keep(id: string) {
     setBusy(id);
     try {
-      const res = await fetch("/api/inbox", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      if (res.ok) onChanged();
+      await resolve(
+        id,
+        await fetch("/api/inbox", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        }),
+      );
     } finally {
       setBusy(null);
     }

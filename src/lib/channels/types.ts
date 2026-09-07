@@ -16,7 +16,17 @@
 /** A normalized inbound message, whatever platform it arrived on. */
 export interface InboundMessage {
   channel: string; // "telegram" | "slack"
-  eventId?: string; // platform delivery id for retry de-dupe
+  eventId?: string; // platform DELIVERY id — dedupes the platform's own retries
+  /**
+   * The MESSAGE's own stable identity on the platform — Slack `<channel>:<ts>`,
+   * Telegram `<chatId>:<messageId>`. Not the same thing as `eventId`: a delivery id
+   * is minted per webhook POST, so the same message arriving by webhook and then by
+   * poll carried two different ids and was captured TWICE (confirmed on the live
+   * record — every Slack message existed as both a `slack:<channel>:<ts>` item and a
+   * random UUID one). This is the id the inbox capture is stored under, from BOTH
+   * paths, so a message that arrives both ways lands exactly once.
+   */
+  messageId?: string;
   target: string; // where the reply goes (chat id / channel id)
   userId: string; // sender id (provenance / logging)
   text: string; // the message text

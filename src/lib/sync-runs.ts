@@ -70,6 +70,27 @@ export function readBackfillState(id: string, dir: string = dataDir()): Backfill
   return readSyncRuns(dir).backfill?.[id] ?? {};
 }
 
+/**
+ * The newest `at` across every backfill key under `prefix` — for a walk that is
+ * cursored in PARTS rather than under one key.
+ *
+ * Channel pulls are: each conversation has its own cursor
+ * (`channel-pull:slack:C0BEXMYAVU3`), because one shared cursor would let the
+ * busiest conversation drag the others past unread messages. The Pipeline row then
+ * asked for the bare `channel-pull:slack` key, which nothing has ever written — so
+ * "last polled" was permanently null and the row was permanently DUE, re-polling
+ * the channel on every 15-minute sweep whatever its interval said.
+ */
+export function latestBackfillAt(prefix: string, dir: string = dataDir()): string | null {
+  const all = readSyncRuns(dir).backfill ?? {};
+  let latest: string | null = null;
+  for (const [key, state] of Object.entries(all)) {
+    if (key !== prefix && !key.startsWith(`${prefix}:`)) continue;
+    if (state?.at && (!latest || state.at > latest)) latest = state.at;
+  }
+  return latest;
+}
+
 export function writeBackfillState(id: string, state: BackfillState, dir: string = dataDir()): void {
   const s = readSyncRuns(dir);
   const prev = s.backfill?.[id] ?? {};

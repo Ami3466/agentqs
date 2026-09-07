@@ -28,6 +28,7 @@
  *
  * Run: npm run pull:test
  */
+import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import net from "net";
@@ -37,6 +38,11 @@ import { readRecord, rebuild } from "../src/lib/record";
 import { readConfig, writeConfig } from "../src/lib/config";
 import { buildSources } from "../src/lib/source-registry";
 import { dueSources } from "../src/lib/sync-due";
+import { deliveryVerdict, readChannelDeliveries, recordDelivery } from "../src/lib/channel-deliveries";
+import { channelCredentialOrigin, channelEnv } from "../src/lib/channels/registry";
+import { slackAdapter } from "../src/lib/channels/slack";
+import { composeReply } from "../src/lib/reply";
+import { latestBackfillAt } from "../src/lib/sync-runs";
 
 let failures = 0;
 function check(label: string, cond: boolean, extra = ""): void {
@@ -90,7 +96,7 @@ async function main(): Promise<void> {
     username: "tester",
     passwordHash: "x",
     createdAt: new Date().toISOString(),
-    channels: { slackBotToken: "xoxb-test", slackPullChannel: "daily-log" },
+    channels: { slackBotToken: "xoxb-test", slackSigningSecret: "sign-me", slackPullChannel: "daily-log" },
   } as any);
 
   const state = {
@@ -194,6 +200,129 @@ async function main(): Promise<void> {
       check("a conversation the bot is NOT in is skipped", !star.failed.some((f) => f.includes("C0OTHER")), star.failed.join(" | ") || "none");
       const again = await pullChannel("slack", { recordDir: rDir });
       check("and re-running captures nothing new", again.captured === 0, `captured ${again.captured}`);
+    }
+
+    // ---- A pull is not a delivery -----------------------------------------
+    // The ledger is named for INBOUND webhooks, and the poll wrote into it as if it
+    // were one. On the live record that produced "Slack delivered a message and this
+    // app REFUSED it — C0BEXMYAVU3: fetch failed" when Slack had delivered nothing
+    // at all and our own poll simply could not reach slack.com.
+    console.log("\nA failed POLL is never reported as a refused DELIVERY…\n");
+    {
+      state.fail = "fetch failed";
+      try {
+        await pullChannel("slack", { recordDir: rDir });
+      } catch {
+        /* the point is what it wrote down */
+      }
+      state.fail = undefined;
+      const d = readChannelDeliveries("slack");
+      check("the failed poll is recorded as a PULL", d.last?.via === "pull", String(d.last?.via));
+      const v = deliveryVerdict(d, { configured: true, label: "Slack" });
+      check("the verdict does NOT accuse Slack of a refused delivery", !/REFUSED/.test(v.text), v.text);
+      check("…it says we could not reach Slack", /could not reach Slack/i.test(v.text), v.text);
+      check("…and a pull failure never lands in lastRejected", !d.lastRejected, JSON.stringify(d.lastRejected ?? null));
+    }
+    {
+      // The inverse lie: a healthy poll made a webhook that has NEVER fired read as
+      // a working connection.
+      state.messages.push({ type: "message", ts: "2500.000100", user: "U1", text: "polled, never pushed" });
+      const ok = await pullChannel("slack", { recordDir: rDir });
+      check("the recovered poll captured the new message", ok.captured === 1, `captured ${ok.captured}`);
+      const d = readChannelDeliveries("slack");
+      const v = deliveryVerdict(d, { configured: true, label: "Slack" });
+      check(
+        "a capturing poll does not certify a webhook that never delivered",
+        v.tone === "warn" && /only arriving because this app POLLS|only arriving/i.test(v.text),
+        v.text,
+      );
+      check("…and it points at Event Subscriptions", /Event Subscriptions/.test(v.text), v.text);
+      // …and a real inbound POST flips it.
+      recordDelivery("slack", "captured", "memo", { via: "push" });
+      const v2 = deliveryVerdict(readChannelDeliveries("slack"), { configured: true, label: "Slack" });
+      check("once the webhook delivers once, the warning clears", v2.tone === "ok", v2.text);
+      // A refused PUSH still outranks a happily-capturing poll — that combination is
+      // exactly the silent killer this ledger exists for.
+      recordDelivery("slack", "rejected", "bad request signature", { via: "push" });
+      recordDelivery("slack", "captured", "pulled 1 from daily-log", { via: "pull" });
+      const v3 = deliveryVerdict(readChannelDeliveries("slack"), { configured: true, label: "Slack" });
+      check("a refused webhook is still reported while the poll is working", /REFUSED/.test(v3.text), v3.text);
+    }
+
+    // ---- The row's last-poll time ------------------------------------------
+    // Cursors are PER CONVERSATION (`channel-pull:slack:C0DAILY`), so the bare
+    // `channel-pull:slack` key is never written. Reading it made "last polled"
+    // permanently null, which made the row permanently DUE — the channel was
+    // re-polled on every 15-minute sweep whatever its interval said.
+    console.log("\nThe row knows when it last polled…\n");
+    {
+      check(
+        "a per-conversation cursor answers 'when did this channel last poll?'",
+        Boolean(latestBackfillAt("channel-pull:slack")),
+        String(latestBackfillAt("channel-pull:slack")),
+      );
+      const c = readConfig()!;
+      writeConfig({ ...c, sourceIntervals: { ...(c.sourceIntervals ?? {}), slack: "daily" } });
+      const row = buildSources(readConfig(), rDir).find((r) => r.id === "slack")!;
+      check("…so a just-polled daily channel is NOT due again", row.due === false, `lastSync=${row.lastSync} due=${row.due}`);
+      writeConfig({ ...readConfig()!, sourceIntervals: {} });
+    }
+
+    // ---- Where the credential came from ------------------------------------
+    console.log("\nThe row says where the token actually came from…\n");
+    {
+      check("a token saved in Settings reads as SAVED", channelCredentialOrigin(slackAdapter) === "saved", String(channelCredentialOrigin(slackAdapter)));
+      const c = readConfig()!;
+      writeConfig({ ...c, channels: { ...c.channels, slackBotToken: "" } });
+      process.env.SLACK_BOT_TOKEN = "xoxb-from-env";
+      check("…and an environment variable reads as ENV", channelCredentialOrigin(slackAdapter) === "env", String(channelCredentialOrigin(slackAdapter)));
+      delete process.env.SLACK_BOT_TOKEN;
+      check("…and no token at all is null", channelCredentialOrigin(slackAdapter) === null, String(channelCredentialOrigin(slackAdapter)));
+      writeConfig(c);
+      check("config still wins over the environment", channelEnv().slackBotToken === "xoxb-test", channelEnv().slackBotToken);
+    }
+
+    // ---- Push and pull are the SAME message --------------------------------
+    // Confirmed on the live record: every Slack message existed TWICE — once under
+    // `slack:<channel>:<ts>` from the poll and once under a random UUID from the
+    // webhook, because composeReply threw the platform's id away and the two paths
+    // minted different keys anyway.
+    console.log("\nA message that arrives BOTH ways lands exactly once…\n");
+    {
+      const c0 = readConfig()!;
+      writeConfig({ ...c0, channels: { ...c0.channels, slackPullChannel: "*" } });
+      const TEXT = "pushed and polled";
+      const TS = "3000.000100";
+      state.messages.push({ type: "message", ts: TS, user: "U1", text: TEXT });
+
+      // 1) It arrives by WEBHOOK, through the real signature check and the real brain.
+      const body = JSON.stringify({
+        type: "event_callback",
+        event_id: "Ev0PUSH",
+        event: { type: "message", user: "U1", text: TEXT, channel: "C0DAILY", ts: TS },
+      });
+      const stamp = String(Math.floor(Date.now() / 1000));
+      const sig = "v0=" + crypto.createHmac("sha256", "sign-me").update(`v0:${stamp}:${body}`).digest("hex");
+      const verdict = slackAdapter.ingest({
+        env: channelEnv(),
+        headers: new Headers({ "x-slack-signature": sig, "x-slack-request-timestamp": stamp }),
+        rawBody: body,
+      });
+      check(
+        "the webhook mints the message's OWN id, not the delivery's",
+        verdict.message?.messageId === `slack:C0DAILY:${TS}`,
+        String(verdict.message?.messageId),
+      );
+      await composeReply({ message: TEXT, channel: "slack", messageId: verdict.message?.messageId, ai: false });
+      const afterPush = readRecord(rDir).inbox.filter((i) => i.text === TEXT);
+      check("…and the capture is stored under it", afterPush.length === 1 && afterPush[0].id === `slack:C0DAILY:${TS}`, afterPush.map((i) => i.id).join(","));
+
+      // 2) The poll then reads the same message back out of Slack's history.
+      const swept = await pullChannel("slack", { recordDir: rDir });
+      const both = readRecord(rDir).inbox.filter((i) => i.text === TEXT);
+      check("the poll recognises it as already held", swept.captured === 0, `captured ${swept.captured}`);
+      check("THE INBOX HOLDS EXACTLY ONE COPY", both.length === 1, `${both.length} copies: ${both.map((i) => i.id).join(", ")}`);
+      writeConfig(readConfig()!);
     }
 
     // Turning it off must actually turn it off.

@@ -143,10 +143,18 @@ export interface SourceView {
    *  with the call — the difference between a disabled subscription and a secret
    *  mismatch, which look identical (an empty inbox) without them. */
   delivery?: {
-    lastAt: string | null; // any inbound POST, whatever the outcome
+    lastAt: string | null; // most recent ledger row, whatever the outcome
     lastOutcome: string | null;
     lastDetail: string | null;
-    rejectedAt: string | null; // most recent refusal
+    /** Which direction that row was: an inbound webhook ("push") or our own
+     *  outbound poll ("pull"). Conflating them made a poll that could not reach
+     *  the platform render as a message the platform sent and this app refused. */
+    lastVia: "push" | "pull" | null;
+    /** The most recent INBOUND WEBHOOK, whatever its outcome — null means the
+     *  webhook has never once fired, however busy the poll has been. */
+    pushAt: string | null;
+    pushOutcome: string | null;
+    rejectedAt: string | null; // most recent refused PUSH
     rejectedDetail: string | null;
     /** One actionable sentence — see deliveryVerdict in channel-deliveries.ts. */
     verdict: { tone: "ok" | "warn" | "error"; text: string } | null;

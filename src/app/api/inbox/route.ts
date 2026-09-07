@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItem, landInboxCaptures, readInboxFromRecord } from "@/lib/record";
+import { appendInboxItems, inboxItemId, readInboxFromRecord } from "@/lib/record";
 import { inboxResolve } from "@/lib/cli-core";
+import { INBOX_JOB, readSyncJob, startJobAndWait } from "@/lib/sync-jobs";
 import { MAX_INBOX_BYTES } from "@/lib/import-tree";
 import { extractPdfText, looksPdf, MAX_PDF_BYTES, PDF_MIME, PDF_SCANNED_NOTE } from "@/lib/pdf-text";
-import { autoStructureNewItem } from "@/lib/structure-run";
+import { landCapture } from "@/lib/structure-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,10 +15,14 @@ export const dynamic = "force-dynamic";
 const MAX_BASE64_CHARS = Math.ceil(MAX_PDF_BYTES / 3) * 4;
 const MAX_BODY_BYTES = MAX_BASE64_CHARS + 64 * 1024;
 
-/** Pending bucket, read straight from the record (the source of truth). */
-export async function GET() {
+/** Pending bucket, read straight from the record (the source of truth).
+ *  `?job=1` answers with the inbox job instead — what a caller polls after a 202. */
+export async function GET(req: Request) {
   if (!getCurrentUser()) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  if (new URL(req.url).searchParams.get("job")) {
+    return NextResponse.json({ job: readSyncJob(INBOX_JOB) });
   }
   const inbox = readInboxFromRecord(recordDir()).filter((i) => i.status === "pending");
   // Scanner notifications (kind "notification") are data-quality findings — they
@@ -128,23 +133,37 @@ export async function POST(req: Request) {
     );
   }
 
-  const item = appendInboxItem(
-    { text, source: body.source || "memo", kind: body.kind, meta },
-    { recordDir: recordDir() },
-  );
-  // Auto-structure first: when it merges, structurePending rebuilds the cache
-  // itself — rebuilding here too would run the whole derivation twice per capture.
-  const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
-  if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: recordDir() });
+  // The APPEND is inline and bounded — one line on the end of inbox.jsonl, and the
+  // caller needs the id back. Everything after it (the cache patch and, when the
+  // setting is on, the LLM auto-structure) goes on the record job queue, so this
+  // request thread can never be held by a merge.
+  const capture = { text, source: body.source || "memo", kind: body.kind, meta };
+  const { items, added } = appendInboxItems([capture], { recordDir: recordDir() });
+  if (!added) {
+    // A dropped file is keyed by its CONTENT, so re-dropping the same file is a
+    // duplicate by design. It is not an error and it is certainly not a 500 (which
+    // is what it used to be): the capture is already in the record, so say so and
+    // touch nothing — re-landing it would overwrite the status it has since got.
+    return NextResponse.json({
+      ok: true,
+      duplicate: true,
+      id: inboxItemId(capture),
+      pending: readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length,
+      structured: false,
+    });
+  }
+  const item = items[0];
+  const landed = await landCapture(item, { recordDir: recordDir() });
 
   const pending =
-    auto?.pending ?? readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length;
+    landed.structured?.pending ?? readInboxFromRecord(recordDir()).filter((i) => i.status === "pending").length;
   return NextResponse.json({
     ok: true,
     id: item.id,
     ts: item.ts,
     pending,
-    structured: (auto?.structured ?? 0) > 0,
+    structured: (landed.structured?.structured ?? 0) > 0,
+    ...(landed.queued ? { queued: true } : {}),
   });
 }
 
@@ -153,6 +172,18 @@ export async function POST(req: Request) {
 function resolveError(e: unknown): NextResponse {
   const msg = e instanceof Error ? e.message : String(e);
   return NextResponse.json({ error: msg }, { status: msg.startsWith("No inbox item") ? 404 : 409 });
+}
+
+/** Keep/discard through the record job queue. Both rewrite inbox.jsonl and patch
+ *  the cache — small, but "small" is what the structure path was assumed to be too,
+ *  and the request thread is not the place to find out. The queue also serializes
+ *  them against an import, so two synchronous SQLite writers never overlap. Fast
+ *  work still answers with its real result and status code. */
+async function resolveAsJob(run: () => { pending: number }): Promise<NextResponse> {
+  const { job, result, error } = await startJobAndWait(INBOX_JOB, async () => ({ result: run() }));
+  if (error) return resolveError(error);
+  if (!result) return NextResponse.json({ ok: true, queued: true, job }, { status: 202 });
+  return NextResponse.json({ ok: true, pending: result.pending });
 }
 
 /** Discard a capture of any status (status → discarded, idempotent), then
@@ -166,12 +197,7 @@ export async function DELETE(req: Request) {
   if (!id) {
     return NextResponse.json({ error: "Pass an item id to discard." }, { status: 400 });
   }
-  try {
-    const r = inboxResolve(id, "discard");
-    return NextResponse.json({ ok: true, pending: r.pending });
-  } catch (e) {
-    return resolveError(e);
-  }
+  return resolveAsJob(() => inboxResolve(id, "discard"));
 }
 
 /** Keep a pending capture as a reference memo (status → reference): searchable
@@ -184,10 +210,5 @@ export async function PATCH(req: Request) {
   if (!body.id) {
     return NextResponse.json({ error: "Pass an item id to keep." }, { status: 400 });
   }
-  try {
-    const r = inboxResolve(body.id, "keep");
-    return NextResponse.json({ ok: true, pending: r.pending });
-  } catch (e) {
-    return resolveError(e);
-  }
+  return resolveAsJob(() => inboxResolve(body.id!, "keep"));
 }

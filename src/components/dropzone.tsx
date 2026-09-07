@@ -128,17 +128,22 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
       if (!list.length) return;
       setBusy(true);
       let ok = 0;
+      // Dropped twice: already in the record, keyed by content. Counted apart so
+      // "3 files added" never claims rows that were already there.
+      let dupes = 0;
       // A refusal carries its REASON when the server gave one (a scanned PDF, an
       // encrypted one) — "couldn't read it" is only for a file we never got.
       const skipped: { name: string; why?: string }[] = [];
-      async function post(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+      async function post(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string; duplicate?: boolean }> {
         const res = await fetch("/api/inbox", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ source: "drop", ...body }),
         });
-        if (res.ok) return { ok: true };
-        const detail = (await res.json().catch(() => ({}))) as { error?: string };
+        const detail = (await res.json().catch(() => ({}))) as { error?: string; duplicate?: boolean };
+        // A dropped file is keyed by its content, so the same file again is already
+        // in the record. That is not a failure — it used to be a 500.
+        if (res.ok) return { ok: true, duplicate: detail.duplicate === true };
         return { ok: false, error: detail.error };
       }
       try {
@@ -158,7 +163,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
               kind: "image",
               meta: { filename, bytes: f.size, mime: f.type },
             });
-            if (done.ok) ok++;
+            if (done.ok) done.duplicate ? dupes++ : ok++;
             else skipped.push({ name: filename, why: done.error });
             continue;
           }
@@ -181,7 +186,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
               kind: "file",
               meta: { filename, bytes: f.size, mime: PDF_MIME },
             });
-            if (done.ok) ok++;
+            if (done.ok) done.duplicate ? dupes++ : ok++;
             else skipped.push({ name: filename, why: done.error });
             continue;
           }
@@ -201,12 +206,14 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
             kind: kindOf(filename),
             meta: { filename, bytes: f.size },
           });
-          if (done.ok) ok++;
+          if (done.ok) done.duplicate ? dupes++ : ok++;
           else skipped.push({ name: filename, why: done.error });
         }
         if (ok) {
           say("ok", `${ok} file${ok === 1 ? "" : "s"} added — Structure below.`);
           onUploaded();
+        } else if (dupes) {
+          say("ok", `${dupes} file${dupes === 1 ? " is" : "s are"} already in your inbox — nothing to add.`);
         }
         if (skipped.length) {
           const explained = skipped.filter((s) => s.why);

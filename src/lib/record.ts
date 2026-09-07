@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { SCHEMA_VERSION, createEmpty } from "./db";
 import { buildDetailHeartRate } from "./detail";
 import { dbPath, recordDir } from "./paths";
+import { assertConverger, isConverger, runAsConverger } from "./record-context";
 
 /**
  * The git record — the source of truth. Plain text, one shape per stream, so a
@@ -261,15 +262,50 @@ function readDailyCsvFile(dir: string, file: string): DailyRow[] {
   return out;
 }
 
-function readDaily(dir: string): DailyRow[] {
-  const out: DailyRow[] = [];
-  if (!fs.existsSync(dir)) return out;
-  const files = fs
+function dailyCsvFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs
     .readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith(".csv"))
     .filter((f) => !shouldSkipDailyCsvRead(dir, f))
     .sort();
-  for (const file of files) out.push(...readDailyCsvFile(dir, file));
+}
+
+function readDaily(dir: string, only?: Set<string>): DailyRow[] {
+  const out: DailyRow[] = [];
+  for (const file of dailyCsvFiles(dir)) {
+    if (only && !only.has(file.replace(/\.csv$/i, ""))) continue;
+    out.push(...readDailyCsvFile(dir, file));
+  }
+  return out;
+}
+
+/** Every daily column in the record — `source` → metric names — WITHOUT parsing a
+ *  single data row. One CSV header line per file, so "what columns exist?" costs
+ *  kilobytes instead of re-reading the whole daily table. The column scanner uses
+ *  it to decide which files it actually has to open. */
+export function readDailyColumnNames(dir: string): Map<string, string[]> {
+  const dailyDir = path.join(dir, "daily");
+  const out = new Map<string, string[]>();
+  for (const file of dailyCsvFiles(dailyDir)) {
+    let head = "";
+    try {
+      // The header is the first line; read a bounded slice rather than the file.
+      const fd = fs.openSync(path.join(dailyDir, file), "r");
+      try {
+        const buf = Buffer.alloc(64 * 1024);
+        const n = fs.readSync(fd, buf, 0, buf.length, 0);
+        head = buf.subarray(0, n).toString("utf8").split(/\r?\n/)[0] ?? "";
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      continue; // unreadable file has no columns
+    }
+    const { header } = parseCsv(head);
+    if (header.length < 2) continue;
+    out.set(file.replace(/\.csv$/i, ""), header.slice(1).filter(Boolean));
+  }
   return out;
 }
 
@@ -323,8 +359,8 @@ export function readEventsFromRecord(dir: string): EventItem[] {
 /** Read the daily stream alone (record/daily/*.csv). Exposed for consumers that
  *  don't need inbox/sessions/events — reading everything via readRecord would
  *  parse the (potentially huge) events.jsonl for nothing. */
-export function readDailyFromRecord(dir: string): DailyRow[] {
-  return readDaily(path.join(dir, "daily"));
+export function readDailyFromRecord(dir: string, only?: Set<string>): DailyRow[] {
+  return readDaily(path.join(dir, "daily"), only);
 }
 
 export function readInboxFromRecord(dir: string): InboxItem[] {
@@ -465,14 +501,7 @@ export function appendInboxItems(
   const lines: string[] = [];
   const items: InboxItem[] = [];
   for (const input of inputs) {
-    // A dropped file (source "drop") gets a CONTENT-derived id, so the same file
-    // dropped twice — or dropped and then `agentqs import`ed — lands ONCE. Typed
-    // memos keep a random id: the same short note can legitimately recur day to day.
-    const fallbackId =
-      input.source === "drop"
-        ? `drop:${crypto.createHash("sha256").update(input.text ?? "").digest("hex").slice(0, 24)}`
-        : crypto.randomUUID();
-    const id = input.id?.trim() || fallbackId;
+    const id = inboxItemId(input);
     if (existing.has(id)) continue;
     existing.add(id);
     const item = buildInboxItem(input, id);
@@ -483,14 +512,41 @@ export function appendInboxItems(
   return { added: lines.length, total: existing.size, items };
 }
 
+/**
+ * The id one capture will be stored under.
+ *
+ * A dropped file (source "drop") gets a CONTENT-derived id, so the same file
+ * dropped twice — or dropped and then `agentqs import`ed — lands ONCE. Typed memos
+ * keep a random id: the same short note can legitimately recur day to day.
+ * Exported because a caller that wants to know whether its capture was a duplicate
+ * has to be able to name it without guessing.
+ */
+export function inboxItemId(input: AppendInboxInput): string {
+  const explicit = input.id?.trim();
+  if (explicit) return explicit;
+  return input.source === "drop"
+    ? `drop:${crypto.createHash("sha256").update(input.text ?? "").digest("hex").slice(0, 24)}`
+    : crypto.randomUUID();
+}
+
 /** One capture. Returns the item as it now stands on disk — a duplicate `id` is a
- *  no-op, not an error, so callers can append blind. */
+ *  no-op, not an error, so callers can append blind.
+ *
+ *  A duplicate used to reach `input.id!.trim()` with no `id` at all and throw a
+ *  TypeError, which every face surfaced as a 500: re-dropping the same file in the
+ *  dropzone failed with a server error instead of "already in your inbox". And a
+ *  synthesized stand-in would be worse than the crash — it says `pending`, so
+ *  landing it would overwrite the `structured` status the record actually holds.
+ *  The row on disk is the answer. */
 export function appendInboxItem(
   input: AppendInboxInput,
   opts: { recordDir?: string; dataDir?: string } = {},
 ): InboxItem {
   const { items } = appendInboxItems([input], opts);
-  return items[0] ?? buildInboxItem(input, input.id!.trim());
+  if (items[0]) return items[0];
+  const id = inboxItemId(input);
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  return readInboxFromRecord(rDir).find((i) => i.id === id) ?? buildInboxItem(input, id);
 }
 
 export interface AppendSessionInput {
@@ -754,23 +810,35 @@ export function insertEventsIntoCache(
 export function upsertInboxItemsInCache(
   items: InboxItem[],
   opts: { dataDir?: string; dbFile?: string } = {},
-): number {
+): number | null {
   const file = opts.dbFile ?? dbPath(opts.dataDir);
-  if (!items.length || !fs.existsSync(file)) return 0;
+  if (!items.length) return 0; // nothing asked for is not a failed patch
+  if (!fs.existsSync(file)) return null; // no cache to patch — the caller decides
   try {
     const db = new Database(file);
     try {
       const ins = db.prepare(
         "INSERT OR REPLACE INTO raw_inbox (id,ts,source,kind,text,meta,status) VALUES (?,?,?,?,?,?,?)",
       );
+      // What the row looks like NOW, by primary key. `search` is FTS5 with no index
+      // on `ref`, so every delete below is a full scan of the index — and a status
+      // flip (pending → structured, the whole of Structure) leaves the searchable
+      // body byte-identical. Reading the old row first is one PK lookup and it lets
+      // the common case touch `search` ZERO times. THIS is what made structuring
+      // five items cost fifteen minutes: landing the whole inbox, one FTS scan per
+      // row, for rows whose search entry was already correct.
+      const prevRow = db.prepare("SELECT kind, text, status FROM raw_inbox WHERE id = ?");
       // FTS5 has no uniqueness or upsert, so the ref's old row is deleted first —
       // otherwise re-structuring a capture would leave two copies in search.
       const delSearch = db.prepare("DELETE FROM search WHERE kind = 'inbox' AND ref = ?");
       const insSearch = db.prepare("INSERT INTO search (ref,kind,body) VALUES (?,?,?)");
       const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+      // The full rebuild's rule, in one place so the patch cannot drift from it.
+      const indexable = (kind: string, status: string) => kind !== "image" && status !== "discarded";
       let n = 0;
       const tx = db.transaction(() => {
         for (const it of items) {
+          const before = prevRow.get(it.id) as { kind: string; text: string; status: string } | undefined;
           ins.run(
             it.id,
             it.ts,
@@ -780,9 +848,19 @@ export function upsertInboxItemsInCache(
             it.meta == null ? null : JSON.stringify(it.meta),
             it.status,
           );
-          delSearch.run(`inbox:${it.id}`);
-          if (it.kind !== "image" && it.status !== "discarded") {
-            insSearch.run(`inbox:${it.id}`, "inbox", it.text);
+          const want = indexable(it.kind, it.status);
+          const had = before ? indexable(before.kind, before.status) : null;
+          // Identical body, identical indexability → the search row a rebuild would
+          // write is already there. Anything else goes the exact old way.
+          const unchanged = had !== null && had === want && (!want || before!.text === it.text);
+          if (!unchanged) {
+            // A row that was NOT in raw_inbox has no search row either — a
+            // rebuild-equivalent cache only ever writes the two together — so a
+            // brand-new capture skips the delete entirely. That delete is a full
+            // scan of the FTS index, which is why landing an inbound Slack message
+            // got slower every year the record grew.
+            if (before) delSearch.run(`inbox:${it.id}`);
+            if (want) insSearch.run(`inbox:${it.id}`, "inbox", it.text);
           }
           n += 1;
         }
@@ -798,16 +876,116 @@ export function upsertInboxItemsInCache(
       db.close();
     }
   } catch {
-    return 0; // stale schema / locked cache — the next full rebuild catches up
+    return null; // stale schema / locked cache — say so; never re-derive the record
   }
+}
+
+/** Drop inbox rows from the cache by id — the delete half of the upsert above, for
+ *  the one writer that REMOVES lines from inbox.jsonl (clearing the demo record).
+ *  Returns null — not 0 — when there was no cache to patch, so "nothing matched"
+ *  and "could not patch" stay distinguishable. */
+export function removeInboxItemsFromCache(
+  ids: string[],
+  opts: { dataDir?: string; dbFile?: string } = {},
+): number | null {
+  const file = opts.dbFile ?? dbPath(opts.dataDir);
+  if (!ids.length) return 0;
+  if (!fs.existsSync(file)) return null;
+  try {
+    const db = new Database(file);
+    try {
+      const del = db.prepare("DELETE FROM raw_inbox WHERE id = ?");
+      const delSearch = db.prepare("DELETE FROM search WHERE kind = 'inbox' AND ref = ?");
+      const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+      let n = 0;
+      const tx = db.transaction(() => {
+        for (const id of ids) {
+          const gone = del.run(id).changes;
+          n += gone;
+          if (gone) delSearch.run(`inbox:${id}`); // nothing removed, nothing indexed
+        }
+        setMeta.run(
+          "inbox_rows",
+          String((db.prepare("SELECT COUNT(*) AS n FROM raw_inbox").get() as { n: number }).n),
+        );
+      });
+      tx();
+      return n;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Biggest record a REQUEST is allowed to build a first cache for. A fresh install
+ *  is kilobytes and builds in milliseconds; a record this size with no agentqs.db
+ *  means the cache was deleted under a real record, and re-deriving it costs
+ *  minutes of frozen server. That belongs to `agentqs rebuild`, not to a button. */
+const FIRST_BUILD_LIMIT_BYTES = 24 * 1024 * 1024;
+
+/** Run a cache patch, turning an unusable cache into the SAME loud failure every
+ *  other land helper raises. The old shape swallowed this and rebuilt. */
+function patchOrFail<T>(patch: () => T, what: string): T {
+  try {
+    return patch();
+  } catch (e) {
+    throw patchFailed(`${what}: ${(e as Error).message}`);
+  }
+}
+
+/** The one message every "the patch could not apply" failure shares. It names the
+ *  converger, because the alternative — running one right here — is the outage. */
+function patchFailed(what: string): Error {
+  return new Error(
+    `The SQLite cache could not be patched (${what}). Nothing was re-derived: a request never re-reads ` +
+      "the whole record. Run `agentqs rebuild` to converge the cache, then retry.",
+  );
+}
+
+/**
+ * THE ONE LEGITIMATE FULL BUILD a request may cause: there is no cache file at all,
+ * so there is nothing to patch and no incremental answer exists. Named on purpose —
+ * it used to be the silent `: rebuild(opts)` arm of every `land*` helper, which is
+ * how "no cache yet" and "the patch failed" ended up sharing a code path and how a
+ * button ended up re-deriving 1.5M events.
+ *
+ * It refuses in the two cases that are NOT a fresh install: a cache that exists (so
+ * the patch failed for another reason), and a record too big to derive inside a
+ * request.
+ */
+export function buildInitialCache(opts: { recordDir?: string; dataDir?: string } = {}): RebuildResult {
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const file = dbPath(opts.dataDir ?? path.dirname(rDir));
+  if (fs.existsSync(file)) throw patchFailed("the cache is present but unwritable — locked, or a stale schema");
+  if (!isConverger()) {
+    let bytes = 0;
+    for (const name of ["events.jsonl", "inbox.jsonl", "sessions.jsonl"]) {
+      try {
+        bytes += fs.statSync(path.join(rDir, name)).size;
+      } catch {
+        /* absent stream contributes nothing */
+      }
+    }
+    if (bytes > FIRST_BUILD_LIMIT_BYTES) {
+      throw new Error(
+        `No SQLite cache exists for a ${Math.round(bytes / 1024 / 1024)}MB record, and building one re-reads all ` +
+          "of it — minutes of frozen server, so a web request will not do it. Run `agentqs rebuild` once.",
+      );
+    }
+  }
+  // A first build over a fresh record is milliseconds; open the context explicitly
+  // rather than leaving rebuild()'s guard to guess.
+  return runAsConverger(() => rebuild(opts));
 }
 
 /**
  * Land freshly captured inbox items in the cache — the one call every capture path
  * makes (a `//` memo, a Slack/Telegram message, a dropped file, an agent
- * `log_memo`). Patches the cache in place when there is one, and falls back to the
- * single full rebuild when there isn't yet. Same shape as landDailyEditInCache:
- * a rebuild is for "the record changed shape", never for "one row arrived".
+ * `log_memo`). Patches the cache in place; the only fallback is the explicit
+ * first-build, and a patch that fails for any OTHER reason throws instead of
+ * quietly re-deriving the record.
  */
 export function landInboxCaptures(items: InboxItem[], opts: { recordDir?: string; dataDir?: string } = {}): void {
   // Resolve the cache the SAME way rebuild() does. A caller that passes only a
@@ -815,7 +993,23 @@ export function landInboxCaptures(items: InboxItem[], opts: { recordDir?: string
   // the real store's cache — the bug a bare dbPath() default would introduce.
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
   const dbFile = dbPath(opts.dataDir ?? path.dirname(rDir));
-  if (upsertInboxItemsInCache(items, { dbFile }) === 0) rebuild(opts);
+  if (upsertInboxItemsInCache(items, { dbFile }) !== null) return;
+  if (!fs.existsSync(dbFile)) {
+    buildInitialCache(opts);
+    return;
+  }
+  throw patchFailed("inbox rows");
+}
+
+/** Land exactly the inbox rows an action touched, by id. The proportional twin of
+ *  `landInboxStream`: Structure changes one item's status, so it must pay for one
+ *  row — not for re-upserting every capture the record has ever held. */
+export function landInboxIds(ids: string[], opts: { recordDir?: string; dataDir?: string } = {}): void {
+  if (!ids.length) return;
+  const rDir = opts.recordDir ?? recordDir(opts.dataDir);
+  const want = new Set(ids);
+  const items = readInboxFromRecord(rDir).filter((i) => want.has(i.id));
+  if (items.length) landInboxCaptures(items, opts);
 }
 
 /**
@@ -826,7 +1020,7 @@ export function landInboxCaptures(items: InboxItem[], opts: { recordDir?: string
  * 1.5M-event record that is over two MINUTES of synchronous, event-loop-blocking
  * work, during which every page in the app sits on "Loading…". Nothing that
  * changes a handful of cells may cost that. `agentqs rebuild` stays the converger;
- * the fallback here is only for "there is no cache yet".
+ * the only fallback here is the explicit "there is no cache yet" first build.
  *
  * Returns the daily row count the cache now holds.
  */
@@ -834,8 +1028,8 @@ export function landDailySources(
   sources: string[],
   opts: { recordDir?: string; dataDir?: string } = {},
 ): number {
-  const patched = refreshSyncCache({ sources }, opts);
-  return patched ? patched.dailyRows : rebuild(opts).daily;
+  const patched = patchOrFail(() => refreshSyncCache({ sources }, opts), "daily rows");
+  return patched ? patched.dailyRows : buildInitialCache(opts).daily;
 }
 
 /** Patch the cache after sources LEFT the record (disconnect / reset): their daily
@@ -845,13 +1039,14 @@ export function landRemovedSources(
   sources: string[],
   opts: { recordDir?: string; dataDir?: string } = {},
 ): number {
-  const patched = refreshSyncCache({ sources, eventsRemoved: sources }, opts);
-  return patched ? patched.dailyRows : rebuild(opts).daily;
+  const patched = patchOrFail(() => refreshSyncCache({ sources, eventsRemoved: sources }, opts), "removed sources");
+  return patched ? patched.dailyRows : buildInitialCache(opts).daily;
 }
 
-/** Re-land the inbox stream in the cache. It is the small jsonl (pending captures +
- *  scanner notifications), so re-upserting it whole is milliseconds — and it spares
- *  every path that merely APPENDS a notification from re-deriving a million events.
+/** Re-land the WHOLE inbox stream in the cache. The bulk answer, for a writer that
+ *  cannot name the rows it touched (a folder import that appended a receipt per
+ *  file). Anything that CAN name them uses `landInboxIds` — re-upserting a record's
+ *  entire inbox to change one status is work sized to the record, not to the edit.
  *  Inbox lines are only ever appended or patched, never dropped, so upserting the
  *  full stream leaves exactly what a rebuild would have. */
 export function landInboxStream(opts: { recordDir?: string; dataDir?: string } = {}): void {
@@ -878,9 +1073,10 @@ function sessionSearchBody(s: SessionItem): string {
 export function upsertSessionsInCache(
   items: SessionItem[],
   opts: { dataDir?: string; dbFile?: string } = {},
-): number {
+): number | null {
   const file = opts.dbFile ?? dbPath(opts.dataDir);
-  if (!items.length || !fs.existsSync(file)) return 0;
+  if (!items.length) return 0; // nothing asked for is not a failed patch
+  if (!fs.existsSync(file)) return null; // no cache to patch — the caller decides
   try {
     const db = new Database(file);
     try {
@@ -892,9 +1088,14 @@ export function upsertSessionsInCache(
       const delSearch = db.prepare("DELETE FROM search WHERE kind = 'session' AND ref = ?");
       const insSearch = db.prepare("INSERT INTO search (ref,kind,body) VALUES (?,?,?)");
       const setMeta = db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)");
+      // Is this session already in the cache? One PK lookup, and it decides whether
+      // the FTS delete below has anything to delete — saving a NEW session (the
+      // common case, straight off a chat) then costs no index scan at all.
+      const hasSession = db.prepare("SELECT 1 FROM sessions WHERE id = ?");
       let n = 0;
       const tx = db.transaction(() => {
         for (const s of items) {
+          const existed = Boolean(hasSession.get(s.id));
           ins.run(
             s.id,
             s.date,
@@ -907,7 +1108,7 @@ export function upsertSessionsInCache(
             JSON.stringify(s.insights),
             JSON.stringify(s.commitments),
           );
-          delSearch.run(`session:${s.id}`);
+          if (existed) delSearch.run(`session:${s.id}`);
           insSearch.run(`session:${s.id}`, "session", sessionSearchBody(s));
           n += 1;
         }
@@ -922,7 +1123,7 @@ export function upsertSessionsInCache(
       db.close();
     }
   } catch {
-    return 0; // stale schema / locked cache — the next full rebuild catches up
+    return null; // stale schema / locked cache — say so; never re-derive the record
   }
 }
 
@@ -945,8 +1146,9 @@ export function removeSessionsFromCache(
       let n = 0;
       const tx = db.transaction(() => {
         for (const id of ids) {
-          n += del.run(id).changes;
-          delSearch.run(`session:${id}`);
+          const gone = del.run(id).changes;
+          n += gone;
+          if (gone) delSearch.run(`session:${id}`); // nothing removed, nothing indexed
         }
         setMeta.run(
           "session_rows",
@@ -963,18 +1165,30 @@ export function removeSessionsFromCache(
   }
 }
 
-/** Patch-or-rebuild for a session write — the sessions twin of landInboxCaptures. */
+/** Land a session write — the sessions twin of landInboxCaptures. Patch, else the
+ *  explicit first build, else fail loudly: saving a mentor session must never be
+ *  the thing that re-derives a million events under an HTTP handler. */
 export function landSessionWrite(items: SessionItem[], opts: { recordDir?: string; dataDir?: string } = {}): void {
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
   const dbFile = dbPath(opts.dataDir ?? path.dirname(rDir));
-  if (upsertSessionsInCache(items, { dbFile }) === 0) rebuild(opts);
+  if (upsertSessionsInCache(items, { dbFile }) !== null) return;
+  if (!fs.existsSync(dbFile)) {
+    buildInitialCache(opts);
+    return;
+  }
+  throw patchFailed("session rows");
 }
 
-/** Patch-or-rebuild for a session delete. */
+/** The delete half, same rule. */
 export function landSessionDelete(ids: string[], opts: { recordDir?: string; dataDir?: string } = {}): void {
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
   const dbFile = dbPath(opts.dataDir ?? path.dirname(rDir));
-  if (removeSessionsFromCache(ids, { dbFile }) === null) rebuild(opts);
+  if (removeSessionsFromCache(ids, { dbFile }) !== null) return;
+  if (!fs.existsSync(dbFile)) {
+    buildInitialCache(opts);
+    return;
+  }
+  throw patchFailed("session deletes");
 }
 
 /** What one source sync changed in the record — everything the cache needs to
@@ -1016,8 +1230,11 @@ export function refreshSyncCache(
   const dailyDir = path.join(rDir, "daily");
   const db = new Database(file);
   try {
-    const hasText = db.prepare(
-      "SELECT 1 FROM daily WHERE source = ? AND value_num IS NULL AND length(trim(value_text)) >= 8 LIMIT 1",
+    // The source's prose cells as the cache currently holds them, keyed by search
+    // ref. Read through daily's own (source, …) indexes — proportional to the ONE
+    // source, never to the record.
+    const priorText = db.prepare(
+      "SELECT date, metric, value_text FROM daily WHERE source = ? AND value_num IS NULL AND length(trim(value_text)) >= 8",
     );
     const delDaily = db.prepare("DELETE FROM daily WHERE source = ?");
     const insDaily = db.prepare(
@@ -1035,23 +1252,46 @@ export function refreshSyncCache(
 
     const tx = db.transaction(() => {
       for (const source of change.sources) {
-        const hadText = Boolean(hasText.get(source));
+        const before = new Map<string, string>();
+        for (const r of priorText.iterate(source) as Iterable<{ date: string; metric: string; value_text: string }>) {
+          before.set(`daily:${r.date}:${source}:${r.metric}`, `${source}.${r.metric}\n${r.value_text}`);
+        }
         delDaily.run(source);
         const rows = readDailyCsvFile(dailyDir, `${source}.csv`);
-        const textRows: DailyRow[] = [];
+        const after = new Map<string, string>();
         for (const d of rows) {
           insDaily.run(d.date, d.source, d.metric, d.valueNum, d.valueText);
           // Same rule as the full rebuild: only prose cells reach the index.
-          if (d.valueNum == null && d.valueText.trim().length >= 8) textRows.push(d);
-        }
-        if (hadText || textRows.length) {
-          delDailySearch.run(`daily:*:${source}:*`);
-          for (const d of textRows) {
-            insSearch.run(`daily:${d.date}:${d.source}:${d.metric}`, "daily", `${d.source}.${d.metric}\n${d.valueText}`);
+          if (d.valueNum == null && d.valueText.trim().length >= 8) {
+            after.set(`daily:${d.date}:${d.source}:${d.metric}`, `${d.source}.${d.metric}\n${d.valueText}`);
           }
         }
+        // Structuring a note APPENDS prose cells; it does not rewrite the ones
+        // already indexed. When every old ref survives with the same body, the rows
+        // `search` already holds are exactly the rows a rebuild would write, so the
+        // only work left is inserting the new ones. That matters because `ref` is
+        // UNINDEXED in FTS5: the GLOB delete below is a full scan of the entire
+        // search index (events included), and it used to run on every structure of
+        // any source that carries prose.
+        let keep = true;
+        for (const [ref, body] of before) {
+          if (after.get(ref) !== body) {
+            keep = false;
+            break;
+          }
+        }
+        if (!keep) delDailySearch.run(`daily:*:${source}:*`);
+        for (const [ref, body] of after) {
+          if (keep && before.has(ref)) continue; // already indexed, unchanged
+          insSearch.run(ref, "daily", body);
+        }
       }
+      const anyEvents = db.prepare("SELECT 1 FROM events WHERE source = ? LIMIT 1");
       for (const source of change.eventsRemoved ?? []) {
+        // `search` is FTS5 with no index on `ref`, so the delete below scans the
+        // whole index. A source with no events (every daily-only source, and every
+        // demo source) must not pay for that — the indexed probe is one row.
+        if (!anyEvents.get(source)) continue;
         db.prepare(
           `DELETE FROM search WHERE kind = 'event' AND ref IN
              (SELECT 'event:' || id FROM events WHERE source = ?)`,
@@ -1620,6 +1860,10 @@ function assertNoDatalessFiles(rDir: string): void {
  * on-disk layout — two runs over the same record produce byte-identical DBs.
  */
 export function rebuild(opts: RebuildOptions = {}): RebuildResult {
+  // THE BOUNDARY. A rebuild re-reads the whole record and re-indexes every event,
+  // synchronously, on whatever thread called it — so from inside the web server it
+  // is not slow, it is an outage. See record-context.ts for the whole story.
+  assertConverger();
   const rDir = opts.recordDir ?? recordDir(opts.dataDir);
   // The cache always lands beside the record it was built from (record is
   // <dataDir>/record) — a caller passing a temp recordDir must never overwrite

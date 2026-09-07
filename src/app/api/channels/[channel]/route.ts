@@ -126,6 +126,10 @@ export async function POST(req: Request, { params }: { params: { channel: string
     const reply = await composeReply({
       message: inbound.text,
       channel: adapter.id,
+      // The PLATFORM's id for this message, so the capture is stored under the same
+      // key the poll would use. Dropping it here is what made every Slack message
+      // land twice (webhook UUID + `slack:<channel>:<ts>` from the pull).
+      messageId: inbound.messageId ?? null,
       skill: prefs?.skill,
       ai: prefs?.ai,
       modelOverride:

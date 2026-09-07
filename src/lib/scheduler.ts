@@ -1,4 +1,5 @@
 import { ingestServerActive } from "./ingest-server";
+import { runAsConvergerAsync } from "./record-context";
 
 /**
  * In-process sync scheduler — the app fulfills its own "hourly/daily/weekly"
@@ -19,8 +20,18 @@ const FIRST_SWEEP_DELAY_MS = 60 * 1000; // let the server settle before syncing
 
 let timer: NodeJS.Timeout | null = null;
 
+/** One sweep, in a CONVERGER context. The scheduler is the in-process twin of
+ *  `agentqs sync --due`: it is the app's own maintenance pass, not a user request,
+ *  and it is the only thing inside the web server allowed to converge the cache
+ *  from scratch (a first import that has no cache yet). Every OTHER path in the
+ *  server — every route handler — stays outside this and must land its change.
+ *  See record-context.ts. */
 async function sweep(): Promise<void> {
   if (!ingestServerActive()) return; // another agentqs process owns scheduling
+  return runAsConvergerAsync(sweepInner);
+}
+
+async function sweepInner(): Promise<void> {
   try {
     const { syncDue } = await import("./sync-due");
     const r = await syncDue();

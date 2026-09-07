@@ -69,7 +69,15 @@ export async function startMcpServer(): Promise<void> {
 
   server.registerTool(
     "sources",
-    { title: "List data sources", description: "Every source: kind, connected, interval, last sync, stale/due.", inputSchema: {} },
+    {
+      title: "List data sources",
+      description:
+        "Every source: kind, connected, interval, last sync, stale/due. A capture channel also carries `delivery` — " +
+        "the last inbound row and WHICH DIRECTION it was (`push` = the platform's webhook, `pull` = this app polling " +
+        "it), the webhook's own last delivery, and one actionable verdict sentence. A failed poll is never reported " +
+        "as a message the platform sent and this app refused.",
+      inputSchema: {},
+    },
     async () => guard(() => core.sources()),
   );
 
@@ -78,7 +86,10 @@ export async function startMcpServer(): Promise<void> {
     {
       title: "Data-pipeline truth table",
       description:
-        "Per source: how data arrives, credential provenance (user-saved vs auto-detected local app), schedule, scheduler presence, last run outcome (failures included), and landed data coverage.",
+        "Per source: how data arrives, credential provenance (user-saved vs auto-detected local app), schedule, " +
+        "scheduler presence, last run outcome (failures included), and landed data coverage. Capture channels add " +
+        "`delivery`: push (webhook) health tracked separately from pull (our poll), so a poll quietly covering for a " +
+        "dead subscription cannot read as healthy.",
       inputSchema: {},
     },
     async () => guard(() => core.pipeline()),

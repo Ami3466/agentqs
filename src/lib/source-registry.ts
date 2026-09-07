@@ -26,10 +26,10 @@ import { listAutomations } from "./automation";
 import type { AutomationRecipe } from "./automation-types";
 import { GOOGLE_PRESET_DAILY_SOURCES } from "./google-web-scraper";
 import { readInboxFromRecord, shouldSkipDailyCsvRead } from "./record";
-import { CHANNELS, channelEnv } from "./channels/registry";
-import { deliveryVerdict, readChannelDeliveries } from "./channel-deliveries";
+import { CHANNELS, channelCredentialOrigin, channelEnv } from "./channels/registry";
+import { deliveryVerdict, lastPushDelivery, readChannelDeliveries } from "./channel-deliveries";
 import { pullChannelName, pullable } from "./channels/pull";
-import { readBackfillState } from "./sync-runs";
+import { latestBackfillAt } from "./sync-runs";
 import { SOURCE_BUNDLES, type SourceBundle } from "./source-bundles";
 import {
   isDue,
@@ -259,10 +259,17 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
     // did with the call. Without it, "connected" (a token is stored) was the only
     // signal a channel had — and it stays true while every delivery is refused.
     const d = readChannelDeliveries(adapter.id);
+    const push = lastPushDelivery(d);
     const delivery = {
       lastAt: d.last?.at ?? null,
       lastOutcome: d.last?.outcome ?? null,
       lastDetail: d.last?.detail ?? null,
+      // Which direction the last row was about. Without it the Pipeline row and the
+      // Settings card could not tell an inbound webhook from our own outbound poll,
+      // and reported a failed poll as a message the app had REFUSED.
+      lastVia: d.last?.via ?? (d.last ? "push" : null),
+      pushAt: push?.at ?? null,
+      pushOutcome: push?.outcome ?? null,
       rejectedAt: d.lastRejected?.at ?? null,
       rejectedDetail: d.lastRejected?.detail ?? null,
       verdict: deliveryVerdict(d, { configured: connected, label: adapter.label }),
@@ -279,7 +286,10 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
     // reported success while capturing nothing — the user's intent was explicit.
     const stored = intervalFor(cfg, adapter.id);
     const interval: Interval = polls ? (stored === "off" ? "hourly" : stored) : "off";
-    const lastPull = readBackfillState(`channel-pull:${adapter.id}`).at ?? null;
+    // Every conversation carries its OWN pull cursor, so the bare key is never
+    // written — asking for it made "last polled" permanently null, which made the
+    // row permanently DUE and re-polled the channel on every sweep.
+    const lastPull = latestBackfillAt(`channel-pull:${adapter.id}`);
     const detail = n
       ? `${n} message${n === 1 ? "" : "s"} captured${polls ? ` · polling #${from}` : ""} · ${tail}`
       : `${connected ? "nothing captured yet" : "not connected"}${polls ? ` · polling #${from}` : ""} · ${tail}`;
@@ -297,7 +307,10 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
       due: polls && isDue(lastPull, interval),
       syncEndpoint: polls ? `/api/import/${adapter.id}` : null,
       live: polls,
-      credentialOrigin: connected ? "env" : null,
+      // Derived from the adapter, not assumed: a token pasted into Settings is
+      // "saved" and an environment variable is "env". Reporting "env" for both sent
+      // the user hunting a variable that was never set.
+      credentialOrigin: channelCredentialOrigin(adapter),
       delivery,
       ...lastRunFields(adapter.id),
     };

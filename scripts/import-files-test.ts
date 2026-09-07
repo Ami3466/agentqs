@@ -22,7 +22,8 @@ import Database from "better-sqlite3";
 import { unixMsToWebkit } from "../src/lib/importers/files/chrome";
 import { unixMsToMacAbsolute } from "../src/lib/importers/files/safari";
 import { buildSources } from "../src/lib/source-registry";
-import { appendInboxItems, readInboxFromRecord } from "../src/lib/record";
+import { appendInboxItem, appendInboxItems, readInboxFromRecord, updateInboxItems } from "../src/lib/record";
+import { sourceName } from "../src/lib/structure";
 
 const REPO = process.cwd();
 const TSX = path.join(REPO, "node_modules/.bin/tsx");
@@ -468,6 +469,36 @@ function main(): void {
     appendInboxItems([{ text: "recurring note", source: "memo", kind: "text" }], { recordDir: dr });
     appendInboxItems([{ text: "recurring note", source: "memo", kind: "text" }], { recordDir: dr });
     check("a typed memo can still recur (not content-deduped)", readInboxFromRecord(dr).filter((i) => i.source === "memo").length === 2);
+    // A re-drop is a DUPLICATE, not a crash. appendInboxItem used to reach
+    // `input.id!.trim()` on the skipped item and throw a TypeError, which
+    // POST /api/inbox surfaced as a 500 — re-dropping a file failed with a server
+    // error. It must hand back the row the record already holds, with its real
+    // status, so nothing lands a `pending` copy over a `structured` one.
+    updateInboxItems([{ id: readInboxFromRecord(dr)[0].id, status: "structured" }], { recordDir: dr });
+    let again: ReturnType<typeof appendInboxItem> | null = null;
+    let boom = "";
+    try {
+      again = appendInboxItem({ text: "same dropped content", source: "drop", kind: "text" }, { recordDir: dr });
+    } catch (e) {
+      boom = (e as Error).message;
+    }
+    check("re-dropping does not throw (it used to 500)", boom === "", boom);
+    check(
+      "…and hands back the row on disk, with the status it actually has",
+      again?.status === "structured",
+      String(again?.status),
+    );
+    check("…and still only one copy exists", readInboxFromRecord(dr).filter((i) => i.source === "drop").length === 1);
+  }
+
+  console.log("\na filename with no latin letters does not become a junk source name");
+  {
+    // Every non-ASCII character is stripped, so a Hebrew filename slugged to "2" —
+    // a daily column literally called 2, with nothing to say what it held.
+    check("a non-latin filename falls back to the default source", sourceName("2תוצאות הבדיקה.pdf", "notes") === "notes", sourceName("2תוצאות הבדיקה.pdf", "notes"));
+    check("…so does a digits-only name", sourceName("2024.csv", "import") === "import", sourceName("2024.csv", "import"));
+    check("a normal filename still slugs", sourceName("Mood Export.csv", "notes") === "mood_export", sourceName("Mood Export.csv", "notes"));
+    check("a mixed name keeps its latin part", sourceName("weight תוצאות.csv", "notes") === "weight", sourceName("weight תוצאות.csv", "notes"));
   }
 
   fs.rmSync(root, { recursive: true, force: true });

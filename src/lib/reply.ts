@@ -1,7 +1,7 @@
 import { activeLlm, readConfig } from "./config";
 import { dbPath, recordDir } from "./paths";
-import { appendInboxItem, landInboxCaptures, readSessionsFromRecord } from "./record";
-import { autoStructureNewItem } from "./structure-run";
+import { appendInboxItems, readSessionsFromRecord } from "./record";
+import { landCapture } from "./structure-run";
 import { groundedCrossSourceAnswer, looksLikeDataQuestion, looksLikeRecallQuestion, readGrounding } from "./grounding";
 import { answerRecall } from "./embeddings";
 import { continuityBlock, continuityFallbackReply } from "./synthesis";
@@ -41,6 +41,17 @@ export interface ComposedReply {
 export interface ComposeReplyInput {
   message: string;
   channel: string; // "telegram" | "slack" — the inbox source for a memo
+  /**
+   * The platform's OWN id for this message (`slack:<channel>:<ts>`,
+   * `telegram:<chat>:<id>`) — what the capture is stored under.
+   *
+   * Without it this funnel minted a random UUID and threw the identity away, so
+   * every Slack message landed twice: once from the webhook under a UUID, once from
+   * the poll under `slack:<channel>:<ts>`. Same text, same minute, two inbox items,
+   * on the live record for months. With it, `appendInboxItems` sees the id it
+   * already holds and adds nothing.
+   */
+  messageId?: string | null;
   skill?: string | null;
   history?: LlmMessage[];
   /** false → capture-only channel: EVERY message lands in the inbox, no LLM call.
@@ -65,28 +76,31 @@ export async function composeReply(input: ComposeReplyInput): Promise<ComposedRe
     if (!text) {
       return { mode: "memo", text: "Nothing to save — send `// your note`.", grounded: false, sources: [], metrics: [], via: "memo" };
     }
-    const item = appendInboxItem({ text, source: input.channel || "memo", kind: "text" }, { recordDir: rDir });
-    if (input.ai === false) {
-      landInboxCaptures([item], { recordDir: rDir });
-      return {
-        mode: "memo",
-        text: `Saved to your inbox. No reply — press Structure in the app when you want it turned into data.`,
-        grounded: false,
-        sources: [],
-        metrics: [],
-        via: "memo",
-      };
+    const { items, added } = appendInboxItems(
+      [{ ...(input.messageId ? { id: input.messageId } : {}), text, source: input.channel || "memo", kind: "text" }],
+      { recordDir: rDir },
+    );
+    const saved = `Saved to your inbox. No reply — press Structure in the app when you want it turned into data.`;
+    if (!added) {
+      // Already held under this message id (the poll got there first, or the
+      // platform re-delivered). Nothing to land, nothing to structure — and above
+      // all nothing to store a second time.
+      return { mode: "memo", text: saved, grounded: false, sources: [], metrics: [], via: "memo" };
     }
-    // Auto-structure first: when it merges, structurePending rebuilds the cache
-    // itself — rebuilding here too would run the whole derivation twice per message.
-    const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
-    if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
+    const item = items[0];
+    if (input.ai === false) {
+      await landCapture(item, { recordDir: rDir });
+      return { mode: "memo", text: saved, grounded: false, sources: [], metrics: [], via: "memo" };
+    }
+    // The capture funnel: lands the row and (when Settings says so) structures it,
+    // as ONE queued record job — never inline on the webhook's request thread.
+    const landed = await landCapture(item, { recordDir: rDir });
     return {
       mode: "memo",
       text:
-        (auto?.structured ?? 0) > 0
+        (landed.structured?.structured ?? 0) > 0
           ? `Saved and structured straight into your daily table.`
-          : `Saved to your inbox. No reply — press Structure in the app when you want it turned into data.`,
+          : saved,
       grounded: false,
       sources: [],
       metrics: [],

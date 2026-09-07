@@ -11,7 +11,7 @@ import { findSimilarImages, photoContext } from "./photos";
 import { fallbackModel, type ResolvedLlm } from "./models";
 import { appendInboxItem, landInboxCaptures } from "./record";
 import { recordDir } from "./paths";
-import { autoStructureNewItem, structurePending } from "./structure-run";
+import { landCapture, structurePending } from "./structure-run";
 import type { LlmMessage } from "./llm";
 
 /**
@@ -231,11 +231,10 @@ export function mentorTools(dbFile: string, used: Used) {
       if (!t) return { error: "Empty memo." };
       const rDir = recordDir();
       const item = appendInboxItem({ text: t, source: "chat" }, { recordDir: rDir });
-      // Parity with `//` memos: auto-structure when the Settings toggle is on
-      // (structurePending rebuilds when it merges — rebuild only otherwise).
-      const auto = await autoStructureNewItem(item.id);
-      if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
-      return { saved: true, structured: (auto?.structured ?? 0) > 0 };
+      // Parity with `//` memos: the shared capture funnel lands the row and, when
+      // the Settings toggle is on, structures it — as one queued record job.
+      const landed = await landCapture(item, { recordDir: rDir });
+      return { saved: true, structured: (landed.structured?.structured ?? 0) > 0 };
     },
   });
 

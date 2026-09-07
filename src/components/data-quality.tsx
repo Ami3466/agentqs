@@ -5,6 +5,7 @@ import type { QualityFinding } from "@/lib/column-scan";
 import { Badge, Button, cn } from "./ui";
 import { Check, Copy, ScanSearch, Spinner, Trash, Wand, X } from "./icons";
 import { PH, fixPromptSnip, useCopy } from "./connect-api";
+import { followJob } from "@/lib/client-cache";
 
 interface ScanResponse {
   error?: string;
@@ -145,9 +146,22 @@ export function DataQualityPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: f.notificationId }),
       });
-      const data = (await res.json().catch(() => ({}))) as StructureResponse;
+      const data = (await res.json().catch(() => ({}))) as StructureResponse & { queued?: boolean };
       if (!res.ok) {
         setNote({ tone: "error", text: data.error || "Fix failed." });
+        return;
+      }
+      // 202: the fix outlived the request and finishes on the server's job queue.
+      if (data.queued) {
+        setNote({ tone: "ok", text: `Applying the fix for ${f.key} in the background…` });
+        const done = await followJob("/api/structure");
+        if (done.status === "error") {
+          setNote({ tone: "error", text: done.error || "Fix failed." });
+          return;
+        }
+        setList(findings.filter((x) => x.id !== f.id));
+        setNote({ tone: "ok", text: `Fixed ${f.key}.` });
+        onChanged();
         return;
       }
       const r = data.results?.find((x) => x.id === f.notificationId);
@@ -165,7 +179,10 @@ export function DataQualityPanel({
     setActing(f.id);
     try {
       const res = await fetch(`/api/inbox?id=${encodeURIComponent(f.notificationId)}`, { method: "DELETE" });
-      if (res.ok) setList(findings.filter((x) => x.id !== f.id));
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => ({}))) as { queued?: boolean };
+      if (data.queued) await followJob("/api/inbox?job=1");
+      setList(findings.filter((x) => x.id !== f.id));
     } finally {
       setActing(null);
     }

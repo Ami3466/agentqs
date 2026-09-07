@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { backupDrive, backupGithub, backupRestore, backupStatus, setBackupInterval, setBackupPassphrase } from "@/lib/cli-core";
-import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
+import { readSyncJob, RESTORE_JOB, startJobAndWait, startSyncJob } from "@/lib/sync-jobs";
 import { isValidInterval } from "@/lib/sources";
 
 export const runtime = "nodejs";
@@ -76,9 +76,17 @@ export async function POST(req: Request) {
           { status: 400 },
         );
       }
-      return NextResponse.json(
-        await backupRestore({ latest: body.latest !== false && !body.file, file: body.file, intoStore: true }),
-      );
+      // Restoring replaces the whole record and rebuilds the cache from it —
+      // minutes of synchronous work. It runs as a background job like every other
+      // heavy operation, so the request thread is never the thing holding it.
+      const { job, result, error } = await startJobAndWait(RESTORE_JOB, async (progress) => {
+        progress("restoring the archive into this store", 30);
+        const r = await backupRestore({ latest: body.latest !== false && !body.file, file: body.file, intoStore: true });
+        return { result: r, summary: "dailyRows" in r ? { dailyRows: r.dailyRows } : {} };
+      });
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (!result) return NextResponse.json({ ok: true, queued: true, job }, { status: 202 });
+      return NextResponse.json(result);
     }
     return NextResponse.json({ error: 'target must be "github", "drive", "restore" or "passphrase"' }, { status: 400 });
   } catch (e) {

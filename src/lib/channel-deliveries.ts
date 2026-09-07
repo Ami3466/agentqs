@@ -33,18 +33,38 @@ export type DeliveryOutcome =
   | "duplicate" // the platform re-delivered something we already have
   | "rejected"; // refused before we did any work — see `detail`
 
+/**
+ * WHICH DIRECTION the row is about. This ledger is named for inbound deliveries,
+ * and the poll wrote into it as if it were one: a poll that could not reach
+ * slack.com recorded outcome "rejected", and the card then said "Slack delivered a
+ * message and this app REFUSED it — C0BEXMYAVU3: fetch failed" when Slack had
+ * delivered nothing at all. The inverse lied too — a successful poll wrote
+ * "captured", so a webhook that had never once fired read as healthy.
+ *
+ * "push" = an inbound webhook POST from the platform. "pull" = our own outbound
+ * poll of its history API. Absent means "push": every row written before this
+ * field existed was an inbound POST.
+ */
+export type DeliveryVia = "push" | "pull";
+
 export interface DeliveryRecord {
   at: string; // ISO time the POST reached us
   outcome: DeliveryOutcome;
   detail?: string; // why it was rejected / what was ignored
+  via?: DeliveryVia; // default "push" — see DeliveryVia
 }
 
 export interface ChannelDeliveryState {
-  /** Most recent POST of ANY outcome — proves the platform is still calling us. */
+  /** Most recent row of ANY outcome and either direction. */
   last?: DeliveryRecord;
-  /** Most recent one we refused — the thing that silently kills a bot. */
+  /** Most recent inbound WEBHOOK row, whatever its outcome. The only evidence that
+   *  the platform is still calling us — a poll capturing happily says nothing
+   *  about it, and that is precisely how a dead subscription stayed invisible. */
+  lastPush?: DeliveryRecord;
+  /** Most recent PUSH we refused — the thing that silently kills a bot. A poll that
+   *  failed is our side of the wire and never belongs here. */
   lastRejected?: DeliveryRecord;
-  /** Most recent one that actually landed in the record. */
+  /** Most recent one that actually landed in the record (either direction). */
   lastAccepted?: DeliveryRecord;
   /** Lifetime counts per outcome, so a rejection RATE is visible, not just the last one. */
   counts?: Partial<Record<DeliveryOutcome, number>>;
@@ -77,8 +97,10 @@ export function recordDelivery(
   channel: string,
   outcome: DeliveryOutcome,
   detail?: string,
-  dir: string = dataDir(),
+  opts: { via?: DeliveryVia; dir?: string } = {},
 ): void {
+  const dir = opts.dir ?? dataDir();
+  const via: DeliveryVia = opts.via ?? "push";
   try {
     const all = readDeliveries(dir);
     const prev = all[channel] ?? {};
@@ -86,11 +108,15 @@ export function recordDelivery(
       at: new Date().toISOString(),
       outcome,
       ...(detail ? { detail: detail.split("\n")[0].slice(0, 300) } : {}),
+      via,
     };
     all[channel] = {
       ...prev,
       last: rec,
-      lastRejected: outcome === "rejected" ? rec : prev.lastRejected,
+      lastPush: via === "push" ? rec : prev.lastPush,
+      // A refusal is something WE did to something THEY sent. A poll that could not
+      // reach the platform is the opposite situation and must never land here.
+      lastRejected: via === "push" && outcome === "rejected" ? rec : prev.lastRejected,
       lastAccepted: outcome === "captured" || outcome === "replied" ? rec : prev.lastAccepted,
       counts: { ...(prev.counts ?? {}), [outcome]: ((prev.counts ?? {})[outcome] ?? 0) + 1 },
       recent: [rec, ...(prev.recent ?? [])].slice(0, RECENT_LIMIT),
@@ -100,6 +126,16 @@ export function recordDelivery(
   } catch {
     /* best-effort ledger */
   }
+}
+
+/** The most recent inbound WEBHOOK row. Falls back to scanning the recent tail so a
+ *  ledger written before `via` existed still reads right: every row in one of those
+ *  was an inbound POST. */
+export function lastPushDelivery(state: ChannelDeliveryState): DeliveryRecord | undefined {
+  if (state.lastPush) return state.lastPush;
+  const fromTail = (state.recent ?? []).find((r) => (r.via ?? "push") === "push");
+  if (fromTail) return fromTail;
+  return state.last && (state.last.via ?? "push") === "push" ? state.last : undefined;
 }
 
 /**
@@ -122,16 +158,43 @@ export function deliveryVerdict(
         `platform side: check the app's Event Subscriptions / webhook URL points here and is enabled.`,
     };
   }
-  // A rejection AFTER the last accepted delivery is the classic silent killer:
-  // the platform is still calling, we are refusing every call.
-  const rejectedLast = state.last.outcome === "rejected";
-  if (rejectedLast) {
-    // The adapter's reason is already a sentence; don't punctuate it twice.
-    const why = (state.last.detail ?? "rejected").replace(/[.\s]+$/, "");
+  // The adapter's reason is already a sentence; don't punctuate it twice.
+  const why = (rec: DeliveryRecord) => (rec.detail ?? rec.outcome).replace(/[.\s]+$/, "");
+  const push = lastPushDelivery(state);
+
+  // A refused PUSH is the classic silent killer: the platform is still calling and
+  // we are refusing every call. It outranks everything, including a poll that is
+  // quietly making up the difference — that poll is why nobody notices.
+  if (push?.outcome === "rejected") {
     return {
       tone: "error",
-      text: `${label} delivered a message and this app REFUSED it — ${why}. Nothing will be captured until that is fixed.`,
+      text: `${label} delivered a message and this app REFUSED it — ${why(push)}. Nothing will be captured until that is fixed.`,
     };
   }
-  return { tone: "ok", text: `Last delivery from ${label}: ${state.last.outcome}.` };
+  // A failed POLL is OUR side of the wire. Saying the platform delivered something
+  // we refused would be a straight lie, and it sent this exact record's owner
+  // hunting a signing-secret bug that did not exist.
+  if (state.last.outcome === "rejected" && (state.last.via ?? "push") === "pull") {
+    return {
+      tone: "error",
+      text: `This app could not reach ${label} on its last poll — ${why(state.last)}. Nothing new is being captured until the poll succeeds.`,
+    };
+  }
+  if (state.last.outcome === "rejected") {
+    return {
+      tone: "error",
+      text: `${label} delivered a message and this app REFUSED it — ${why(state.last)}. Nothing will be captured until that is fixed.`,
+    };
+  }
+  // Messages ARE arriving, but only because we go and fetch them. The webhook has
+  // never fired once, which reads as healthy from every other angle.
+  if (!push) {
+    return {
+      tone: "warn",
+      text:
+        `${label} messages are only arriving because this app POLLS for them — the webhook has never delivered one. ` +
+        `Check the app's Event Subscriptions Request URL points here and is enabled.`,
+    };
+  }
+  return { tone: "ok", text: `Last delivery from ${label}: ${state.last.outcome} (${state.last.via ?? "push"}).` };
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
+import { SESSION_JOB, startJobAndWait } from "@/lib/sync-jobs";
 import { readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
 import {
@@ -122,8 +123,8 @@ export async function POST(req: Request) {
       },
       { recordDir: rDir },
     );
-    landSessionWrite([item], { recordDir: rDir });
-    return NextResponse.json({ ok: true, via: "provided", session: toView(item) });
+    const warning = await landOnQueue(() => landSessionWrite([item], { recordDir: rDir }));
+    return NextResponse.json({ ok: true, via: "provided", session: toView(item), ...warning });
   }
 
   // Transcript path: distill with the configured AI (the chat UI's flow).
@@ -159,9 +160,23 @@ export async function POST(req: Request) {
     },
     { recordDir: rDir },
   );
-  landSessionWrite([item], { recordDir: rDir });
+  const warning = await landOnQueue(() => landSessionWrite([item], { recordDir: rDir }));
 
-  return NextResponse.json({ ok: true, via, session: toView(item) });
+  return NextResponse.json({ ok: true, via, session: toView(item), ...warning });
+}
+
+/**
+ * The cache patch for a session write or delete, on the shared record job queue.
+ * The response never depends on it — the session view comes from the record, which
+ * is already on disk — so a slow patch simply finishes on the queue and this thread
+ * is free either way. Two synchronous SQLite writers can then never overlap.
+ *
+ * A patch that FAILED is reported, never swallowed: the record has the session and
+ * the cache does not, and the only honest answer is to say so and name the fix.
+ */
+async function landOnQueue(patch: () => void): Promise<{ cacheWarning?: string }> {
+  const { error } = await startJobAndWait(SESSION_JOB, async () => ({ result: patch() }));
+  return error ? { cacheWarning: error.message } : {};
 }
 
 /** Delete a session from the record by id, then drop its cache row so it leaves the timeline. */
@@ -179,6 +194,6 @@ export async function DELETE(req: Request) {
   if (!removed) {
     return NextResponse.json({ error: "No such session." }, { status: 404 });
   }
-  landSessionDelete([id], { recordDir: rDir });
-  return NextResponse.json({ ok: true, id });
+  const warning = await landOnQueue(() => landSessionDelete([id], { recordDir: rDir }));
+  return NextResponse.json({ ok: true, id, ...warning });
 }

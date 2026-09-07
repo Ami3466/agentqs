@@ -3,12 +3,12 @@ import path from "path";
 import { execFileSync } from "child_process";
 import {
   appendEvents,
+  buildInitialCache,
   insertEventsIntoCache,
   mergeDailyCsv,
   parseCsv,
   readEventsFromRecord,
   refreshSyncCache,
-  rebuild,
   type EventItem,
 } from "./record";
 import { dataDir, recordDir } from "./paths";
@@ -359,7 +359,7 @@ function landScrape(
   const sources = [PRESETS[preset].dailySource];
   const patched = refreshSyncCache({ sources, eventsAdded }, { recordDir: rDir });
   if (patched) return { daily: patched.dailyRows, events: patched.eventRows };
-  const rebuilt = rebuild({ recordDir: rDir }); // no cache yet — the one that creates it
+  const rebuilt = buildInitialCache({ recordDir: rDir }); // no cache yet — the one that creates it
   return { daily: rebuilt.daily, events: rebuilt.events };
 }
 

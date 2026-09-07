@@ -2,7 +2,20 @@ import fs from "fs";
 import path from "path";
 import { readConfig, writeConfig } from "./config";
 import { recordDir } from "./paths";
-import { appendInboxItem, appendSession, mergeDailyCsv, rebuild, updateInboxItems } from "./record";
+import {
+  appendInboxItem,
+  appendSession,
+  landDailySources,
+  landInboxStream,
+  landRemovedSources,
+  landSessionDelete,
+  landSessionWrite,
+  mergeDailyCsv,
+  readSessionsFromRecord,
+  removeInboxItemsFromCache,
+  updateInboxItems,
+} from "./record";
+import { dbPath } from "./paths";
 
 /**
  * Generic demo data — a throwaway sample record so a brand-new instance has
@@ -324,7 +337,14 @@ export function seedDemo(): { days: number } {
     cfg.demoSeeded = true;
     writeConfig(cfg);
   }
-  rebuild({ recordDir: dir });
+  // Seeding runs from POST /api/demo — a request. Land what was written; only a
+  // brand-new instance with no cache at all takes the (demo-sized) first build.
+  landDailySources([...DEMO_SOURCES], { recordDir: dir });
+  landInboxStream({ recordDir: dir });
+  landSessionWrite(
+    readSessionsFromRecord(dir).filter((sess) => sess.id.startsWith(DEMO_SESSION_PREFIX)),
+    { recordDir: dir },
+  );
   return { days };
 }
 
@@ -335,20 +355,30 @@ export function clearDemo(): void {
     const file = path.join(dir, "daily", `${src}.csv`);
     if (fs.existsSync(file)) fs.rmSync(file);
   }
-  dropJsonlLines(
+  const inboxGone = dropJsonlLines(
     path.join(dir, "inbox.jsonl"),
     (o) =>
       o.source === DEMO_INBOX_SOURCE ||
       Boolean((o.meta as { demo?: unknown } | null | undefined)?.demo),
   );
-  dropJsonlLines(path.join(dir, "sessions.jsonl"), (o) => String(o.id ?? "").startsWith(DEMO_SESSION_PREFIX));
+  const sessionsGone = dropJsonlLines(path.join(dir, "sessions.jsonl"), (o) =>
+    String(o.id ?? "").startsWith(DEMO_SESSION_PREFIX),
+  );
 
   const cfg = readConfig();
   if (cfg) {
     cfg.demoSeeded = false;
     writeConfig(cfg);
   }
-  rebuild({ recordDir: dir });
+  // The demo is cleared from a request — DELETE /api/demo, and (the one that
+  // mattered) `wipeDemoOnImport` at the top of every structure/import. It used to
+  // end in a full rebuild, so the first real import on an instance that had ever
+  // seen the demo re-derived the entire record inside the HTTP handler. Patch
+  // exactly what left: the demo's daily files (now gone from disk) and the jsonl
+  // lines that were dropped.
+  landRemovedSources([...DEMO_SOURCES], { recordDir: dir });
+  if (inboxGone.length) removeInboxItemsFromCache(inboxGone, { dbFile: dbPath(path.dirname(dir)) });
+  if (sessionsGone.length) landSessionDelete(sessionsGone, { recordDir: dir });
 }
 
 /**
@@ -359,19 +389,27 @@ export function wipeDemoOnImport(): void {
   if (isDemoSeeded() || hasDemoArtifacts()) clearDemo();
 }
 
-/** Rewrite a .jsonl file dropping lines whose parsed object matches `drop`. */
-function dropJsonlLines(file: string, drop: (o: Record<string, unknown>) => boolean): void {
-  if (!fs.existsSync(file)) return;
+/** Rewrite a .jsonl file dropping lines whose parsed object matches `drop`.
+ *  Returns the ids it removed, so the caller can patch exactly those rows out of
+ *  the cache instead of re-deriving the record to discover them. */
+function dropJsonlLines(file: string, drop: (o: Record<string, unknown>) => boolean): string[] {
+  if (!fs.existsSync(file)) return [];
   const kept: string[] = [];
+  const removed: string[] = [];
   for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
     const t = line.trim();
     if (t === "") continue;
     try {
-      if (drop(JSON.parse(t) as Record<string, unknown>)) continue;
+      const o = JSON.parse(t) as Record<string, unknown>;
+      if (drop(o)) {
+        if (typeof o.id === "string") removed.push(o.id);
+        continue;
+      }
     } catch {
       /* keep unparseable lines */
     }
     kept.push(t);
   }
   fs.writeFileSync(file, kept.length ? kept.join("\n") + "\n" : "", "utf8");
+  return removed;
 }

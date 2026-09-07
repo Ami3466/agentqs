@@ -469,7 +469,9 @@ export async function importTree(root: string): Promise<ImportTreeReport> {
     );
   }
 
-  const guard = columnGuard(rDir);
+  // Scoped to what the walk actually wrote: a new duplicate can only involve a
+  // column this import landed, so the check never has to re-read the whole record.
+  const guard = columnGuard(rDir, { sources: [...mergedSources] });
   // Only what the walk landed (plus both sides of any merge rule it re-applied) —
   // a folder import must not re-derive every event in the record to file its rows.
   const touched = [

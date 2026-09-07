@@ -10,7 +10,7 @@ import { pluginInstanceById, pluginInstanceName, type PluginInstance } from "@/l
 import { readOAuthApp } from "@/lib/oauth";
 import { connectionState, oauthGrantKey, resolveSyncCredential } from "@/lib/importers/plugin";
 import { readSyncRuns } from "@/lib/sync-runs";
-import { readSyncJob, startSyncJob } from "@/lib/sync-jobs";
+import { readSyncJob, startJobAndWait, startSyncJob } from "@/lib/sync-jobs";
 import { wipeDemoOnImport } from "@/lib/demo";
 import { connectDetectedApp, connectSource, syncSource, testSourceCredential } from "@/lib/cli-core";
 
@@ -156,12 +156,16 @@ export async function POST(req: Request, { params }: { params: { source: string 
   // but it IS a due-source, and this is the endpoint the in-app scheduler and the
   // Pipeline row both POST to.
   if (getChannelAdapter(params.source)) {
-    try {
+    // A poll writes captures into the record, so it rides the SAME serial job queue
+    // as every other sync rather than doing synchronous SQLite work on this thread.
+    // A quick sweep still answers with its full summary; a long one hands back 202.
+    const { job, result, error } = await startJobAndWait(params.source, async () => {
       const { pullChannel } = await import("@/lib/channels/pull");
-      return NextResponse.json({ ok: true, ...(await pullChannel(params.source)) });
-    } catch (e) {
-      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
-    }
+      return { result: await pullChannel(params.source) };
+    });
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (!result) return NextResponse.json({ ok: true, id: params.source, job }, { status: 202 });
+    return NextResponse.json({ ok: true, ...result });
   }
   const inst = pluginInstanceById(params.source);
   if (!inst) return NextResponse.json({ error: `Unknown source "${params.source}".` }, { status: 404 });

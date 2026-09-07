@@ -186,6 +186,41 @@ export function warmCache(urls: string[], opts: { ttlMs?: number } = {}): () => 
 
 /** Run `fn` when the browser is idle, or soon after paint where that API is
  *  missing (Safari). Warm-up must never compete with the render the user sees. */
+/**
+ * Follow a record job to the end — the client half of the 202 a record-mutating
+ * route hands back when its work outlives the request.
+ *
+ * Structuring, keeping and discarding all run on the server's job queue now (see
+ * sync-jobs.ts): fast work still answers 200 with its full result, and slow work
+ * answers 202 with the job. Every face that mutates the record polls the SAME way,
+ * so nothing invents a second progress protocol — and the poll is quiet, exactly
+ * like a background revalidation: it never flips a `loading` flag that would
+ * unmount the panel the user is working in.
+ *
+ * Resolves with the job's final status, or "gone" if the server forgot it.
+ */
+export async function followJob(
+  statusUrl: string,
+  opts: { everyMs?: number; timeoutMs?: number } = {},
+): Promise<{ status: string; error?: string }> {
+  const every = opts.everyMs ?? 1_200;
+  const until = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
+  for (;;) {
+    await new Promise((r) => setTimeout(r, every));
+    type JobRow = { status?: string; error?: string };
+    let job: JobRow | null = null;
+    try {
+      const res = await fetch(statusUrl, { cache: "no-store" });
+      job = res.ok ? (((await res.json()) as { job?: JobRow | null }).job ?? null) : null;
+    } catch {
+      job = null;
+    }
+    if (!job?.status) return { status: "gone" };
+    if (job.status === "ok" || job.status === "error") return { status: job.status, error: job.error };
+    if (Date.now() > until) return { status: job.status, error: "Still running — check back in a moment." };
+  }
+}
+
 export function whenIdle(fn: () => void, timeout = 2_000): () => void {
   const w = window as Window & {
     requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;

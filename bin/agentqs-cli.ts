@@ -167,12 +167,16 @@ program
     try {
       out(core.sources(), (rows: any[]) =>
         rows
-          .map(
-            (s) =>
-              `${s.connected ? "●" : "○"} ${s.id.padEnd(12)} ${s.kind.padEnd(6)} ${String(s.interval).padEnd(7)} ${
-                s.stale ? "stale" : s.due ? "due" : ""
-              }`.trimEnd(),
-          )
+          .map((s) => {
+            const row = `${s.connected ? "●" : "○"} ${s.id.padEnd(12)} ${s.kind.padEnd(6)} ${String(s.interval).padEnd(7)} ${
+              s.stale ? "stale" : s.due ? "due" : ""
+            }`.trimEnd();
+            // A capture channel's health is not "connected": a token can be stored
+            // while every webhook delivery is refused, or while nothing but the
+            // poll has ever brought a message in. Say which.
+            const v = s.delivery?.verdict;
+            return v && v.tone !== "ok" ? `${row}\n    ${v.tone === "error" ? "!" : "·"} ${v.text}` : row;
+          })
           .join("\n"),
       );
     } catch (e) {
@@ -205,7 +209,11 @@ program
             const data = s.data.events || s.data.days
               ? `${s.data.events ? `${s.data.events.toLocaleString()} events` : `${s.data.days.toLocaleString()} days`}${s.data.from ? ` · ${s.data.from} → ${s.data.to}` : ""}`
               : "no data";
-            return `${s.connected ? "●" : "○"} ${s.id.padEnd(24)} ${s.origin.padEnd(10)} ${sched.padEnd(12)} ${cred.padEnd(32)} ${run}\n${" ".repeat(26)}${data}`;
+            // Channel rows carry inbound health; a poll that is quietly covering for
+            // a dead webhook must not read as a healthy connection.
+            const v = s.delivery?.verdict;
+            const health = v && v.tone !== "ok" ? `\n${" ".repeat(26)}${v.tone === "error" ? "!" : "·"} ${v.text}` : "";
+            return `${s.connected ? "●" : "○"} ${s.id.padEnd(24)} ${s.origin.padEnd(10)} ${sched.padEnd(12)} ${cred.padEnd(32)} ${run}\n${" ".repeat(26)}${data}${health}`;
           });
         const sch = r.scheduler;
         return [

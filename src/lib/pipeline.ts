@@ -48,6 +48,17 @@ export interface PipelineRow {
   lastRun: { at: string; ok: boolean; error?: string } | null;
   /** A background sync job currently queued/running for this source. */
   syncing: { status: string; phase: string; pct: number; startedAt: string } | null;
+  /** Capture-channel rows only: inbound webhook health, and the one sentence that
+   *  says which failure you have. `push` is the WEBHOOK's own last delivery — a busy
+   *  poll must never be mistaken for proof that the subscription still works. */
+  delivery: {
+    lastAt: string | null;
+    lastOutcome: string | null;
+    lastVia: "push" | "pull" | null;
+    pushAt: string | null;
+    pushOutcome: string | null;
+    verdict: { tone: "ok" | "warn" | "error"; text: string } | null;
+  } | null;
   data: PipelineCoverage;
 }
 
@@ -104,6 +115,16 @@ function rowFromSource(s: SourceView, coverage: Map<string, PipelineCoverage>): 
       s.job && (s.job.status === "queued" || s.job.status === "running")
         ? { status: s.job.status, phase: s.job.phase, pct: s.job.pct, startedAt: s.job.startedAt }
         : null,
+    delivery: s.delivery
+      ? {
+          lastAt: s.delivery.lastAt,
+          lastOutcome: s.delivery.lastOutcome,
+          lastVia: s.delivery.lastVia,
+          pushAt: s.delivery.pushAt,
+          pushOutcome: s.delivery.pushOutcome,
+          verdict: s.delivery.verdict,
+        }
+      : null,
     data,
   };
 }
@@ -133,6 +154,7 @@ function extensionRows(coverage: Map<string, PipelineCoverage>): PipelineRow[] {
       lastSync: null,
       lastRun: null,
       syncing: null,
+      delivery: null,
       data,
     };
   });

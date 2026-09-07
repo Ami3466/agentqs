@@ -13,6 +13,12 @@ import type { ChannelAdapter, ChannelConversation, ChannelEnv, ChannelStatus, In
  */
 
 const DEFAULT_API_BASE = "https://slack.com/api";
+
+/** ONE spelling of a Slack message's identity, used by the webhook and the poll
+ *  alike — the whole point is that both mint the same key for the same message. */
+function slackMessageId(channelId: string, ts: string): string {
+  return `slack:${channelId}:${ts}`;
+}
 const MAX_SKEW_S = 60 * 5; // reject signatures older than 5 minutes (replay guard)
 
 function apiBase(env: ChannelEnv): string {
@@ -130,6 +136,10 @@ export const slackAdapter: ChannelAdapter = {
     const channel = ev.channel;
     if (!text || !channel) return { ignore: "event has no text/channel" };
 
+    // The message's own identity, minted EXACTLY as pull() mints it. Slack's ts is
+    // unique per channel and stable, which is why the poll keys on it; the webhook
+    // keying on `event_id` instead is what captured every message twice.
+    const ts = String(ev.ts ?? ev.event_ts ?? "");
     return {
       message: {
         channel: "slack",
@@ -138,6 +148,7 @@ export const slackAdapter: ChannelAdapter = {
           : ev.client_msg_id
             ? `slack:${String(ev.client_msg_id)}`
             : undefined,
+        messageId: ts ? slackMessageId(String(channel), ts) : undefined,
         target: String(channel),
         userId: String(ev.user ?? channel),
         text,
@@ -320,8 +331,10 @@ export const slackAdapter: ChannelAdapter = {
       .map((m) => ({
         channel: "slack",
         // Slack's ts is unique per channel and stable — the natural dedupe key, so
-        // re-pulling an overlapping window can never double-capture.
-        eventId: `slack:${channelId}:${m.ts}`,
+        // re-pulling an overlapping window can never double-capture, and a message
+        // the webhook already delivered is recognised as the same message.
+        eventId: slackMessageId(channelId, String(m.ts)),
+        messageId: slackMessageId(channelId, String(m.ts)),
         target: channelId,
         userId: String(m.user ?? ""),
         text: String(m.text).trim(),

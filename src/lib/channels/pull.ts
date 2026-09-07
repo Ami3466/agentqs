@@ -27,8 +27,11 @@ import type { ChannelEnv } from "./types";
  *      indistinguishable from a quiet day.
  *
  * It complements the webhook rather than replacing it: push is instant, pull is what
- * still works after the platform stops calling, and the shared `eventId` dedupe
- * means a message that arrives both ways lands exactly once.
+ * still works after the platform stops calling, and both paths key the capture on
+ * the platform's own message identity (`messageId`), so a message that arrives both
+ * ways lands exactly once. That promise used to be in this comment and not in the
+ * code — the webhook stored captures under a random UUID, so every Slack message
+ * was held twice.
  */
 
 export interface PullSummary {
@@ -63,6 +66,23 @@ export function pullCursor(channelId: string, conversation = ""): string {
  * than in a log nobody reads.
  */
 export async function pullChannel(
+  channelId: string,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): Promise<PullSummary> {
+  try {
+    return await runPull(channelId, opts);
+  } catch (e) {
+    // EVERY failed sweep is written down, whatever failed — the token, the scope,
+    // the network, the conversation list. A pull that threw used to leave nothing
+    // behind, so the card kept showing the last SUCCESSFUL poll and a bot that
+    // could not reach the platform at all read as healthy.
+    const adapter = getChannelAdapter(channelId);
+    if (adapter) recordDelivery(adapter.id, "rejected", (e as Error).message, { via: "pull" });
+    throw e;
+  }
+}
+
+async function runPull(
   channelId: string,
   opts: { recordDir?: string; dataDir?: string } = {},
 ): Promise<PullSummary> {
@@ -104,7 +124,9 @@ export async function pullChannel(
   // it already holds and tells us how many it actually added.
   const { items, added } = appendInboxItems(
     messages.map((m) => ({
-      id: m.eventId,
+      // The MESSAGE's identity, minted the same way the webhook mints it — so a
+      // message that arrived by push is recognised here and lands exactly once.
+      id: m.messageId ?? m.eventId,
       text: m.text,
       source: adapter.id,
       kind: "text" as const,
@@ -115,8 +137,12 @@ export async function pullChannel(
   );
   if (items.length) landInboxCaptures(items, opts);
 
-  if (added > 0) recordDelivery(adapter.id, "captured", `pulled ${added} from ${from}`);
-  else if (failed.length) recordDelivery(adapter.id, "rejected", failed[0]);
+  // Marked `via: "pull"`. These rows used to be indistinguishable from inbound
+  // webhook deliveries, so a poll that could not reach the platform rendered as
+  // "Slack delivered a message and this app REFUSED it", and a poll that worked
+  // rendered as proof the webhook was healthy. Both were wrong.
+  if (added > 0) recordDelivery(adapter.id, "captured", `pulled ${added} from ${from}`, { via: "pull" });
+  else if (failed.length) recordDelivery(adapter.id, "rejected", failed[0], { via: "pull" });
 
   // Only now — the messages are on disk — is it safe to move on. A conversation that
   // threw never reaches here, so the next sweep re-reads its window.

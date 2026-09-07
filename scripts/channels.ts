@@ -252,6 +252,15 @@ async function main() {
     const rec = readRecord(path.join(root, "record"));
     const landed = rec.inbox.find((i) => i.source === "telegram" && i.text === "slept badly, woke at 3am wired");
     check("the memo landed in the inbox as a raw `telegram` memo", Boolean(landed), landed?.kind);
+    // Stored under the PLATFORM's own id for the message (chat 100, message 8), not
+    // a random UUID. A UUID threw the identity away, so the same message re-read by
+    // a poll could never be recognised — which is why every Slack message on the
+    // live record existed twice.
+    check(
+      "…keyed by the platform's own message id, so a re-read can't duplicate it",
+      landed?.id === "telegram:100:8",
+      String(landed?.id),
+    );
     const daily = await (await fetch(`${base}/api/daily`, { headers: { cookie } })).json();
     check("no LLM ran — the memo produced no `telegram` daily row", !(daily.sources || []).some((s: any) => s.source === "telegram"));
 
@@ -282,6 +291,22 @@ async function main() {
       slackRow?.connected === true && tgRow?.connected === true,
     );
     check("both are flagged as channels", slackRow?.channel === true && tgRow?.channel === true);
+    // Where the token came from, derived rather than assumed. Both bots here are
+    // credentialed by ENVIRONMENT VARIABLE, and the row said "env" for everyone —
+    // including people who pasted a token into Settings, who then went hunting for
+    // a variable that did not exist.
+    check(
+      "an ENV-credentialed bot reports credentialOrigin env",
+      slackRow?.credentialOrigin === "env" && tgRow?.credentialOrigin === "env",
+      `slack=${slackRow?.credentialOrigin} telegram=${tgRow?.credentialOrigin}`,
+    );
+    // The delivery ledger knows which direction each row was. A webhook delivery is
+    // a PUSH; only a push proves the platform is still calling us.
+    check(
+      "the Telegram webhook delivery is recorded as a PUSH",
+      tgRow?.delivery?.lastVia === "push" && Boolean(tgRow?.delivery?.pushAt),
+      `via=${tgRow?.delivery?.lastVia} pushAt=${tgRow?.delivery?.pushAt}`,
+    );
 
     // Pushed, not polled: nothing to schedule, nothing to sync, never "due".
     check(

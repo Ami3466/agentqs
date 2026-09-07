@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { effectiveProviders, linkedApiKey, readConfig } from "@/lib/config";
 import { recordDir } from "@/lib/paths";
-import { appendInboxItem, landInboxCaptures, readInboxFromRecord } from "@/lib/record";
-import { autoStructureNewItem } from "@/lib/structure-run";
+import { appendInboxItem, readInboxFromRecord } from "@/lib/record";
+import { landCapture } from "@/lib/structure-run";
 import { describeStt, transcribeMemo, type SttEnv } from "@/lib/voice";
 import { whisperInstalled } from "@/lib/whisper-local";
 
@@ -140,20 +140,21 @@ export async function POST(req: Request) {
     },
     { recordDir: rDir },
   );
-  // Auto-structure first: when it merges, structurePending lands the capture
-  // itself — landing it here too would run the derivation twice per capture.
-  const auto = await autoStructureNewItem(item.id); // Settings: skip the pending queue
-  if (!auto || auto.structured === 0) landInboxCaptures([item], { recordDir: rDir });
+  // The shared capture funnel: land the row and (when Settings says so) structure
+  // it, as ONE queued record job — never synchronous SQLite work on this thread.
+  const landed = await landCapture(item, { recordDir: rDir });
 
   // The inbox stream ONLY — readRecord would parse events.jsonl (hundreds of MB)
   // to count pending captures.
-  const pending = auto?.pending ?? readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
+  const pending =
+    landed.structured?.pending ?? readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
   return NextResponse.json({
     ok: true,
     id: item.id,
     text,
     backend,
     pending,
-    structured: (auto?.structured ?? 0) > 0,
+    structured: (landed.structured?.structured ?? 0) > 0,
+    ...(landed.queued ? { queued: true } : {}),
   });
 }

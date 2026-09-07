@@ -7,6 +7,7 @@ import { pipeline } from "stream/promises";
 import { readConfig, writeConfig, type AppConfig } from "./config";
 import { dataDir, recordDir } from "./paths";
 import { rebuild } from "./record";
+import { runAsConverger } from "./record-context";
 import { isDue, isValidInterval, type Interval } from "./sources";
 import type { FetchLike } from "./importers/plugin";
 
@@ -659,7 +660,12 @@ export async function restoreIntoStore(opts: {
       fs.renameSync(live, retired);
     }
     fs.renameSync(incoming, live);
-    const dailyRows = rebuild({ dataDir: dir }).daily;
+    // A restore REPLACES the whole record, so there is nothing to patch and a full
+    // rebuild is the only correct answer — the one place that is true. Declared
+    // explicitly (record-context.ts) instead of relying on where it happens to be
+    // called from, and the route runs it as a background job so the rebuild never
+    // owns a request thread.
+    const dailyRows = runAsConverger(() => rebuild({ dataDir: dir })).daily;
     return { archive: got.name, retired, dailyRows };
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

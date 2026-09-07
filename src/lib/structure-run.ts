@@ -12,12 +12,14 @@ import { recordDir } from "./paths";
 import {
   appendInboxItems,
   landDailySources,
-  landInboxStream,
+  landInboxCaptures,
+  landInboxIds,
   mergeDailyCsv,
   readInboxFromRecord,
   updateInboxItems,
   type InboxItem,
 } from "./record";
+import { startJobAndWait, STRUCTURE_JOB } from "./sync-jobs";
 import { llmComplete } from "./llm";
 import { acceptQualityAction, columnGuard, qualityActionOf, splitColumnKey } from "./column-scan";
 import {
@@ -53,7 +55,7 @@ export function csvLossText(s: Structured): string {
  *  warning, not stack a contradictory second one. Used by every channel that
  *  structures a FILE the user can't regenerate on the spot; agent-supplied CSV
  *  is rejected outright instead. */
-export function notifyCsvLoss(rDir: string, hint: string | undefined, s: Structured): number {
+export function notifyCsvLoss(rDir: string, hint: string | undefined, s: Structured): string {
   const loss = csvLossText(s);
   // An ambiguous date column is NOT a loss — every row landed. It is a GUESS, and the
   // difference matters: "did not fully land, fix and re-import" would be a lie, and a
@@ -63,7 +65,7 @@ export function notifyCsvLoss(rDir: string, hint: string | undefined, s: Structu
   const guess = s.ambiguousDateOrder
     ? `its dates are written 05/07-style and the file never says whether that is D/M or M/D (no value is over 12), so they were read as US M/D — if this file is European, every date in it is wrong`
     : "";
-  if (!loss && !guess) return 0;
+  if (!loss && !guess) return "";
   const text = loss
     ? `CSV import${hint ? ` "${hint}"` : ""} did NOT fully land: ${loss}. The other rows merged; fix the file and re-import to recover these.${guess ? ` Also: ${guess}.` : ""}`
     : `CSV import${hint ? ` "${hint}"` : ""} landed in full, but ${guess}.`;
@@ -83,7 +85,7 @@ export function notifyCsvLoss(rDir: string, hint: string | undefined, s: Structu
   if (!patched) {
     appendInboxItems([{ id, source: "import", kind: "notification", ...item }], { recordDir: rDir });
   }
-  return 1;
+  return id; // the caller lands exactly this row
 }
 
 export type StructureRoute = "csv" | "llm" | "agent" | "fix";
@@ -132,6 +134,49 @@ export async function autoStructureNewItem(id: string): Promise<StructureRunResu
   }
 }
 
+/** What landing one fresh capture did. */
+export interface CaptureLanding {
+  /** The auto-structure run, when the setting is on AND it finished in time. */
+  structured: StructureRunResult | null;
+  /** Still on the record-job queue: the capture is durable on disk, its cache row
+   *  and any auto-structure land moments later. The caller answers now. */
+  queued: boolean;
+}
+
+/**
+ * THE capture funnel: land one fresh inbox item in the cache and, when
+ * auto-structure is on, structure it — as ONE queued record job.
+ *
+ * Two things it fixes at once. The cache write and the structure run used to be
+ * separate steps on the request thread, so a capture could race its own structure
+ * and leave the row saying `pending` for something the record already had as
+ * `structured`. And both ran INLINE: an inbound Slack message, a dropped file or a
+ * typed memo did synchronous SQLite work on the request thread, which is exactly
+ * how a webhook misses a 3s deadline. Now the request hands the work to the same
+ * serial queue imports use and answers as soon as it is done — or says `queued`.
+ */
+export async function landCapture(
+  item: InboxItem,
+  opts: { recordDir?: string; dataDir?: string } = {},
+): Promise<CaptureLanding> {
+  const auto = autoStructureEnabled(readConfig());
+  const handoff = await startJobAndWait(STRUCTURE_JOB, async () => {
+    let run: StructureRunResult | null = null;
+    if (auto) {
+      try {
+        run = await structurePending({ id: item.id });
+      } catch {
+        run = null; // a failed attempt leaves the item pending, exactly as it was
+      }
+    }
+    // structurePending lands the item itself when it merged; otherwise the raw
+    // capture still has to reach the cache.
+    if (!run || run.structured === 0) landInboxCaptures([item], opts);
+    return { result: { run } };
+  });
+  return { structured: handoff.result?.run ?? null, queued: handoff.result === null };
+}
+
 /** Drain pending inbox items into daily rows. `{id}` structures one; `{}` drains all.
  *  `{id, csv}` is the key-free agent route: a CLI agent (e.g. Codex) reads
  *  the pending item itself and SUPPLIES the extracted daily CSV — same validation,
@@ -176,6 +221,9 @@ export async function structurePending(
 
   const results: StructureItemResult[] = [];
   const patches: Array<{ id: string; status: string; meta: unknown }> = [];
+  // Inbox rows this run WROTE that aren't in `patches` — a CSV-loss warning. They
+  // land with everything else, by id.
+  const noticed: string[] = [];
   let mutated = false;
 
   for (const item of targets) {
@@ -289,7 +337,8 @@ export async function structurePending(
     // can fix the file and re-import. LLM output shedding rows is the model's
     // formatting, not the user's data: "fix the file" would be nonsense, so
     // the loss travels in the result message instead.
-    if (route === "csv") notifyCsvLoss(rDir, hint, structured);
+    const lossId = route === "csv" ? notifyCsvLoss(rDir, hint, structured) : "";
+    if (lossId) noticed.push(lossId);
     const llmLoss = route === "llm" ? csvLossText(structured) : "";
     mutated = true;
     patches.push({
@@ -323,13 +372,19 @@ export async function structurePending(
   // The post-structure column check: re-apply saved merge rules and queue a
   // notification for any NEW duplicate the fresh rows just created — before the
   // cache patch, so the cache already reflects both.
-  const guard = mutated ? columnGuard(rDir) : null;
+  //
+  // SCOPED to the sources this run actually wrote. Unscoped it re-read every daily
+  // CSV in the record and compared every column against every other one on each
+  // structure — work sized to the whole record for a change of a few cells. A new
+  // duplicate can only involve a column this run touched, so nothing is lost.
+  const wrote = [...new Set(results.flatMap((r) => (r.status === "structured" && r.source ? [r.source] : [])))];
+  const guard = mutated ? columnGuard(rDir, { sources: wrote }) : null;
   // Only the sources this run wrote (plus both sides of any merge rule it
   // re-applied). A full rebuild here re-derived every event in the record —
   // minutes of frozen server for a handful of structured cells.
   const touched = [
     ...new Set([
-      ...results.flatMap((r) => (r.status === "structured" && r.source ? [r.source] : [])),
+      ...wrote,
       ...(guard?.autoMerged ?? []).flatMap((o) => [
         splitColumnKey(o.from).source,
         splitColumnKey(o.into).source,
@@ -337,7 +392,15 @@ export async function structurePending(
     ]),
   ].filter(Boolean);
   const dailyRows = mutated ? landDailySources(touched, { recordDir: rDir }) : null;
-  if (mutated) landInboxStream({ recordDir: rDir });
+  // Exactly the inbox rows this run changed: the items it patched, plus any
+  // scanner notification the guard just appended. Re-upserting the WHOLE inbox
+  // here is what turned "structure 5 items" into fifteen minutes of frozen server
+  // on the real record — one FTS index scan per capture the record had ever held.
+  if (mutated) {
+    landInboxIds([...new Set([...patches.map((p) => p.id), ...noticed, ...(guard?.appended ?? [])])], {
+      recordDir: rDir,
+    });
+  }
   const remaining = readInboxFromRecord(rDir).filter((i) => i.status === "pending").length;
 
   return {

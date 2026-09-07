@@ -179,14 +179,22 @@ function runtime(): JobsRuntime {
  * already queued/running, returns it instead of starting a second one.
  * `run` receives a progress callback and resolves with the summary; its
  * outcome lands in the job file — the caller does NOT await the work.
+ *
+ * `queue: true` never joins: the work is ALWAYS enqueued behind whatever is
+ * running. A sync is one repeatable operation per source, so joining is right for
+ * it; a record EDIT is not — "discard item A" and "discard item B" share a job id
+ * but are different work, and silently dropping the second would lose the user's
+ * action. Both still run one at a time through the same serial chain, which is the
+ * point: two record mutations must never overlap.
  */
 export function startSyncJob(
   id: string,
   run: (progress: JobProgress) => Promise<SyncJobSummary>,
   dir: string = dataDir(),
+  opts: { queue?: boolean } = {},
 ): SyncJob {
   const existing = readSyncJob(id, dir);
-  if (isActive(existing)) return existing;
+  if (!opts.queue && isActive(existing)) return existing;
 
   const job = patchJob(dir, id, {
     id,
@@ -240,4 +248,80 @@ export function startSyncJob(
 /** Await the queue draining — tests and the CLI use this; routes never do. */
 export async function waitForSyncJobs(): Promise<void> {
   await runtime().chain;
+}
+
+// ---- record-mutating jobs -------------------------------------------------
+
+/** Job ids for the record edits that used to run inline on the request thread.
+ *  Not source ids: nothing renders them as a Pipeline row, and keeping them named
+ *  here is what stops a future one from inventing a third spelling. */
+export const STRUCTURE_JOB = "structure";
+export const SESSION_JOB = "session";
+export const INBOX_JOB = "inbox";
+export const RESTORE_JOB = "restore";
+
+/** How long a route waits for a fast job before handing back 202. Long enough that
+ *  a normal CSV structure, a keep and a discard all still answer in one round trip
+ *  with their full result; short enough that nothing can hold a request open. */
+const DEFAULT_GRACE_MS = 2500;
+
+export interface JobHandoff<T> {
+  job: SyncJob;
+  /** The work's own result, when it finished inside the grace window. */
+  result: T | null;
+  /** The work's own error, when it failed inside the grace window — so a route can
+   *  still answer 400/404 with the real reason instead of a hopeful 202. */
+  error: Error | null;
+}
+
+/**
+ * Run record-mutating work as a BACKGROUND JOB and wait a short grace window for
+ * it — the pattern imports already use (202 + a job the UI polls), reused rather
+ * than reinvented, and the answer to a request thread that can be held open for
+ * fifteen minutes by one button.
+ *
+ * Fast work (the overwhelming majority) still answers in one round trip with its
+ * full result, so no face has to change how it reads a normal response. Slow work
+ * hands back the job and finishes on the queue; the caller polls it exactly like an
+ * import. Either way the request thread is free, and better-sqlite3's synchronous
+ * writes happen one at a time instead of stacking.
+ */
+export async function startJobAndWait<T>(
+  id: string,
+  run: (progress: JobProgress) => Promise<{ result: T; summary?: SyncJobSummary }>,
+  opts: { graceMs?: number; dir?: string } = {},
+): Promise<JobHandoff<T>> {
+  const dir = opts.dir ?? dataDir();
+  let settle: (v: { result: T } | { error: Error }) => void = () => {};
+  const finished = new Promise<{ result: T } | { error: Error }>((resolve) => {
+    settle = resolve;
+  });
+  const started = startSyncJob(
+    id,
+    async (progress) => {
+      try {
+        const r = await run(progress);
+        settle({ result: r.result });
+        return r.summary ?? {};
+      } catch (e) {
+        // startSyncJob's own catch records the failure on the row; this only hands
+        // the reason back to a caller still inside the grace window.
+        settle({ error: e as Error });
+        throw e;
+      }
+    },
+    dir,
+    { queue: true },
+  );
+
+  const late = Symbol("still running");
+  const timer = new Promise<typeof late>((resolve) => {
+    const t = setTimeout(() => resolve(late), opts.graceMs ?? DEFAULT_GRACE_MS);
+    t.unref?.(); // never hold a process open waiting to say "still running"
+  });
+  const raced = await Promise.race([finished, timer]);
+  const job = readSyncJob(id, dir) ?? started;
+  if (raced === late) return { job, result: null, error: null };
+  if ("error" in raced) return { job, result: null, error: raced.error };
+  return { job, result: raced.result, error: null };
 }
