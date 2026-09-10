@@ -137,6 +137,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # Every tag in this list was just pointed at the same index by the single
+      # `imagetools create` call below and passed the smoke test at the bottom of
+      # this job - so the mirror job can copy from any one of them instead of
+      # recomputing tags itself and risking a different answer.
+      published_tags: ${{ steps.meta.outputs.tags }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -234,3 +240,92 @@ jobs:
           docker logs qs
           docker rm -f qs
           exit 1
+
+  # `ghcr.io/ami3466/agentqs:latest` can never be a short name; this copies the
+  # exact index `merge` just built, annotated, and smoke-tested onto Docker Hub so
+  # `docker run flowenginecloud/agentqs` works too. It must never rebuild - a
+  # second build could produce different digests and ship bits the smoke test
+  # above never ran - so every step below is a registry-to-registry copy, not a
+  # `docker build`.
+  #
+  # continue-on-error: true because this is a convenience mirror, not the release.
+  # GHCR is the artifact of record; if Docker Hub is down or the token is wrong,
+  # the release that already shipped above must not be marked failed for it.
+  mirror-dockerhub:
+    needs: merge
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # The `secrets` context can't be read in a job-level `if:` (it silently
+      # evaluates to false there, which would skip this whole job with no
+      # explanation) - only `run:`/`with:` can see it. So the gate is a step output
+      # instead, checked on every step after it. Do NOT collapse this back into a
+      # job-level `if: secrets.DOCKERHUB_TOKEN != ''` - that was the first draft,
+      # and it just silently never runs.
+      - name: Check Docker Hub credentials are configured
+        id: creds
+        run: echo "enabled=${{ secrets.DOCKERHUB_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.creds.outputs.enabled == 'true'
+
+      # Username and target are deliberately different accounts: this logs in as
+      # the personal account that holds the token (same identity FlowEngine's
+      # build-n8n-image.yml uses), then the copy step below pushes INTO an org
+      # that account owns. Do not "fix" DOCKERHUB_REPO to match this username -
+      # flowenginecloud is the org namespace on purpose, not a typo of ami3466.
+      - uses: docker/login-action@v3
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME || 'ami3466' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve names
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          echo "HUB_REF=${{ vars.DOCKERHUB_REPO || 'flowenginecloud/agentqs' }}" >> $GITHUB_ENV
+          # Any tag `merge` published points at the identical index it just
+          # verified and smoke-tested - the first one is a fine copy source.
+          echo "SOURCE=$(head -1 <<< '${{ needs.merge.outputs.published_tags }}')" >> $GITHUB_ENV
+
+      # SAME tags: block as `merge`'s meta step, aimed at the Hub ref instead of
+      # GHCR, so Hub gets 0.3.0 / 0.3 / latest / sha-* on exactly the same rules.
+      # metadata-action can't take two `images:` in one call, which is the only
+      # reason this block is typed twice - if you change one, change both.
+      - id: meta
+        if: steps.creds.outputs.enabled == 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.HUB_REF }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # imagetools copies blobs cross-registry from the GHCR tag `merge` published -
+      # it never touches a Dockerfile, so Hub ends up with the exact digests GHCR
+      # has, not a rebuild that could drift from what the smoke test ran.
+      - name: Copy the published index to Docker Hub
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            "$SOURCE"
+
+      # Same check `merge` runs on the GHCR side - a mirror that silently drops an
+      # architecture is the exact bug this repo already spent a session fixing.
+      # `continue-on-error` on the job (not this step) is what keeps a real miss
+      # here from failing the workflow; it still fails the JOB, which shows up red
+      # in the run instead of pretending the mirror is healthy.
+      - name: Check Docker Hub has both architectures
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          TAG=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect "$TAG" --format '{{json .Manifest}}' > /tmp/hub-idx.json
+          for arch in amd64 arm64; do
+            jq -e --arg a "$arch" '.manifests[] | select(.platform.architecture == $a and .platform.os == "linux")' /tmp/hub-idx.json > /dev/null \
+              || { echo "$TAG has no linux/$arch - Hub silently missed an architecture GHCR has"; jq . /tmp/hub-idx.json; exit 1; }
+            echo "linux/$arch present on Hub"
+          done
