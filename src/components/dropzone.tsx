@@ -6,16 +6,19 @@ import { cn } from "@/components/ui";
 // The zero-dependency leaf, NOT `@/lib/pdf-text`: importing the brain from here
 // makes webpack emit its 1.6MB pdf.js chunk into static/ for a parse that only
 // ever happens on the server.
-import { MAX_PDF_BYTES, PDF_MIME, looksPdfName } from "@/lib/pdf-limits";
-
-const TEXT_EXT = /\.(csv|tsv|tab|psv|txt|md|markdown|json|jsonl|ndjson|log|ics|vcf|xml|yaml|yml)$/i;
+import { MAX_PDF_BYTES, PDF_MIME } from "@/lib/pdf-limits";
+// The routing decision itself, as a pure function — not re-derived here. The image
+// branch used to test `f.type.startsWith("image/")` while the PDF branch beside it
+// matched name OR mime, so a HEIC (or anything the browser gave an empty type)
+// missed the image branch and was read as text.
+import { captureRouteFor, extensionOf, looksTextualName } from "@/lib/file-kinds";
 type UploadItem = { file: File; path: string };
 type DataTransferItemWithEntry = DataTransferItem & {
   webkitGetAsEntry?: () => FileSystemEntry | null;
 };
 
 function looksTextual(f: File): boolean {
-  return f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
+  return looksTextualName(f.name, f.type);
 }
 function kindOf(name: string): string {
   return /\.(csv|tsv|tab|psv)$/i.test(name) ? "csv" : "file";
@@ -133,8 +136,9 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
       let dupes = 0;
       // A refusal carries its REASON when the server gave one (a scanned PDF, an
       // encrypted one) — "couldn't read it" is only for a file we never got.
-      const skipped: { name: string; why?: string }[] = [];
-      async function post(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string; duplicate?: boolean }> {
+      // `why` is REQUIRED: a skip with no reason reads as the app losing your file.
+      const skipped: { name: string; why: string }[] = [];
+      async function post(body: Record<string, unknown>): Promise<{ ok: boolean; error: string; duplicate?: boolean }> {
         const res = await fetch("/api/inbox", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -147,19 +151,23 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
         // A REVIVED one is not a duplicate either: it had been discarded and this
         // drop put it back in the pending queue. Counting it as "already there"
         // told the user nothing happened when something did.
-        if (res.ok) return { ok: true, duplicate: detail.duplicate === true && detail.revived !== true };
-        return { ok: false, error: detail.error };
+        if (res.ok) return { ok: true, error: "", duplicate: detail.duplicate === true && detail.revived !== true };
+        // Always a reason: an error with no explanation is the silent skip again,
+        // one layer up.
+        return { ok: false, error: detail.error || `the server refused it (HTTP ${res.status})` };
       }
       try {
         for (const item of list) {
           const f = item.file;
           const filename = item.path || f.name;
-          if (f.type.startsWith("image/")) {
+          // Name OR mime, one shared decision. See file-kinds.ts.
+          const route = captureRouteFor(f.name, f.type);
+          if (route === "image") {
             let dataUrl = "";
             try {
               dataUrl = await readDataUrl(f);
             } catch {
-              skipped.push({ name: filename });
+              skipped.push({ name: filename, why: "couldn't read the image off disk" });
               continue;
             }
             const done = await post({
@@ -173,7 +181,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           }
           // A PDF is binary here and text on the server: ship the BYTES and let
           // /api/inbox extract the text layer. The browser never parses a PDF.
-          if (looksPdfName(f.name, f.type)) {
+          if (route === "pdf") {
             if (f.size > MAX_PDF_BYTES) {
               skipped.push({ name: filename, why: "PDF too large — use `agentqs import <file>`" });
               continue;
@@ -182,7 +190,7 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
             try {
               dataUrl = await readDataUrl(f);
             } catch {
-              skipped.push({ name: filename });
+              skipped.push({ name: filename, why: "couldn't read the PDF off disk" });
               continue;
             }
             const done = await post({
@@ -198,11 +206,23 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           try {
             text = await f.text();
           } catch {
-            skipped.push({ name: filename });
+            skipped.push({ name: filename, why: "couldn't read the file off disk" });
             continue;
           }
-          if (!text.trim() || (!looksTextual(f) && isBinary(text))) {
-            skipped.push({ name: filename });
+          // NO SILENT SKIPS. A bare "skipped" line is indistinguishable from the app
+          // losing your file, which is exactly how it read. Every refusal below says
+          // what it saw — and names the EXTENSION, so an unsupported-but-real file
+          // type is diagnosable from the flash message alone.
+          const kind = extensionOf(f.name) ? `.${extensionOf(f.name)}` : "no extension";
+          if (!text.trim()) {
+            skipped.push({ name: filename, why: `empty file (${kind}) — nothing to capture` });
+            continue;
+          }
+          if (!looksTextual(f) && isBinary(text)) {
+            skipped.push({
+              name: filename,
+              why: `binary ${kind} file — no importer claims it, so there is nothing to read as text`,
+            });
             continue;
           }
           const done = await post({
@@ -220,16 +240,9 @@ export function Dropzone({ onUploaded }: { onUploaded: () => void }) {
           say("ok", `${dupes} file${dupes === 1 ? " is" : "s are"} already in your inbox — nothing to add.`);
         }
         if (skipped.length) {
-          const explained = skipped.filter((s) => s.why);
-          say(
-            ok ? "ok" : "error",
-            explained.length
-              ? explained.map((s) => `${s.name}: ${s.why}`).join(" · ") +
-                  (explained.length < skipped.length
-                    ? ` · couldn't read ${skipped.filter((s) => !s.why).map((s) => s.name).join(", ")}`
-                    : "")
-              : `Couldn't read ${skipped.map((s) => s.name).join(", ")}.`,
-          );
+          // Every skip carries a reason now, so there is no count-with-no-explanation
+          // branch left to fall into.
+          say(ok ? "ok" : "error", skipped.map((s) => `${s.name}: ${s.why}`).join(" · "));
         }
       } finally {
         setBusy(false);

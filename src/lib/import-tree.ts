@@ -15,6 +15,7 @@ import { structureCsv, sourceName } from "./structure";
 import { notifyCsvLoss } from "./structure-run";
 import { columnGuard, splitColumnKey } from "./column-scan";
 import { extractPdfText, looksPdf, MAX_PDF_BYTES, PDF_MIME, PDF_SCANNED_NOTE } from "./pdf-text";
+import { IMAGE_EXTENSIONS, TEXT_EXTENSIONS } from "./file-kinds";
 import { wipeDemoOnImport } from "./demo";
 import { isStreamingHistoryFile } from "./importers/files/spotify-export";
 
@@ -62,11 +63,11 @@ export interface ImportTreeReport {
 
 const IGNORE_NAMES = new Set([".DS_Store", "Thumbs.db", "desktop.ini", ".localized"]);
 const SKIP_DIRS = new Set([".git", ".Trash", "node_modules", "__MACOSX"]);
-const TEXT_EXT = new Set([
-  "csv", "tsv", "txt", "md", "markdown", "json", "jsonl", "ndjson",
-  "log", "yml", "yaml", "xml", "html", "htm", "ics", "vcf",
-]);
-const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "bmp", "tiff", "tif"]);
+// ONE definition of "what kind of file is this", shared with the browser dropzone
+// (src/lib/file-kinds.ts). Two copies is how the dropzone ended up routing a HEIC
+// as text while the folder walk routed it as an image.
+const TEXT_EXT = new Set<string>(TEXT_EXTENSIONS);
+const IMAGE_EXT = new Set<string>(IMAGE_EXTENSIONS);
 /** Land raw only up to this size — a bigger text file needs a real importer,
  *  not a megabyte memo nobody can structure. */
 export const MAX_INBOX_BYTES = 25 * 1024 * 1024;

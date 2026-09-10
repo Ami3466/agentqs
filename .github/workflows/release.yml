@@ -170,7 +170,17 @@ jobs:
       - name: Create the multi-arch tags
         working-directory: /tmp/digests
         run: |
+          # The per-arch `build` job already sets labels on each child config - the
+          # index is the gap: registries/UIs read the index, and imagetools leaves it
+          # `annotations: null` unless told otherwise. metadata-action already emits
+          # .annotations in DOCKER_METADATA_OUTPUT_JSON; a bash array (not jq|join)
+          # because the values contain spaces and would otherwise word-split.
+          ANNOTATIONS=()
+          while IFS= read -r a; do
+            [ -n "$a" ] && ANNOTATIONS+=(--annotation "index:$a")
+          done < <(jq -r '.annotations // [] | .[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           docker buildx imagetools create \
+            "${ANNOTATIONS[@]}" \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.IMAGE_REF }}@sha256:%s ' *)
 

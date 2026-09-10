@@ -57,5 +57,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 EXPOSE 3000
+# `/api` is the discovery manifest: unauthenticated, and it reads nothing from
+# the record or SQLite, so a probe can hit it every 30s for free - `/` would
+# drag in auth and a redirect. start-period is 40s because a cold Next boot
+# answers nothing before that; skip it and the container reports unhealthy on
+# every single start. curl is already installed above, so this adds no package.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT:-3000}/api" >/dev/null || exit 1
 VOLUME /data
 CMD ["node", "server.js"]

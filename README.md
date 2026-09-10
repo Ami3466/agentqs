@@ -4,6 +4,8 @@
 
 **The source-available pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
+[![Release](https://github.com/Ami3466/agentqs/actions/workflows/release.yml/badge.svg)](https://github.com/Ami3466/agentqs/actions/workflows/release.yml) [![Latest release](https://img.shields.io/github/v/release/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/releases) [![GHCR](https://img.shields.io/badge/ghcr.io-agentqs-blue)](https://github.com/Ami3466/agentqs/pkgs/container/agentqs) [![License](https://img.shields.io/github/license/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/blob/main/LICENSE)
+
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI, API & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
 </div>
@@ -85,7 +87,7 @@ Give the AI a persona - mentor, coach, therapist, or your own prompt. Skills run
 
 ### Memos
 
-Text or voice, from the app, CLI or a channel. They land in your inbox - structure them into daily rows or keep them as searchable notes. A dropped file is keyed by its contents, so dropping the same one again says it is already there instead of failing - and if you had *discarded* that file, dropping it again is taken as asking for it back and returns it to the queue. A filename your alphabet doesn't survive (Hebrew, Arabic, Chinese) falls back to a real source name rather than becoming a daily column called `2`. A dropped photo lands as a capture too; lists describe it (`beach.jpg · image/jpeg · 3.0 MB`) instead of shipping the whole file back to your browser, and a photo too big for a raw capture is told so in a photo's own terms, pointing at `agentqs photos import`.
+Text or voice, from the app, CLI or a channel. They land in your inbox - structure them into daily rows or keep them as searchable notes. A dropped file is keyed by its contents, so dropping the same one again says it is already there instead of failing - and if you had *discarded* that file, dropping it again is taken as asking for it back and returns it to the queue. A filename your alphabet doesn't survive (Hebrew, Arabic, Chinese) falls back to a real source name rather than becoming a daily column called `2`. A dropped photo lands as a capture too - recognised by its name as well as its type, so an iPhone `.HEIC`, an `UPPERCASE.JPG` or anything your browser declines to label still arrives as a picture instead of being read as text and quietly skipped. Lists describe it (`beach.jpg · image/jpeg · 3.0 MB`) instead of shipping the whole file back to your browser, and a photo too big for a raw capture is told so in a photo's own terms, pointing at `agentqs photos import`. Nothing is ever skipped without a reason you can act on.
 
 ### Channels
 

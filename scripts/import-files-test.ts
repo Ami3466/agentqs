@@ -25,6 +25,7 @@ import { buildSources } from "../src/lib/source-registry";
 import { appendInboxItem, appendInboxItems, captureSummary, readInboxFromRecord, rebuild, updateInboxItems } from "../src/lib/record";
 import { MAX_INBOX_BYTES } from "../src/lib/import-tree";
 import { inboxResolve } from "../src/lib/cli-core";
+import { captureRouteFor, extensionOf, looksImageName, looksTextualName } from "../src/lib/file-kinds";
 import { sourceName } from "../src/lib/structure";
 
 const REPO = process.cwd();
@@ -558,6 +559,54 @@ function main(): void {
     const summary = captureSummary(photo);
     check("a list shows what the capture IS, not its bytes", summary === "beach.jpg · image/jpeg · 3.0 MB", summary);
     check("…and a text capture is untouched by that", captureSummary({ kind: "text", text: "plain note", meta: null }) === "plain note");
+  }
+
+  console.log("\nthe dropzone routes on NAME OR MIME — a photo the browser can't name is still a photo");
+  {
+    // The bug this locks down: the image branch tested `f.type.startsWith("image/")`
+    // while the PDF branch beside it matched name OR mime. So a HEIC from an iPhone,
+    // a file dragged off a network share, and anything with an uppercase extension
+    // missed the image branch, fell through to the text branch, were read with
+    // f.text(), tripped the binary guard, and were skipped with NO reason given. The
+    // photo never reached the server — 138 log entries, not one image capture.
+    check("a normal photo routes to the image branch", captureRouteFor("beach.jpg", "image/jpeg") === "image");
+    check("…with an EMPTY mime type it still does", captureRouteFor("beach.jpg", "") === "image", captureRouteFor("beach.jpg", ""));
+    check("an iPhone .HEIC with no mime routes to the image branch", captureRouteFor("IMG_0421.HEIC", "") === "image", captureRouteFor("IMG_0421.HEIC", ""));
+    check("…and .heif too", captureRouteFor("scan.heif", undefined) === "image");
+    check("an UPPERCASE .JPG routes to the image branch", captureRouteFor("PHOTO.JPG", "") === "image", captureRouteFor("PHOTO.JPG", ""));
+    check("a mime with no useful name still routes on mime", captureRouteFor("blob", "image/png") === "image");
+    for (const e of ["png", "gif", "webp", "avif", "bmp", "tif", "tiff", "jpeg"]) {
+      check(`.${e} routes to the image branch with no mime`, captureRouteFor(`x.${e}`, "") === "image", captureRouteFor(`x.${e}`, ""));
+    }
+    check("a PDF still routes to the PDF branch", captureRouteFor("statement.PDF", "") === "pdf", captureRouteFor("statement.PDF", ""));
+    check("…and by mime alone", captureRouteFor("blob", "application/pdf") === "pdf");
+    check("a CSV routes to the text branch", captureRouteFor("mood.csv", "text/csv") === "text");
+    check("an unknown binary routes to the text branch, where it is refused BY NAME", captureRouteFor("archive.sqlite", "") === "text");
+    // The predicates the routing is built from, on their own.
+    check("looksImageName never lets an empty mime cast the deciding vote", looksImageName("a.heic", "") && !looksImageName("a.sqlite", ""));
+    check("looksTextualName matches on extension too", looksTextualName("notes.md", "") && !looksTextualName("photo.jpg", ""));
+    check("extensionOf is case-insensitive and dot-free", extensionOf("A.JPG") === "jpg" && extensionOf("noext") === "");
+  }
+
+  console.log("\nno silent skips — every refusal in the dropzone says why");
+  {
+    // A skip with no reason is indistinguishable from the app losing your file, and
+    // that is exactly how it read: a bare "skipped" line for every photo the browser
+    // gave an empty mime type. The `why` field is required by the type now, so tsc
+    // enforces it — this catches the other half, someone widening the type back.
+    const src = fs.readFileSync(path.join(process.cwd(), "src", "components", "dropzone.tsx"), "utf8");
+    const pushes = src.match(/skipped\.push\([\s\S]*?\);/g) ?? [];
+    check("the dropzone still has skip paths to check", pushes.length >= 5, `${pushes.length} found`);
+    const bare = pushes.filter((push) => !/why:/.test(push));
+    check("every skipped file carries a reason", bare.length === 0, bare.join(" | ").slice(0, 140));
+    check(
+      "the skip type REQUIRES a reason (tsc enforces the rest)",
+      /skipped: \{ name: string; why: string \}\[\]/.test(src),
+    );
+    // An unsupported-but-real file type has to be diagnosable from the flash alone.
+    check("the binary refusal names the extension it saw", /binary \$\{kind\} file/.test(src));
+    check("…and `kind` is the real extension", /extensionOf\(f\.name\)/.test(src));
+    check("the flash never prints a skip without its reason", !/couldn't read \$\{skipped/.test(src));
   }
 
   console.log("\na filename with no latin letters does not become a junk source name");
