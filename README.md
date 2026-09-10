@@ -4,7 +4,7 @@
 
 **The source-available pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
-[![Release](https://github.com/Ami3466/agentqs/actions/workflows/release.yml/badge.svg)](https://github.com/Ami3466/agentqs/actions/workflows/release.yml) [![Latest release](https://img.shields.io/github/v/release/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/releases) [![GHCR](https://img.shields.io/badge/ghcr.io-agentqs-blue)](https://github.com/Ami3466/agentqs/pkgs/container/agentqs) [![License](https://img.shields.io/badge/license-source--available-blue)](https://github.com/Ami3466/agentqs/blob/main/LICENSE)
+[![Release](https://github.com/Ami3466/agentqs/actions/workflows/release.yml/badge.svg)](https://github.com/Ami3466/agentqs/actions/workflows/release.yml) [![Latest release](https://img.shields.io/github/v/release/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/releases) [![Docker Hub](https://img.shields.io/badge/docker-flowenginecloud%2Fagentqs-blue)](https://hub.docker.com/r/flowenginecloud/agentqs) [![License](https://img.shields.io/badge/license-source--available-blue)](https://github.com/Ami3466/agentqs/blob/main/LICENSE)
 
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI, API & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
@@ -21,7 +21,7 @@ agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your
 **Run the app with Docker:** the fastest way to a running app.
 
 ```bash
-docker run -d --name agentqs -p 3000:3000 -v agentqs-data:/data -e SESSION_SECRET=$(openssl rand -hex 32) ghcr.io/ami3466/agentqs:latest
+docker run -d --name agentqs -p 3000:3000 -v agentqs-data:/data -e SESSION_SECRET=$(openssl rand -hex 32) flowenginecloud/agentqs:latest
 ```
 
 The SESSION_SECRET must stay the same across restarts or you get logged out.
@@ -187,9 +187,9 @@ Your record is plain text (`record/daily/*.csv`, `inbox.jsonl`, `sessions.jsonl`
 
 ### Docker
 
-The image is rebuilt and published on every push to `main`, and it is public, so there is no `docker login` and no build step. It supports `linux/amd64` and `linux/arm64`; use the [Quick start](#quick-start) to run it directly.
+The image is rebuilt and published on every push to `main`, and it is public, so there is no `docker login` and no build step. It supports `linux/amd64` and `linux/arm64`; use the [Quick start](#quick-start) to run it directly. Already pinned to GHCR? `ghcr.io/ami3466/agentqs:latest` is the same image, mirrored digest-for-digest.
 
-Version tags (`:0.2.2`, `:0.2`) and per-commit tags (`:sha-abc1234`) are there too, so a rollback is one tag away. The repo's `docker-compose.yml` uses the same image and passes provider keys through:
+Version tags (`:0.3.1`, `:0.3`) and per-commit tags (`:sha-abc1234`) are there too, so a rollback is one tag away. The repo's `docker-compose.yml` uses the same image and passes provider keys through:
 
 ```bash
 export SESSION_SECRET=$(openssl rand -hex 32)
