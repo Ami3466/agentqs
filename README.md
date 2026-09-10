@@ -4,7 +4,7 @@
 
 **The source-available pipeline for your personal data: 20+ apps synced into one place you can graph, chat with and learn from.**
 
-[![Release](https://github.com/Ami3466/agentqs/actions/workflows/release.yml/badge.svg)](https://github.com/Ami3466/agentqs/actions/workflows/release.yml) [![Latest release](https://img.shields.io/github/v/release/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/releases) [![GHCR](https://img.shields.io/badge/ghcr.io-agentqs-blue)](https://github.com/Ami3466/agentqs/pkgs/container/agentqs) [![License](https://img.shields.io/github/license/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/blob/main/LICENSE)
+[![Release](https://github.com/Ami3466/agentqs/actions/workflows/release.yml/badge.svg)](https://github.com/Ami3466/agentqs/actions/workflows/release.yml) [![Latest release](https://img.shields.io/github/v/release/Ami3466/agentqs)](https://github.com/Ami3466/agentqs/releases) [![GHCR](https://img.shields.io/badge/ghcr.io-agentqs-blue)](https://github.com/Ami3466/agentqs/pkgs/container/agentqs) [![License](https://img.shields.io/badge/license-source--available-blue)](https://github.com/Ami3466/agentqs/blob/main/LICENSE)
 
 [Quick start](#quick-start) · [Features](#features) · [Integrations](#integrations--data-pipelines) · [Storage](#how-your-data-is-stored) · [CLI, API & MCP](#cli-api-and-mcp) · [Deploy](#deploy) · [License](#license)
 
