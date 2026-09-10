@@ -175,9 +175,14 @@ jobs:
           # `annotations: null` unless told otherwise. metadata-action already emits
           # .annotations in DOCKER_METADATA_OUTPUT_JSON; a bash array (not jq|join)
           # because the values contain spaces and would otherwise word-split.
+          # metadata-action pre-scopes each entry as "manifest:<key>=<value>" (for the
+          # per-arch labels above); the index wants the same keys unscoped, so strip
+          # that prefix before adding ours - "index:manifest:<key>" would otherwise
+          # make buildx read "index:" as the scope and keep "manifest:<key>" as the
+          # literal key name, which is how this shipped broken the first time.
           ANNOTATIONS=()
           while IFS= read -r a; do
-            [ -n "$a" ] && ANNOTATIONS+=(--annotation "index:$a")
+            [ -n "$a" ] && ANNOTATIONS+=(--annotation "index:${a#manifest:}")
           done < <(jq -r '.annotations // [] | .[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           docker buildx imagetools create \
             "${ANNOTATIONS[@]}" \
@@ -193,6 +198,19 @@ jobs:
               || { echo "$TAG has no linux/$arch — a pull on that platform would fail"; jq . /tmp/idx.json; exit 1; }
             echo "linux/$arch present"
           done
+          # The annotation scoping/stripping above is easy to get subtly wrong (it
+          # already shipped broken once) and a bad key silently degrades to "no
+          # metadata" instead of erroring, so assert one plain key actually landed.
+          # `--format '{{json .Manifest}}'` isn't guaranteed to carry the index's
+          # top-level .annotations (only .manifests[], which the arch check above
+          # relies on) - `--raw` is a separate call because it can't combine with
+          # --format, and it's the registry-truth view: the index JSON exactly as
+          # stored, annotations included, so this can't false-fail on a format gap.
+          docker buildx imagetools inspect "$TAG" --raw > /tmp/idx-raw.json
+          SOURCE=$(jq -r '.annotations["org.opencontainers.image.source"] // empty' /tmp/idx-raw.json)
+          [ -n "$SOURCE" ] \
+            || { echo "$TAG index has no org.opencontainers.image.source annotation - index annotations regressed"; jq . /tmp/idx-raw.json; exit 1; }
+          echo "index annotations present (org.opencontainers.image.source=$SOURCE)"
 
       # The image is the artifact, so it has to actually boot. Pull the image we just
       # tagged, run it on a throwaway /data, and require a real HTTP answer - a build
