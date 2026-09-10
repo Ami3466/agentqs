@@ -18,17 +18,17 @@ agentqs is the pipeline for it: connect 20+ apps, scrape the ones that lock your
 
 ## Quick start
 
-**Run the app with Docker:** the fastest way to a running app.
-
 ```bash
-docker run -d --name agentqs -p 3000:3000 -v agentqs-data:/data -e SESSION_SECRET=$(openssl rand -hex 32) flowenginecloud/agentqs:latest
+docker run -d --name agentqs -p 3000:3000 -v agentqs-data:/data flowenginecloud/agentqs
 ```
-
-The SESSION_SECRET must stay the same across restarts or you get logged out.
 
 Open [http://localhost:3000](http://localhost:3000).
 
-**Develop or use the CLI from source:** agentqs is a CLI-first platform, so the recommended (and free) setup needs no API keys and no environment variables. Clone the repo and ask an AI coding agent to set everything up for you.
+Everything lives in the `agentqs-data` volume, session key included, so restarts keep you signed in. Set `-e SESSION_SECRET=...` only if you want to pin that key yourself.
+
+## Run from source
+
+agentqs is CLI-first, and this setup needs no API keys and no environment variables.
 
 ```bash
 git clone https://github.com/Ami3466/agentqs.git && cd agentqs
@@ -36,7 +36,7 @@ npm install
 npm run dev               # → http://localhost:3000
 ```
 
-The agent can import and structure the data already on your machine, connect your accounts and set up syncs.
+Point an AI coding agent at it and it can import the data already on your machine, connect your accounts and set up syncs.
 
 Contributing? `npm run verify:tree` type-checks the tree **git would push** (not your working copy), which catches the one thing that has ever broken this repo's CI: a new module imported but never committed. Each feature also has a deterministic script - `npm run capture:test` covers the capture path, `npm run channels:test` the Slack/Telegram bots, `npm run rebuild:verify` the derived cache.
 
