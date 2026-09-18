@@ -67,6 +67,7 @@ function slackCaller(env: ChannelEnv, channelHint = "") {
 export const slackAdapter: ChannelAdapter = {
   id: "slack",
   label: "Slack",
+  target: { hint: "Slack channel/DM id (C0…/U0…)", example: "C0123456789" },
 
   configured(env: ChannelEnv): boolean {
     return Boolean(env.slackBotToken && env.slackBotToken.trim());

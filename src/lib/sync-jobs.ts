@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "async_hooks";
 import fs from "fs";
 import path from "path";
 import { dataDir } from "./paths";
@@ -166,12 +167,45 @@ interface JobsRuntime {
   chain: Promise<void>;
   beat: ReturnType<typeof setInterval> | null;
   active: number;
+  scope?: AsyncLocalStorage<JobScope>;
+}
+
+/**
+ * THE IN-JOB SIGNAL: set for the async flow of a job's `run`, absent everywhere else.
+ *
+ * It exists because the queue is one serial chain. Work that is already ON the
+ * chain and opens a second job (`pullChannel` inside the Sync route's job calling
+ * `landCapture`) queues that job behind ITSELF: it cannot start until the outer one
+ * returns, and the outer one is awaiting it. Nothing hangs — the grace window
+ * expires — but the caller always gets "still queued" for work that never ran.
+ */
+interface JobScope {
+  /** The queue job this flow runs under. `live` drops when it ends, so a stray
+   *  promise that outlives its job can never run "inline" beside the next one. */
+  job: { id: string; dir: string; progress: JobProgress; live: boolean };
+  /** Nested work under ONE job still runs one at a time — `Promise.all` over
+   *  `landCapture` must not turn into overlapping record mutations. Each level
+   *  gets its own chain, so nested-in-nested never waits on itself either. */
+  chain: Promise<unknown>;
 }
 
 function runtime(): JobsRuntime {
   const g = globalThis as { __agentqsSyncJobs?: JobsRuntime };
   g.__agentqsSyncJobs ??= { chain: Promise.resolve(), beat: null, active: 0 };
   return g.__agentqsSyncJobs;
+}
+
+/** On the runtime, not the module: Next can load this file into more than one
+ *  bundle, and the route's copy must see the scope the lib's copy opened. */
+function jobScope(): AsyncLocalStorage<JobScope> {
+  const rt = runtime();
+  rt.scope ??= new AsyncLocalStorage<JobScope>();
+  return rt.scope;
+}
+
+/** Is the current flow already running as a job on the serial queue? */
+export function insideSyncJob(): boolean {
+  return Boolean(jobScope().getStore()?.job.live);
 }
 
 /**
@@ -213,10 +247,12 @@ export function startSyncJob(
   rt.beat ??= setInterval(() => heartbeat(dir), HEARTBEAT_MS);
   rt.chain = rt.chain.then(async () => {
     patchJob(dir, id, { status: "running", phase: "starting", pct: 5 });
+    const progress: JobProgress = (phase, pct) => {
+      patchJob(dir, id, { phase, pct: Math.max(0, Math.min(99, Math.round(pct))) });
+    };
+    const scope: JobScope = { job: { id, dir, progress, live: true }, chain: Promise.resolve() };
     try {
-      const summary = await run((phase, pct) => {
-        patchJob(dir, id, { phase, pct: Math.max(0, Math.min(99, Math.round(pct))) });
-      });
+      const summary = await jobScope().run(scope, () => run(progress));
       patchJob(dir, id, {
         status: "ok",
         phase: "done",
@@ -234,6 +270,7 @@ export function startSyncJob(
         error: ((e as Error).message || "Sync failed.").split("\n")[0].slice(0, 300),
       });
     } finally {
+      scope.job.live = false;
       rt.active -= 1;
       if (rt.active <= 0 && rt.beat) {
         clearInterval(rt.beat);
@@ -285,12 +322,31 @@ export interface JobHandoff<T> {
  * hands back the job and finishes on the queue; the caller polls it exactly like an
  * import. Either way the request thread is free, and better-sqlite3's synchronous
  * writes happen one at a time instead of stacking.
+ *
+ * Called from INSIDE a job, it does not open a second one (see `JobScope`): the
+ * work runs as part of the job it is already in — still serial, still off the
+ * request thread, reporting on that job's row — and always hands back its result.
  */
 export async function startJobAndWait<T>(
   id: string,
   run: (progress: JobProgress) => Promise<{ result: T; summary?: SyncJobSummary }>,
   opts: { graceMs?: number; dir?: string } = {},
 ): Promise<JobHandoff<T>> {
+  const outer = jobScope().getStore();
+  if (outer?.job.live) {
+    const { job } = outer;
+    const inner: JobScope = { job, chain: Promise.resolve() };
+    const work = outer.chain.then(() => jobScope().run(inner, () => run(job.progress)));
+    outer.chain = work.catch(() => {});
+    const riding = () => readSyncJob(job.id, job.dir) ?? patchJob(job.dir, job.id, {});
+    try {
+      const { result } = await work;
+      return { job: riding(), result, error: null };
+    } catch (e) {
+      return { job: riding(), result: null, error: e as Error };
+    }
+  }
+
   const dir = opts.dir ?? dataDir();
   let settle: (v: { result: T } | { error: Error }) => void = () => {};
   const finished = new Promise<{ result: T } | { error: Error }>((resolve) => {

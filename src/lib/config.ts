@@ -73,6 +73,31 @@ export interface ChannelsConfig {
   replies?: Record<string, ChannelReplyPrefs>; // per-channel reply behaviour, keyed by channel id
 }
 
+/**
+ * Outbound email — Settings → Channels → Email. ONE transport at a time:
+ *  - "smtp": host + login, send-only (src/lib/mail/smtp.ts).
+ *  - "gmail": the Gmail API on the `gmail_send` OAuth grant. No password lives
+ *    here for it — the tokens sit in `sourceOAuth.gmail_send` like any grant.
+ * The brain is src/lib/mail.ts; nothing else reads these fields.
+ */
+export interface EmailConfig {
+  transport?: "smtp" | "gmail";
+  smtpHost?: string;
+  smtpPort?: number; // 465 = implicit TLS, 587 = STARTTLS
+  /** true = TLS from the first byte (465). false = plain connect, then STARTTLS. */
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  smtpPass?: string;
+  /** The From address. Blank on SMTP falls back to `smtpUser`; Gmail ignores a
+   *  From it does not own and sends as the authorized account. */
+  from?: string;
+  /** Gmail only: ALSO ask for `gmail.readonly`, so replies can be read back. Off
+   *  by default — send-only is the smaller grant. Changing it needs a re-authorize. */
+  captureReplies?: boolean;
+  /** Outcome of the last test send — kept so the card shows it after a reload. */
+  lastTest?: { at: string; to: string; ok: boolean; detail: string };
+}
+
 /** A scheduled OUTBOUND message the app sends YOU on a channel at a local time —
  *  e.g. an 8pm "How was your day?". Set up under Settings → Channels → Notifications;
  *  the in-process scheduler sends each once a day (guard: lastSentDay in the record
@@ -82,6 +107,9 @@ export interface Notification {
   channel: string; // "slack" | "telegram"
   target: string; // channel id, or a user id for a DM
   text: string; // the message body
+  /** "text" sends `text` as is; "recap" treats it as a prompt and sends the
+   *  generated answer. Absent = "text", so every existing row is unchanged. */
+  kind?: "text" | "recap";
   atLocal: string; // "HH:MM" 24h, in the record timezone
   enabled?: boolean; // default true
   lastSentDay?: string; // YYYY-MM-DD (tz) — the once-per-day guard
@@ -208,6 +236,10 @@ export interface AppConfig {
   embedding?: EmbeddingConfig; // embedding model (local default; optional API model + key)
   voice?: VoiceConfig; // live voice session backend + key
   channels?: ChannelsConfig; // Telegram / Slack links
+  email?: EmailConfig; // outbound mail transport (SMTP or Gmail API) — src/lib/mail.ts
+  /** A password-reset link in flight: only the HASH of the emailed token is kept,
+   *  it is single-use, and `expiresAt` kills it. `sentAt` throttles re-sends. */
+  passwordReset?: { hash: string; expiresAt: string; sentAt?: string };
   llmProvider?: string; // legacy single-provider fields (migrated into `providers`)
   llmKey?: string;
   model?: string;
@@ -485,6 +517,18 @@ export interface PublicConfig {
     slackPullChannel: string; // conversation polled on our own schedule ("" = push only)
     replies: Record<string, ChannelReplyPrefs>;
   };
+  /** The mail FORM's stored values — never the password. Live readiness (is the
+   *  Google grant there, can it receive) comes from GET /api/mail, not from here. */
+  email: {
+    transport: "smtp" | "gmail" | "";
+    smtpHost: string;
+    smtpPort: number;
+    smtpSecure: boolean;
+    smtpUser: string;
+    hasPass: string; // masked tail, or ""
+    from: string;
+    captureReplies: boolean;
+  };
   theme: string;
   dataDir: string;
   recordDir: string;
@@ -557,6 +601,16 @@ export function publicConfig(cfg: AppConfig): PublicConfig {
       slackVerified: Boolean(ch?.slackSigningSecret),
       slackPullChannel: ch?.slackPullChannel ?? "",
       replies: ch?.replies ?? {},
+    },
+    email: {
+      transport: cfg.email?.transport ?? "",
+      smtpHost: cfg.email?.smtpHost ?? "",
+      smtpPort: cfg.email?.smtpPort ?? 587,
+      smtpSecure: cfg.email?.smtpSecure ?? false,
+      smtpUser: cfg.email?.smtpUser ?? "",
+      hasPass: maskTail(cfg.email?.smtpPass),
+      from: cfg.email?.from ?? "",
+      captureReplies: Boolean(cfg.email?.captureReplies),
     },
     theme: cfg.theme,
     dataDir: dataDir(),

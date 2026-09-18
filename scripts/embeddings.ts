@@ -19,7 +19,7 @@
  *
  * Nothing is mocked — the embedding model, sqlite-vec, the record, the routes are the
  * real production path, so this fails if any of it breaks. Run: npm run semantic:test
- * (needs `next build`).
+ * (builds its own app into .next-e2e).
  */
 import { spawn } from "child_process";
 import fs from "fs";
@@ -367,7 +367,7 @@ async function main() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (data dir = ${root}, NO AI key)…`);
-  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
+  const server = spawn(process.execPath, [path.join(process.cwd(), process.env.NEXT_DIST_DIR || ".next", "standalone", "server.js")], {
     env: {
       ...process.env,
       PORT: String(port),

@@ -7,7 +7,7 @@ import {
   type RuleTrigger,
 } from "./config";
 import fs from "fs";
-import { channelEnv, getChannelAdapter } from "./channels/registry";
+import { CHANNELS, channelEnv, getChannelAdapter } from "./channels/registry";
 import { localDay } from "./importers/plugin";
 import { localMinutes, parseAtLocal } from "./notifications";
 import { openReadonly } from "./db";
@@ -109,7 +109,7 @@ export function upsertRule(input: RuleInput): Rule {
   const cfg = readConfig();
   if (!cfg) throw new Error("Run setup first.");
   const channel = (input.channel || "").trim().toLowerCase();
-  if (!getChannelAdapter(channel)) throw new Error(`Unknown channel "${input.channel}". Known: slack, telegram.`);
+  if (!getChannelAdapter(channel)) throw new Error(`Unknown channel "${input.channel}". Known: ${CHANNELS.map((c) => c.id).join(", ")}.`);
   const target = (input.target || "").trim();
   if (!target) throw new Error("Missing target (the Slack channel/DM id or Telegram chat id).");
   const when = normalizeTrigger(input.when);
@@ -205,11 +205,18 @@ export function evalThreshold(when: Extract<RuleTrigger, { kind: "threshold" }>,
   return { value, met };
 }
 
-/** Build the message body for a rule's action, spending a token only for `brief`. */
-async function renderAction(then: RuleAction): Promise<string> {
+/** Build the message body for an action, spending a token only for `brief`. The ONE
+ *  renderer for generated messages — a notification's daily recap calls this too. */
+export async function renderAction(then: RuleAction): Promise<string> {
   if (then.kind === "text") return then.text;
   const { composeReply } = await import("./reply");
+  const { modeOf } = await import("./smart-input");
+  // A `//` prompt is a memo to composeReply: it would land in the inbox on every send.
+  if (modeOf(then.prompt.trim()) === "memo") throw new Error('A prompt cannot start with "//" — that saves a memo instead of writing one.');
   const reply = await composeReply({ message: then.prompt, channel: "cli", ai: true });
+  // No key and nothing to ground on: the reply is the "add an AI key" nudge, which
+  // is an error for the row, not a message worth sending every day.
+  if (reply.via === "fallback") throw new Error("Nothing to write from — add an AI key in Settings, or connect a second source.");
   const text = (reply.text || "").trim();
   if (!text) throw new Error("The agent returned an empty brief.");
   return text;

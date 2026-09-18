@@ -254,7 +254,8 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
     const captures = inbox.filter((i) => i.source === adapter.id);
     const n = captures.length;
     const last = n ? captures.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
-    const tail = "messages you send the bot land in your inbox";
+    // Email has no bot and no #channel: it polls Gmail for replies to its own mail.
+    const tail = adapter.pullOnly ? "replies to its emails land in your inbox" : "messages you send the bot land in your inbox";
     // Inbound webhook health: whether the PLATFORM is still calling us, and what we
     // did with the call. Without it, "connected" (a token is stored) was the only
     // signal a channel had — and it stays true while every delivery is refused.
@@ -272,7 +273,7 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
       pushOutcome: push?.outcome ?? null,
       rejectedAt: d.lastRejected?.at ?? null,
       rejectedDetail: d.lastRejected?.detail ?? null,
-      verdict: deliveryVerdict(d, { configured: connected, label: adapter.label }),
+      verdict: deliveryVerdict(d, { configured: connected, label: adapter.label, pullOnly: adapter.pullOnly }),
     };
     // A channel with a conversation configured is ALSO polled on our own schedule.
     // Push is instant but silently dies when the platform disables the subscription;
@@ -280,6 +281,7 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
     // this host — never a cron somewhere else that can quietly stop being paid for.
     const polls = pullable(adapter.id, env);
     const from = pullChannelName(adapter.id, env);
+    const polling = polls ? ` · polling ${adapter.pullOnly ? `Gmail for ${from}` : `#${from}`}` : "";
     // Naming a conversation to poll IS the request to poll it, so the cadence
     // defaults to hourly rather than to "off". A setting that silently does nothing
     // until you also find a dropdown is the same class of bug as the cron that
@@ -291,8 +293,8 @@ function channelRows(cfg: AppConfig | null, dir: string): SourceView[] {
     // row permanently DUE and re-polled the channel on every sweep.
     const lastPull = latestBackfillAt(`channel-pull:${adapter.id}`);
     const detail = n
-      ? `${n} message${n === 1 ? "" : "s"} captured${polls ? ` · polling #${from}` : ""} · ${tail}`
-      : `${connected ? "nothing captured yet" : "not connected"}${polls ? ` · polling #${from}` : ""} · ${tail}`;
+      ? `${n} message${n === 1 ? "" : "s"} captured${polling} · ${tail}`
+      : `${connected ? "nothing captured yet" : "not connected"}${polling} · ${tail}`;
     return {
       id: adapter.id,
       name: adapter.label,

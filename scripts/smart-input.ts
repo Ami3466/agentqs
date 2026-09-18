@@ -17,8 +17,8 @@
  *      coach changes the persona the server answers as.
  *
  * Drives the deployed URL, so it fails if routing, the inbox, /sync, or the skill
- * switch break. Keyless — no AI key required. Run: npm run smart:test  (needs
- * `next build` first).
+ * switch break. Keyless — no AI key required. Run: npm run smart:test
+ * (builds its own app into .next-e2e).
  */
 import { spawn } from "child_process";
 import net from "net";
@@ -132,7 +132,7 @@ async function main() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (data dir = ${root})…`);
-  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
+  const server = spawn(process.execPath, [path.join(process.cwd(), process.env.NEXT_DIST_DIR || ".next", "standalone", "server.js")], {
     env: { ...process.env, PORT: String(port), HOSTNAME: "127.0.0.1", AGENTQS_DATA_DIR: root, SESSION_SECRET: "loop6-ships-when-secret", GITHUB_TOKEN: "" },
     stdio: "ignore",
   });

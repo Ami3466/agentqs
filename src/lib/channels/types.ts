@@ -12,6 +12,7 @@
  * the record, and the grounding are identical across every channel. Pure types +
  * a plain `ChannelEnv` (lifted out of process.env) so adapters stay testable.
  */
+import type { MailStatus } from "../mail";
 
 /** A normalized inbound message, whatever platform it arrived on. */
 export interface InboundMessage {
@@ -61,6 +62,11 @@ export interface ChannelEnv {
   /** Channel to PULL history from (name like "daily-log", or a C…/G… id). Unset
    *  → Slack is push-only. */
   slackPullChannel?: string;
+  // Email — no token of its own: it rides the mail transport (src/lib/mail.ts).
+  /** The transport's status. `null` = none on this side (the env-only view);
+   *  left undefined, the adapter asks `mailStatus()` itself. */
+  mail?: MailStatus | null;
+  gmailApiBase?: string; // default https://gmail.googleapis.com
   fetchImpl?: typeof fetch; // injectable for tests
 }
 
@@ -90,9 +96,28 @@ export interface ChannelStatus {
   reason: string; // why it's disabled (empty when enabled)
 }
 
+/** What a channel's outbound `target` is, in the user's words — every picker (rules,
+ *  notifications, CLI help) reads this, so a new channel never needs a UI edit. */
+export interface ChannelTarget {
+  hint: string; // "Slack channel/DM id (C0…/U0…)"
+  example: string; // placeholder: "C0123456789"
+}
+
+/** A channel as a picker sees it. */
+export interface ChannelOption extends ChannelTarget {
+  id: string;
+  label: string;
+}
+
 export interface ChannelAdapter {
   id: string;
   label: string;
+  target: ChannelTarget;
+  /** No webhook at all (email): the poll is the ONLY way a message arrives, so it
+   *  does the webhook's whole job — `landCapture` per message (auto-structure
+   *  included) and the AI reply. A channel with a webhook leaves this unset: its
+   *  poll is a safety net that only collects. */
+  pullOnly?: boolean;
   /** Capability probe for the UI/CLI — is this channel wired up? */
   describe(env: ChannelEnv): ChannelStatus;
   /** True when the outbound token is set (so the bot can reply). */

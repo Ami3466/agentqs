@@ -15,6 +15,7 @@ import {
   GitHub,
   GoogleDrive,
   Key,
+  Mail,
   Mic,
   Moon,
   Plus,
@@ -34,7 +35,7 @@ import {
   Wand,
 } from "@/components/icons";
 import { CRON_CMD, CliRow, CopyRow, KeyRow, PH, SYNC_CMD, fixPromptSnip, mcpSnip, skillSnip } from "@/components/connect-api";
-import { Badge, Button, Card, Checkbox, Field, Input, Select, Switch, cn } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, Field, Input, Segmented, Select, Switch, cn } from "@/components/ui";
 import { API_CATALOG } from "@/lib/api-catalog";
 import { PROVIDER_TYPES, defaultBaseFor, providerTypeOf } from "@/lib/models";
 import { ago } from "@/lib/sources";
@@ -170,14 +171,22 @@ function tabForHash(hash: string): string | null {
  * so it stays right as the world's timezones change; the fallback is only for a runtime
  * old enough not to have it, and still covers the zones people actually live in.
  */
-const TIMEZONES: string[] = (() => {
+function browserTimezones(): string[] | null {
   try {
     const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
     if (supported) return supported("timeZone");
   } catch {
     /* fall through */
   }
-  return [
+  return null;
+}
+
+/**
+ * Also the list the server and the first client render both use: Node's ICU and the
+ * browser's ship different zone sets, so reading the live list during render breaks
+ * hydration. The picker widens to `browserTimezones()` once mounted.
+ */
+const FALLBACK_TIMEZONES: string[] = [
     "UTC",
     "Europe/London",
     "Europe/Berlin",
@@ -193,8 +202,7 @@ const TIMEZONES: string[] = (() => {
     "America/Denver",
     "America/Los_Angeles",
     "America/Sao_Paulo",
-  ];
-})();
+];
 
 function Section({
   id,
@@ -375,6 +383,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   const [replies, setReplies] = useState<Record<string, ChannelReplyPrefs>>({
     telegram: { ai: true, ...config.channels.replies.telegram },
     slack: { ai: true, ...config.channels.replies.slack },
+    email: { ai: true, ...config.channels.replies.email },
   });
   const [origin, setOrigin] = useState("");
   // Slack's create-from-manifest path sets the scopes, the events AND the request
@@ -415,6 +424,14 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
   useEffect(() => {
     if (typeof window !== "undefined") setOrigin(window.location.origin);
   }, []);
+  const [zones, setZones] = useState(FALLBACK_TIMEZONES);
+  useEffect(() => {
+    const live = browserTimezones();
+    if (live) setZones(live);
+  }, []);
+  // The chosen zone is always an option, or the select would jump to "Automatic"
+  // before the live list lands (or for a zone this browser does not know).
+  const timezoneOptions = !timezone || zones.includes(timezone) ? zones : [timezone, ...zones];
 
   const loadBackup = () =>
     fetch("/api/backup")
@@ -967,7 +984,7 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
           >
             <Select id="timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)}>
               <option value="">Automatic ({config.timezoneResolved})</option>
-              {TIMEZONES.map((tz) => (
+              {timezoneOptions.map((tz) => (
                 <option key={tz} value={tz}>
                   {tz}
                 </option>
@@ -1335,6 +1352,13 @@ export function SettingsForm({ config }: { config: PublicConfig }) {
         ]}
         prefs={replies.slack}
         onPrefs={(up) => patchReplies("slack", up)}
+        skills={skills}
+        providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
+      />
+      <EmailPanel
+        initial={config.email}
+        prefs={replies.email}
+        onPrefs={(up) => patchReplies("email", up)}
         skills={skills}
         providers={keyedProviders.map((p) => ({ id: p.id, label: p.label || providerTypeOf(p.type)?.label || p.type }))}
       />
@@ -2008,7 +2032,6 @@ function ChannelCard({
   const [guideOpen, setGuideOpen] = useState(!linked);
   const [copied, setCopied] = useState(false);
   const [copiedManifest, setCopiedManifest] = useState(false);
-  const ai = prefs.ai !== false;
 
   function copyWebhook() {
     navigator.clipboard?.writeText(webhook);
@@ -2170,71 +2193,136 @@ function ChannelCard({
         </Field>
       </div>
 
-      <div className="border-t border-border pt-4">
-        <p className="mb-1.5 text-sm font-medium text-fg">Replies</p>
-        <div className="grid max-w-xs grid-cols-2 gap-2">
-          {([
-            { value: true, label: "AI replies", hint: "grounded chat" },
-            { value: false, label: "Log only", hint: "no AI, no tokens" },
-          ] as const).map((opt) => (
-            <button
-              key={String(opt.value)}
-              type="button"
-              onClick={() => onPrefs({ ai: opt.value })}
-              className={cn(
-                "rounded-lg border px-3 py-2 text-left transition-colors",
-                ai === opt.value ? "border-accent bg-accent/10" : "border-border bg-card hover:bg-muted",
-              )}
-            >
-              <span className="block text-sm font-medium text-fg">{opt.label}</span>
-              <span className="block text-[11px] text-muted-fg">{opt.hint}</span>
-            </button>
-          ))}
-        </div>
-        {ai ? (
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Field label="Skill">
-              <Select value={prefs.skill ?? ""} onChange={(e) => onPrefs({ skill: e.target.value || undefined })}>
-                <option value="">Default</option>
-                {skills.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Model — provider">
-              <Select
-                value={prefs.providerId ?? ""}
-                onChange={(e) => onPrefs({ providerId: e.target.value || undefined, model: undefined })}
-              >
-                <option value="">App default</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            {prefs.providerId ? (
-              <Field label="Model — id">
-                <Input
-                  value={prefs.model ?? ""}
-                  onChange={(e) => onPrefs({ model: e.target.value || undefined })}
-                  placeholder="provider default"
-                  className="font-mono text-[13px]"
-                />
-              </Field>
-            ) : null}
-          </div>
-        ) : (
-          <p className="mt-2 text-xs text-muted-fg">
-            Every message lands in your inbox as a memo — structure it later from the Pipeline tab.
-          </p>
-        )}
-      </div>
+      <ChannelReplies prefs={prefs} onPrefs={onPrefs} skills={skills} providers={providers} />
       </div>
     </Section>
+  );
+}
+
+/** How a channel answers — AI replies vs log-only, persona, model. ONE block, shared
+ *  by every channel card (ChannelCard and the Email card), so a fourth channel does
+ *  not grow a second copy of it. */
+function ChannelReplies({
+  prefs,
+  onPrefs,
+  skills,
+  providers,
+}: {
+  prefs: ChannelReplyPrefs;
+  onPrefs: (up: Partial<ChannelReplyPrefs>) => void;
+  skills: Skill[];
+  providers: { id: string; label: string }[];
+}) {
+  const ai = prefs.ai !== false;
+  return (
+    <div className="border-t border-border pt-4">
+      <p className="mb-1.5 text-sm font-medium text-fg">Replies</p>
+      <div className="grid max-w-xs grid-cols-2 gap-2">
+        {([
+          { value: true, label: "AI replies", hint: "grounded chat" },
+          { value: false, label: "Log only", hint: "no AI, no tokens" },
+        ] as const).map((opt) => (
+          <button
+            key={String(opt.value)}
+            type="button"
+            onClick={() => onPrefs({ ai: opt.value })}
+            className={cn(
+              "rounded-lg border px-3 py-2 text-left transition-colors",
+              ai === opt.value ? "border-accent bg-accent/10" : "border-border bg-card hover:bg-muted",
+            )}
+          >
+            <span className="block text-sm font-medium text-fg">{opt.label}</span>
+            <span className="block text-[11px] text-muted-fg">{opt.hint}</span>
+          </button>
+        ))}
+      </div>
+      {ai ? (
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field label="Skill">
+            <Select value={prefs.skill ?? ""} onChange={(e) => onPrefs({ skill: e.target.value || undefined })}>
+              <option value="">Default</option>
+              {skills.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Model — provider">
+            <Select
+              value={prefs.providerId ?? ""}
+              onChange={(e) => onPrefs({ providerId: e.target.value || undefined, model: undefined })}
+            >
+              <option value="">App default</option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {prefs.providerId ? (
+            <Field label="Model — id">
+              <Input
+                value={prefs.model ?? ""}
+                onChange={(e) => onPrefs({ model: e.target.value || undefined })}
+                placeholder="provider default"
+                className="font-mono text-[13px]"
+              />
+            </Field>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-muted-fg">
+          Every message lands in your inbox as a memo — structure it later from the Pipeline tab.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A channel as the registry describes it (`channelOptions`), so a new channel
+ *  shows up in every picker with no edit here. */
+interface ChannelOptionUi {
+  id: string;
+  label: string;
+  hint: string;
+  example: string;
+}
+
+/** Where a rule / notification goes: the channel, and a target whose hint and
+ *  placeholder follow the channel picked. */
+function ChannelTargetFields({
+  channels,
+  channel,
+  onChannel,
+  target,
+  onTarget,
+}: {
+  channels: ChannelOptionUi[];
+  channel: string;
+  onChannel: (v: string) => void;
+  target: string;
+  onTarget: (v: string) => void;
+}) {
+  const picked = channels.find((c) => c.id === channel);
+  return (
+    <>
+      <Field label="Channel">
+        <Select value={channel} onChange={(e) => onChannel(e.target.value)}>
+          {/* Keep the current value selectable until the list has loaded. */}
+          {picked ? null : <option value={channel}>{channel}</option>}
+          {channels.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field label="Target" hint={picked?.hint}>
+        <Input value={target} onChange={(e) => onTarget(e.target.value)} placeholder={picked?.example} className="font-mono" />
+      </Field>
+    </>
   );
 }
 
@@ -2243,6 +2331,7 @@ interface NotificationRow {
   channel: string;
   target: string;
   text: string;
+  kind?: "text" | "recap";
   atLocal: string;
   enabled?: boolean;
   lastSentDay?: string;
@@ -2281,6 +2370,7 @@ function describeRuleRow(r: RuleRow): { when: string; then: string } {
  */
 function RulesPanel({ tzResolved }: { tzResolved: string }) {
   const [rows, setRows] = useState<RuleRow[]>([]);
+  const [channels, setChannels] = useState<ChannelOptionUi[]>([]);
   const [channel, setChannel] = useState("slack");
   const [target, setTarget] = useState("");
   const [whenKind, setWhenKind] = useState<"time" | "threshold">("time");
@@ -2299,7 +2389,10 @@ function RulesPanel({ tzResolved }: { tzResolved: string }) {
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/rules", { cache: "no-store" });
-      if (res.ok) setRows(((await res.json()).rules as RuleRow[]) ?? []);
+      if (!res.ok) return;
+      const body = await res.json();
+      setRows((body.rules as RuleRow[]) ?? []);
+      setChannels((body.channels as ChannelOptionUi[]) ?? []);
     } catch {
       /* keep the last-known list */
     }
@@ -2442,15 +2535,7 @@ function RulesPanel({ tzResolved }: { tzResolved: string }) {
 
         {/* WHERE */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Channel">
-            <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
-              <option value="slack">Slack</option>
-              <option value="telegram">Telegram</option>
-            </Select>
-          </Field>
-          <Field label="Target" hint="Slack channel/DM id (C0…/U0…) or Telegram chat id">
-            <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="C0123456789" className="font-mono" />
-          </Field>
+          <ChannelTargetFields channels={channels} channel={channel} onChannel={setChannel} target={target} onTarget={setTarget} />
         </div>
 
         <div className="flex items-center gap-3">
@@ -2508,11 +2593,337 @@ function RulesPanel({ tzResolved }: { tzResolved: string }) {
  * local time (e.g. 8pm "How was your day?"). Set a time + message, add as many as
  * you like. The list is derived from GET /api/notifications so it survives reload.
  */
+/** What GET /api/mail answers — `mailStatus()` in src/lib/mail.ts. */
+interface MailStatusView {
+  transport: "smtp" | "gmail" | null;
+  from: string;
+  ready: boolean;
+  reason: string;
+  canReceive: boolean;
+  googleApp: boolean;
+  authorized: boolean;
+  lastTest: { at: string; to: string; ok: boolean; detail: string } | null;
+}
+
+/**
+ * Email — the outbound mail transport, next to Telegram and Slack. SMTP (send-only)
+ * or Google (the separate `gmail_send` grant; replies need its read scope). The
+ * form holds the stored fields; everything LIVE — ready, authorized, the last test —
+ * is read from GET /api/mail, so it survives a reload and the Google round trip.
+ */
+function EmailPanel({
+  initial,
+  prefs,
+  onPrefs,
+  skills,
+  providers,
+}: {
+  initial: PublicConfig["email"];
+  prefs: ChannelReplyPrefs;
+  onPrefs: (up: Partial<ChannelReplyPrefs>) => void;
+  skills: Skill[];
+  providers: { id: string; label: string }[];
+}) {
+  const [status, setStatus] = useState<MailStatusView | null>(null);
+  const [transport, setTransport] = useState<"smtp" | "gmail">(initial.transport || "smtp");
+  const [host, setHost] = useState(initial.smtpHost);
+  const [port, setPort] = useState(String(initial.smtpPort));
+  const [secure, setSecure] = useState(initial.smtpSecure);
+  const [user, setUser] = useState(initial.smtpUser);
+  const [pass, setPass] = useState("");
+  const [hasPass, setHasPass] = useState(initial.hasPass);
+  const [from, setFrom] = useState(initial.from);
+  const [replies, setReplies] = useState(initial.captureReplies);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState("");
+  const [flash, setFlash] = useState("");
+  const [oauthError, setOauthError] = useState("");
+
+  // Quiet by design: updates the data in place, never unmounts the card.
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/mail", { cache: "no-store" });
+      if (res.ok) setStatus((await res.json()) as MailStatusView);
+    } catch {
+      /* keep the last-known state */
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+    // Back from Google: the callback lands here with the outcome in the query.
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("source") === "gmail_send") {
+      setTransport("gmail");
+      setOauthError(q.get("oauth_error") ?? "");
+    }
+  }, [load]);
+
+  function note(m: string) {
+    setFlash(m);
+    setTimeout(() => setFlash(""), 2500);
+  }
+
+  async function save(): Promise<boolean> {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: { transport, smtpHost: host, smtpPort: Number(port), smtpSecure: secure, smtpUser: user, smtpPass: pass, from, captureReplies: replies },
+        // This card has its own Save, so the reply prefs ride it (merged per channel).
+        channels: { replies: { email: prefs } },
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      note(body.error || "Could not save.");
+      return false;
+    }
+    if (pass) setHasPass(`••••••••${pass.slice(-4)}`); // the same mask publicConfig() hands out
+    setPass("");
+    await load();
+    return true;
+  }
+
+  async function onSave() {
+    setBusy("save");
+    try {
+      if (await save()) note("Saved.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function authorize() {
+    setBusy("auth");
+    try {
+      const useGoogle = Boolean(status?.googleApp) && !clientId.trim();
+      const res = await fetch("/api/mail", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "connect", useGoogle, captureReplies: replies, clientId, clientSecret, origin: window.location.origin }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.authorizeUrl) return note(body.error || "Could not start the Google sign-in.");
+      window.location.href = body.authorizeUrl as string;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function test() {
+    setBusy("test");
+    try {
+      // Test what is on screen, not what was saved last week.
+      if (!(await save())) return;
+      const res = await fetch("/api/mail", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "test", to: to.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (body.status) setStatus(body.status as MailStatusView);
+      else await load();
+      note(res.ok ? "Sent — check the inbox." : "Send failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const ready = Boolean(status?.ready);
+  const last = status?.lastTest ?? null;
+  const scopeLine = !status?.authorized
+    ? "Not authorized"
+    : status.canReceive
+      ? "Authorized · send + read replies"
+      : "Authorized · send only";
+  const problem = oauthError || (status && status.transport === transport ? status.reason : "");
+
+  return (
+    <Section
+      id="email"
+      title="Email"
+      icon={Mail}
+      desc="Lets agentqs email you — over SMTP, or as your Google account."
+      action={
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+            ready ? "border-accent/40 bg-accent/10 text-accent" : "border-border bg-muted text-muted-fg",
+          )}
+          title={status?.reason || undefined}
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full", ready ? "bg-accent" : "bg-muted-fg/50")} aria-hidden />
+          {ready ? `Ready · ${status?.transport === "gmail" ? "Google" : "SMTP"}` : "Not set up"}
+        </span>
+      }
+    >
+      <div className="space-y-4">
+        {problem ? (
+          <p
+            title={problem}
+            className={cn(
+              "truncate rounded-lg border px-3 py-2 text-xs",
+              oauthError ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-warning/30 bg-warning/10 text-warning",
+            )}
+          >
+            {problem}
+          </p>
+        ) : null}
+
+        <Segmented
+          aria-label="Mail transport"
+          size="sm"
+          className="w-fit"
+          value={transport}
+          onChange={setTransport}
+          options={[
+            { value: "smtp", label: "SMTP" },
+            { value: "gmail", label: "Google" },
+          ]}
+        />
+
+        {transport === "smtp" ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Host">
+              <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="smtp.fastmail.com" className="font-mono" />
+            </Field>
+            <Field label="Port">
+              <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" placeholder="587" className="font-mono" />
+            </Field>
+            <Field label="Security">
+              <Select
+                value={secure ? "tls" : "starttls"}
+                title="STARTTLS upgrades a plain connection (587). TLS is encrypted from the first byte (465). A password is never sent unencrypted."
+                onChange={(e) => {
+                  const tlsOn = e.target.value === "tls";
+                  setSecure(tlsOn);
+                  // Follow the security mode only while the port is still a default.
+                  if (port === "587" || port === "465" || !port) setPort(tlsOn ? "465" : "587");
+                }}
+              >
+                <option value="starttls">STARTTLS (587)</option>
+                <option value="tls">TLS (465)</option>
+              </Select>
+            </Field>
+            <Field label="Username">
+              <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="you@example.com" autoComplete="off" />
+            </Field>
+            <Field label="Password" hint={hasPass ? "Saved. Enter a new one to replace it." : undefined}>
+              <Input
+                type="password"
+                value={pass}
+                onChange={(e) => setPass(e.target.value)}
+                placeholder={hasPass || "app password"}
+                autoComplete="new-password"
+                className="font-mono"
+              />
+            </Field>
+            <Field label="From">
+              <Input value={from} onChange={(e) => setFrom(e.target.value)} placeholder="blank = the username" title="The address mail is sent from. Blank uses the username." />
+            </Field>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {status && !status.googleApp ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Client ID">
+                  <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="….apps.googleusercontent.com" className="font-mono" />
+                </Field>
+                <Field label="Client secret">
+                  <Input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="GOCSPX-…" className="font-mono" />
+                </Field>
+              </div>
+            ) : null}
+            <Checkbox
+              label="Capture replies"
+              hint="Also asks Google for read access. Changing it needs a new Authorize."
+              checked={replies}
+              onChange={setReplies}
+            />
+            <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-sm text-fg" title={scopeLine}>
+                {scopeLine}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                onClick={authorize}
+                disabled={busy === "auth" || (!status?.googleApp && (!clientId.trim() || !clientSecret.trim()))}
+                title={
+                  status?.googleApp
+                    ? "Reuses the Google key you already saved for Calendar or Gmail. Sending is its own permission, asked for separately."
+                    : "Opens Google to grant permission to send mail as you."
+                }
+              >
+                {busy === "auth" ? <Spinner width={14} height={14} /> : null}
+                {status?.googleApp ? "Use my Google account" : "Authorize"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Input
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder="send a test to… you@example.com"
+            className="min-w-0 flex-1"
+            aria-label="Test recipient"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="shrink-0"
+            onClick={test}
+            disabled={busy === "test" || !to.trim()}
+            title="Saves what is on screen, then sends a real message."
+          >
+            {busy === "test" ? <Spinner width={14} height={14} /> : <Send width={14} height={14} />}
+            Test
+          </Button>
+          <Button type="button" size="sm" className="shrink-0" onClick={onSave} disabled={busy === "save"}>
+            {busy === "save" ? <Spinner width={14} height={14} /> : null}
+            Save
+          </Button>
+        </div>
+
+        {last || flash ? (
+          <div className="flex items-center gap-2 text-xs">
+            {last ? (
+              <>
+                <Badge tone={last.ok ? "accent" : "warning"}>{last.ok ? "Sent" : "Failed"}</Badge>
+                <span className="min-w-0 flex-1 truncate text-muted-fg" title={`${last.to} · ${last.detail}`}>
+                  {last.to} · {ago(last.at)} · {last.detail}
+                </span>
+              </>
+            ) : (
+              <span className="min-w-0 flex-1" />
+            )}
+            {flash ? <span className="shrink-0 text-muted-fg">{flash}</span> : null}
+          </div>
+        ) : null}
+
+        {/* Only where a reply can actually arrive: Gmail with read access. */}
+        {status?.canReceive ? <ChannelReplies prefs={prefs} onPrefs={onPrefs} skills={skills} providers={providers} /> : null}
+
+        <CliRow code="agentqs mail test --to you@example.com" title="The same test from a terminal. `agentqs mail status` shows the transport and whether replies can be read." />
+      </div>
+    </Section>
+  );
+}
+
 function NotificationsPanel({ tzResolved }: { tzResolved: string }) {
   const [rows, setRows] = useState<NotificationRow[]>([]);
+  const [channels, setChannels] = useState<ChannelOptionUi[]>([]);
   const [channel, setChannel] = useState("slack");
   const [target, setTarget] = useState("");
+  const [kind, setKind] = useState<"text" | "recap">("text");
   const [text, setText] = useState("How was your day?");
+  const [prompt, setPrompt] = useState(""); // empty = the server's default recap prompt
   const [at, setAt] = useState("20:00");
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState("");
@@ -2521,7 +2932,10 @@ function NotificationsPanel({ tzResolved }: { tzResolved: string }) {
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/notifications", { cache: "no-store" });
-      if (res.ok) setRows(((await res.json()).notifications as NotificationRow[]) ?? []);
+      if (!res.ok) return;
+      const body = await res.json();
+      setRows((body.notifications as NotificationRow[]) ?? []);
+      setChannels((body.channels as ChannelOptionUi[]) ?? []);
     } catch {
       /* keep the last-known list */
     }
@@ -2541,7 +2955,7 @@ function NotificationsPanel({ tzResolved }: { tzResolved: string }) {
       const res = await fetch("/api/notifications", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ channel, target: target.trim(), text: text.trim(), atLocal: at }),
+        body: JSON.stringify({ channel, target: target.trim(), kind, text: (kind === "recap" ? prompt : text).trim(), atLocal: at }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) return note(body.error || "Could not save.");
@@ -2585,29 +2999,42 @@ function NotificationsPanel({ tzResolved }: { tzResolved: string }) {
     <Section
       title="Notifications"
       icon={Send}
-      desc="A message the app sends YOU on a channel each day at a local time — e.g. an 8pm “How was your day?”. Your reply lands in your record like any other."
+      desc="A message the app sends YOU on a channel each day at a local time — an 8pm “How was your day?”, or a recap written from your record. Your reply lands in your record like any other."
       action={rows.length ? <Badge>{rows.length}</Badge> : undefined}
     >
       <div className="space-y-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Channel">
-            <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
-              <option value="slack">Slack</option>
-              <option value="telegram">Telegram</option>
-            </Select>
-          </Field>
-          <Field label="Target" hint="Slack channel/DM id (C0…/U0…) or Telegram chat id">
-            <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="C0123456789" className="font-mono" />
-          </Field>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <ChannelTargetFields channels={channels} channel={channel} onChannel={setChannel} target={target} onTarget={setTarget} />
           <Field label={`Time (${tzResolved})`}>
             <Input type="time" value={at} onChange={(e) => setAt(e.target.value)} />
           </Field>
-          <Field label="Message">
-            <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="How was your day?" />
+          <Field label="Send">
+            <Select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as "text" | "recap")}
+              title="Message: the same line every day. Recap: written from your record when it sends (uses your AI key)."
+            >
+              <option value="text">Message</option>
+              <option value="recap">Recap</option>
+            </Select>
           </Field>
+          {kind === "text" ? (
+            <Field label="Message">
+              <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="How was your day?" />
+            </Field>
+          ) : (
+            <Field label="Prompt">
+              <Input
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Default recap"
+                title="What to ask your record. Leave empty for the default recap."
+              />
+            </Field>
+          )}
         </div>
         <div className="flex items-center gap-3">
-          <Button onClick={save} disabled={busy || !target.trim() || !text.trim()}>
+          <Button onClick={save} disabled={busy || !target.trim() || (kind === "text" && !text.trim())}>
             {busy ? <Spinner width={14} height={14} className="animate-spin" /> : <Plus width={14} height={14} />}
             Add notification
           </Button>
@@ -2628,13 +3055,14 @@ function NotificationsPanel({ tzResolved }: { tzResolved: string }) {
                 <div
                   className="min-w-0 flex-1 truncate text-[13px] text-fg"
                   title={
-                    `${n.atLocal} · ${n.channel} → ${n.target}\n${n.text}` +
+                    `${n.atLocal} · ${n.channel} → ${n.target}\n${n.kind === "recap" ? "Recap prompt: " : ""}${n.text}` +
                     (n.lastSentDay ? `\nLast sent: ${n.lastSentDay}` : "") +
                     (n.lastError ? `\nError: ${n.lastError}` : "")
                   }
                 >
                   <span className="font-mono tabular-nums text-muted-fg">{n.atLocal}</span>{" "}
-                  <span className="text-muted-fg">{n.channel}→{n.target}</span> {n.text}
+                  <span className="text-muted-fg">{n.channel}→{n.target}</span>{" "}
+                  {n.kind === "recap" ? <Badge>recap</Badge> : null} {n.text}
                   {n.lastError ? <span className="text-red-500"> · error</span> : null}
                 </div>
                 <Button variant="ghost" onClick={() => test(n.id)} disabled={testing === n.id} className="shrink-0">

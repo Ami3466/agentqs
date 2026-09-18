@@ -144,9 +144,20 @@ export function lastPushDelivery(state: ChannelDeliveryState): DeliveryRecord | 
  */
 export function deliveryVerdict(
   state: ChannelDeliveryState,
-  opts: { configured: boolean; label: string; webhookUrl?: string },
+  opts: { configured: boolean; label: string; webhookUrl?: string; pullOnly?: boolean },
 ): { tone: "ok" | "warn" | "error"; text: string } {
   const { configured, label } = opts;
+  // A channel with NO webhook (email) has no bot token and no subscription to
+  // check, so "only arriving by poll" is its healthy state, not a warning. Only a
+  // failed POLL is news — a stray POST at its (non-existent) webhook is not.
+  const pollFailed = state.last?.outcome === "rejected" && (state.last.via ?? "push") === "pull";
+  if (opts.pullOnly && !configured) return { tone: "warn", text: `${label} is not set up yet — nothing can be sent.` };
+  if (opts.pullOnly && !pollFailed) {
+    return {
+      tone: "ok",
+      text: state.last ? `Last poll of ${label}: ${state.last.outcome}.` : `No ${label} reply captured yet — replies are collected by polling.`,
+    };
+  }
   if (!configured) {
     return { tone: "warn", text: `${label} has no bot token yet — nothing can arrive.` };
   }
@@ -165,7 +176,7 @@ export function deliveryVerdict(
   // A refused PUSH is the classic silent killer: the platform is still calling and
   // we are refusing every call. It outranks everything, including a poll that is
   // quietly making up the difference — that poll is why nobody notices.
-  if (push?.outcome === "rejected") {
+  if (push?.outcome === "rejected" && !opts.pullOnly) {
     return {
       tone: "error",
       text: `${label} delivered a message and this app REFUSED it — ${why(push)}. Nothing will be captured until that is fixed.`,

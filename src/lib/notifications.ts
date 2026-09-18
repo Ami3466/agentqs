@@ -1,20 +1,29 @@
 import { readConfig, recordTimeZone, writeConfig, type Notification } from "./config";
-import { channelEnv, getChannelAdapter } from "./channels/registry";
+import { CHANNELS, channelEnv, getChannelAdapter } from "./channels/registry";
 import { localDay } from "./importers/plugin";
 
 /**
  * Scheduled outbound notifications — a daily message the app sends YOU on a channel
- * (Slack/Telegram) at a local time, the classic case being an 8pm "how was your
- * day?". Data going OUT, so it touches no daily rows; your reply rides the normal
- * inbound channel path into your record. The Settings panel and the /api route are
- * thin faces over this; the in-process scheduler calls `sweepNotifications`.
+ * (Slack/Telegram/email) at a local time, the classic case being an 8pm "how was your
+ * day?". `kind: "recap"` sends a generated recap of the record instead of a fixed
+ * line. Data going OUT, so it touches no daily rows; your reply rides the normal
+ * inbound channel path into your record. The Settings panel, /api/notifications, the
+ * CLI and the MCP tools are thin faces over this (via cli-core); the in-process
+ * scheduler calls `sweepNotifications`.
  */
+
+export const NOTIFICATION_KINDS = ["text", "recap"] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+/** What a recap asks the grounded agent when the row carries no prompt of its own. */
+export const DEFAULT_RECAP_PROMPT = "Recap my day from my record: what stood out, and one thing to do tomorrow?";
 
 export interface NotificationInput {
   id?: string;
   channel: string;
   target: string;
-  text: string;
+  text?: string; // the message, or the prompt for a recap (optional there)
+  kind?: NotificationKind; // default "text"
   atLocal: string;
   enabled?: boolean;
 }
@@ -70,10 +79,12 @@ export function upsertNotification(input: NotificationInput): Notification {
   const cfg = readConfig();
   if (!cfg) throw new Error("Run setup first.");
   const channel = (input.channel || "").trim().toLowerCase();
-  if (!getChannelAdapter(channel)) throw new Error(`Unknown channel "${input.channel}". Known: slack, telegram.`);
+  if (!getChannelAdapter(channel)) throw new Error(`Unknown channel "${input.channel}". Known: ${CHANNELS.map((c) => c.id).join(", ")}.`);
   const target = (input.target || "").trim();
-  if (!target) throw new Error("Missing target (the Slack channel/DM id or Telegram chat id).");
-  const text = (input.text || "").trim();
+  if (!target) throw new Error("Missing target (the Slack channel/DM id, Telegram chat id, or email address).");
+  const kind = input.kind ?? "text";
+  if (!NOTIFICATION_KINDS.includes(kind)) throw new Error(`Unknown kind "${input.kind}". Known: ${NOTIFICATION_KINDS.join(", ")}.`);
+  const text = (input.text || "").trim() || (kind === "recap" ? DEFAULT_RECAP_PROMPT : "");
   if (!text) throw new Error("Missing message text.");
   const atLocal = normalizeAtLocal(input.atLocal);
   const id = slugify(input.id || `${channel}-${atLocal.replace(":", "")}`);
@@ -86,6 +97,7 @@ export function upsertNotification(input: NotificationInput): Notification {
     channel,
     target,
     text,
+    ...(kind === "recap" ? { kind } : {}), // absent = "text", same as every older row
     atLocal,
     enabled: input.enabled ?? existing?.enabled ?? true,
     // Re-arm today if the destination or time changed.
@@ -133,7 +145,10 @@ async function send(n: Notification, now: Date, stampDay: boolean): Promise<void
     throw new Error(why);
   }
   try {
-    await adapter.send(env, n.target, n.text);
+    // One renderer for every generated message: a recap is a rule's `brief`.
+    const { renderAction } = await import("./rules");
+    const body = await renderAction(n.kind === "recap" ? { kind: "brief", prompt: n.text } : { kind: "text", text: n.text });
+    await adapter.send(env, n.target, body);
   } catch (e) {
     stamp(n.id, { lastError: (e as Error).message });
     throw e;

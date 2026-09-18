@@ -76,7 +76,7 @@ export async function GET(req: Request, { params }: { params: { channel: string 
   return NextResponse.json({
     ...status,
     deliveries,
-    verdict: deliveryVerdict(deliveries, { configured: status.enabled, label: status.label }),
+    verdict: deliveryVerdict(deliveries, { configured: status.enabled, label: status.label, pullOnly: adapter.pullOnly }),
   });
 }
 

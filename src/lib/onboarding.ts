@@ -50,7 +50,11 @@ export function onboardingGuide(): OnboardingGuide {
   // it was stored (an OAuth grant OR a pasted token). Backups move data out; the
   // pipeline brings it in. Asking the plugin beats listing ids by hand: the next
   // backup target inherits the rule instead of silently ticking this step.
-  const isBackupCred = (key: string) => Boolean(pluginInstanceById(key)?.plugin.backupTarget);
+  // A mail transport (Gmail send) is the same animal: data going out.
+  const isBackupCred = (key: string) => {
+    const p = pluginInstanceById(key)?.plugin;
+    return Boolean(p?.backupTarget || p?.mailTransport);
+  };
   // A GRANT ONLY COUNTS IF IT HOLDS A TOKEN. `Object.keys(sourceOAuth)` counted an entry
   // that holds nothing but a clientId + clientSecret — the APP KEY, saved once, before
   // anyone ever signed in. (That is the exact state of the author's own Spotify: key

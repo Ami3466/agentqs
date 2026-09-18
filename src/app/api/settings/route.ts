@@ -163,6 +163,26 @@ export async function POST(req: Request) {
     };
   }
 
+  // Email (the outbound mail transport). Only the fields present are touched, so a
+  // face can save one thing; the password is a secret (blank = keep the stored one).
+  if (body.email && typeof body.email === "object") {
+    const m = body.email as Record<string, unknown>;
+    const prev = cfg.email ?? {};
+    const text = (v: unknown, old: string | undefined) => (typeof v === "string" ? v.replace(/[\r\n]/g, "").trim() : old);
+    const port = Number(m.smtpPort);
+    cfg.email = {
+      ...prev,
+      transport: m.transport === "smtp" || m.transport === "gmail" ? m.transport : m.transport === "" ? undefined : prev.transport,
+      smtpHost: text(m.smtpHost, prev.smtpHost),
+      smtpPort: Number.isInteger(port) && port > 0 && port < 65536 ? port : prev.smtpPort,
+      smtpSecure: typeof m.smtpSecure === "boolean" ? m.smtpSecure : prev.smtpSecure,
+      smtpUser: text(m.smtpUser, prev.smtpUser),
+      smtpPass: keepOrSet(m.smtpPass, prev.smtpPass),
+      from: text(m.from, prev.from),
+      captureReplies: typeof m.captureReplies === "boolean" ? m.captureReplies : prev.captureReplies,
+    };
+  }
+
   // THE ZONE THE RECORD'S DAYS ARE COUNTED IN. Blank = follow this machine's clock,
   // which on a hosted instance is the SERVER's — nothing to do with where the user
   // lives, so their 9pm lands on tomorrow. See localDay in importers/plugin.ts.

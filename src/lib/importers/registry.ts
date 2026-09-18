@@ -22,6 +22,7 @@ import { ynabPlugin } from "./ynab";
 import { readwisePlugin } from "./readwise";
 import { gdriveBackupPlugin } from "./gdrive-backup";
 import { driveImportPlugin } from "./drive-import";
+import { gmailSendPlugin } from "./gmail-send";
 
 /**
  * The single-credential API importer plugins — API-first: every source that ships
@@ -69,13 +70,18 @@ export const PLUGINS: ImporterPlugin[] = [
   // buys it the OAuth dance / token refresh; `credentialOnly` keeps it out of the
   // pipeline. Its data is pulled explicitly (`agentqs drive pull`), never synced.
   driveImportPlugin,
+  // Also NOT a source: Gmail as an outbound MAIL TRANSPORT. Same reason to be here
+  // (the OAuth dance + token refresh), `mailTransport` keeps it out of the pipeline.
+  gmailSendPlugin,
 ];
 
 /** The DATA SOURCES — every plugin except the backup targets and read-only tools.
  *  The pipeline is data coming IN on a schedule; a backup is data going OUT, and a
  *  credential-only tool (Drive import) is read on request. Anything listing, syncing
  *  or scheduling sources iterates THIS, never PLUGINS (which also carries those). */
-export const SOURCE_PLUGINS: ImporterPlugin[] = PLUGINS.filter((p) => !p.backupTarget && !p.credentialOnly);
+export const SOURCE_PLUGINS: ImporterPlugin[] = PLUGINS.filter(
+  (p) => !p.backupTarget && !p.credentialOnly && !p.mailTransport,
+);
 
 export function pluginById(id: string): ImporterPlugin | undefined {
   return PLUGINS.find((p) => p.id === id);

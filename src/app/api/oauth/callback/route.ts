@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/session";
 import { completeOAuth } from "@/lib/oauth";
 import { readConfig } from "@/lib/config";
 import { originOf, requestOrigin } from "@/lib/request-origin";
+import { pluginInstanceById } from "@/lib/importers/registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +12,8 @@ export const dynamic = "force-dynamic";
  *  state nonce, exchanges the code for tokens, and bounces back to Pipeline —
  *  ?connected=1&source=<id> on success (the connect row runs the first sync), or
  *  ?oauth_error=…&source=<id> so the failure shows on the row, never silently.
+ *  A mail transport (`gmail_send`) has no Pipeline row: it goes back to the Email
+ *  card it was started from, Settings → Channels, with the same query.
  *
  *  The bounce origin comes from the proxy headers, or failing that the origin the
  *  dance was started from — NEVER from req.url, which behind a reverse proxy is
@@ -21,7 +24,10 @@ export async function GET(req: Request) {
   // redirect URI is the origin the browser really came through.
   const pending = readConfig()?.oauthPending;
   const origin = requestOrigin(req, originOf(pending?.redirectUri));
-  const back = (query: string) => NextResponse.redirect(new URL(`/pipeline?${query}`, origin));
+  // Decided from the PENDING dance, before completeOAuth clears it.
+  const toMail = Boolean(pluginInstanceById(pending?.instanceId ?? "")?.plugin.mailTransport);
+  const back = (query: string) =>
+    NextResponse.redirect(new URL(toMail ? `/settings?${query}#channels` : `/pipeline?${query}`, origin));
   if (!getCurrentUser()) {
     return NextResponse.redirect(new URL("/login", origin));
   }

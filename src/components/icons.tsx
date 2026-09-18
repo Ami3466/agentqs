@@ -170,6 +170,13 @@ export const Spinner = (p: P) => (
   </svg>
 );
 
+export const Mail = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="m3 7 9 6 9-6" />
+  </svg>
+);
+
 export const Send = (p: P) => (
   <svg {...base} {...p}>
     <path d="M22 2 11 13" />

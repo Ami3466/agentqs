@@ -707,6 +707,10 @@ export async function startMcpServer(): Promise<void> {
     async ({ date, windowDays }) => guard(() => core.photoContext(date, windowDays)),
   );
 
+  // Every channel a rule or a notification can send on, straight from the registry.
+  const channelId = z.enum(core.channelOptions().map((c) => c.id) as [string, ...string[]]);
+  const channelTargets = core.channelOptions().map((c) => `${c.label}: ${c.hint}`).join(" · ");
+
   // ---- agent rules: "when X → message me" ----------------------------------
   const ruleTrigger = z.union([
     z.object({ kind: z.literal("time"), atLocal: z.string().describe("HH:MM 24h, record timezone") }),
@@ -737,8 +741,8 @@ export async function startMcpServer(): Promise<void> {
         "Create/update a rule that messages the user on a channel when a trigger fires. Trigger = a clock time OR a numeric threshold on a daily metric (evaluated with a plain compare, NO AI — e.g. whoop.resting_hr > 55). Action = a fixed text line OR an AI brief (a prompt handed to the grounded agent). Slack/Telegram target is the channel/DM id.",
       inputSchema: {
         id: z.string().optional().describe("omit to derive one; pass to edit an existing rule"),
-        channel: z.enum(["slack", "telegram"]),
-        target: z.string().describe("Slack channel/DM id (C0…/U0…) or Telegram chat id"),
+        channel: channelId,
+        target: z.string().describe(channelTargets),
         when: ruleTrigger,
         then: ruleAction,
         enabled: z.boolean().optional(),
@@ -758,6 +762,66 @@ export async function startMcpServer(): Promise<void> {
     "rule_test",
     { title: "Fire an agent rule now", description: "Send a rule's message immediately, ignoring its trigger and without consuming today's slot — verifies the channel + (for a brief) the agent output.", inputSchema: { id: z.string() } },
     async ({ id }) => guard(() => core.rulesTest(id)),
+  );
+
+  // ---- notifications: a daily message sent TO the user ----------------------
+  server.registerTool(
+    "notifications_list",
+    { title: "List daily notifications", description: "Every scheduled daily message: its local time, channel, kind (a fixed text line or a generated recap), and last-sent / last-error state. Also returns the channels a notification can be sent on.", inputSchema: {} },
+    async () => guard(() => core.notificationsList()),
+  );
+
+  server.registerTool(
+    "notification_upsert",
+    {
+      title: "Add or update a daily notification",
+      description:
+        "Create/update a message sent to the user once a day at a local time (record timezone). kind 'text' sends `text` verbatim (e.g. an 8pm \"How was your day?\"); kind 'recap' treats `text` as a prompt for the grounded agent and sends its answer — omit `text` for the default recap prompt. Their reply rides the normal inbound channel path into the record.",
+      inputSchema: {
+        id: z.string().optional().describe("omit to derive one; pass to edit an existing notification"),
+        channel: channelId,
+        target: z.string().describe(channelTargets),
+        atLocal: z.string().describe("HH:MM 24h, record timezone"),
+        kind: z.enum(["text", "recap"]).optional().describe("default text"),
+        text: z.string().optional().describe("the message (text) or the prompt (recap)"),
+        enabled: z.boolean().optional(),
+      },
+    },
+    async ({ id, channel, target, atLocal, kind, text, enabled }) =>
+      guard(() => core.notificationsUpsert({ id, channel, target, atLocal, kind, text, enabled })),
+  );
+
+  server.registerTool(
+    "notification_remove",
+    { title: "Delete a daily notification", description: "Remove a notification by id.", inputSchema: { id: z.string() } },
+    async ({ id }) => guard(() => core.notificationsRemove(id)),
+  );
+
+  server.registerTool(
+    "notification_test",
+    { title: "Send a daily notification now", description: "Send a notification immediately, ignoring its schedule and without consuming today's slot — verifies the channel + (for a recap) the generated text.", inputSchema: { id: z.string() } },
+    async ({ id }) => guard(() => core.notificationsTest(id)),
+  );
+
+  server.registerTool(
+    "mail_status",
+    {
+      title: "Outbound email status",
+      description:
+        "Which mail transport is set (smtp | gmail), whether it can send right now (`ready`, else `reason`), whether replies can be read back (`canReceive` — Gmail with gmail.readonly only; SMTP is send-only), and the last test outcome. The transport itself is configured by the user in Settings → Channels → Email.",
+      inputSchema: {},
+    },
+    async () => guard(() => core.mailStatus()),
+  );
+
+  server.registerTool(
+    "mail_test",
+    {
+      title: "Send a test email",
+      description: "Send a REAL test message through the configured transport and return its id (and Gmail threadId). Fails with the exact reason when mail is not set up.",
+      inputSchema: { to: z.string().describe("recipient address") },
+    },
+    async ({ to }) => guard(() => core.mailTest(to)),
   );
 
   const transport = new StdioServerTransport();

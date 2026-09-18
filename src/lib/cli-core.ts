@@ -83,7 +83,7 @@ import {
   setDriveImportFolder,
 } from "./drive-import";
 import { pluginInstanceById, SOURCE_PLUGINS } from "./importers/registry";
-import { getChannelAdapter } from "./channels/registry";
+import { channelOptions, getChannelAdapter } from "./channels/registry";
 import { importFile, resolveFilePath } from "./importers/file-plugin";
 import { FILE_IMPORTERS, fileImporterById } from "./importers/files/registry";
 import { sourceBundleById } from "./source-bundles";
@@ -118,6 +118,9 @@ import { runAutomation, type AutomationRunResult } from "./automation-run";
 import type { AutomationCreds, PublicAutomation } from "./automation-types";
 import { composeReply, type ComposedReply } from "./reply";
 import { listRules, removeRule, testRule, upsertRule, type RuleInput } from "./rules";
+import { listNotifications, removeNotification, testNotification, upsertNotification, type NotificationInput } from "./notifications";
+import { beginMailConnect, mailStatus as readMailStatus, testMail } from "./mail";
+import { completePasswordReset, requestPasswordReset, setPassword } from "./password-reset";
 import { listSkills, removeSkill, restoreBuiltinSkills, upsertSkill, isBuiltinSkill, type UpsertSkillInput } from "./skills-store";
 import { isProvider } from "./models";
 import {
@@ -183,11 +186,14 @@ export function query(sql: string, limit = 200): QueryResult {
 
 // ---- agent rules ----------------------------------------------------------
 
+/** Every channel a rule or a notification can send on — the faces' one picker list. */
+export { channelOptions };
+
 /** "When X → message me." X is a clock time or a data threshold (a plain numeric
  *  compare, no AI); the message is a fixed line or an AI brief. The Settings Agent
  *  tab, /api/rules, the CLI and the MCP tool are all thin faces over these four. */
 export function rulesList() {
-  return { rules: listRules() };
+  return { rules: listRules(), channels: channelOptions() };
 }
 export function rulesUpsert(input: RuleInput) {
   return { rule: upsertRule(input), rules: listRules() };
@@ -197,6 +203,59 @@ export function rulesRemove(id: string) {
 }
 export async function rulesTest(id: string) {
   return { ok: true, rule: await testRule(id) };
+}
+
+// ---- notifications ---------------------------------------------------------
+
+/** A daily message sent TO you at a local time: a fixed line, or a recap generated
+ *  from the record. Settings → Channels, /api/notifications, the CLI and the MCP
+ *  tools are all thin faces over these four. */
+export function notificationsList() {
+  return { notifications: listNotifications(), channels: channelOptions() };
+}
+export function notificationsUpsert(input: NotificationInput) {
+  return { notification: upsertNotification(input), notifications: listNotifications() };
+}
+export function notificationsRemove(id: string) {
+  return { ...removeNotification(id), notifications: listNotifications() };
+}
+export async function notificationsTest(id: string) {
+  // The list rides along: a failed render/send lands on the row's lastError.
+  return { ok: true, notification: await testNotification(id), notifications: listNotifications() };
+}
+
+// ---- mail ------------------------------------------------------------------
+
+/** Outbound email (SMTP or the Gmail API). The Settings Email card, /api/mail, the
+ *  CLI and the MCP tools are thin faces over these — the brain is src/lib/mail.ts. */
+export function mailStatus() {
+  return readMailStatus();
+}
+/** Send a REAL message to `to` and remember the outcome (`mailStatus().lastTest`). */
+export async function mailTest(to: string) {
+  if (!to?.trim()) throw new Error("Missing the address to send to.");
+  return testMail(to.trim());
+}
+/** Start the Google authorize dance for sending — returns the URL to open. */
+export function mailConnect(origin: string, opts: Parameters<typeof beginMailConnect>[1] = {}) {
+  return { ok: true, ...beginMailConnect(origin, opts) };
+}
+
+// ---- password recovery -------------------------------------------------------
+
+/** Email a single-use reset link (needs a mail transport — fails with a clear
+ *  message when there is none). The brain is src/lib/password-reset.ts. */
+export async function passwordResetRequest(username: string, origin: string) {
+  return requestPasswordReset(username, origin);
+}
+/** Finish a reset with the emailed token. Rotates the session secret. */
+export function passwordResetComplete(token: string, password: string) {
+  return completePasswordReset(token, password);
+}
+/** `agentqs password --set` — recovery from the machine, no email needed. NOT a
+ *  CONFIG_KEYS entry on purpose: `config set` echoes values, a password never is. */
+export function passwordSet(password: string) {
+  return setPassword(password);
 }
 
 // ---- journal --------------------------------------------------------------
@@ -656,6 +715,9 @@ export function setInterval(id: string, interval: string): { id: string; interva
   }
   if (pluginInstanceById(id)?.plugin.credentialOnly) {
     throw new Error(`${id} is read-on-request, not a scheduled source — pull it with \`agentqs drive pull <file>\`.`);
+  }
+  if (pluginInstanceById(id)?.plugin.mailTransport) {
+    throw new Error(`${id} is a mail transport, not a data source — it has no cadence; it sends when something needs to reach you.`);
   }
   const cfg = requireConfig();
   cfg.sourceIntervals = { ...(cfg.sourceIntervals ?? {}), [id]: interval };
@@ -1164,6 +1226,12 @@ export async function syncSource(opts: SyncSourceOpts): Promise<SyncResult> {
         "(API: POST /api/drive/pull).",
     );
   }
+  if (pluginInstanceById(opts.id)?.plugin.mailTransport) {
+    throw new Error(
+      `${opts.id} is a mail transport, not a data source — send with \`agentqs mail test --to <address>\` ` +
+        '(API: POST /api/mail {"action":"test","to":"…"}).',
+    );
+  }
   // Every attempt lands in the run ledger AND the job ledger — success and failure —
   // so the pipeline report and the Pipeline tab can tell a broken sync from a healthy
   // one, and a later successful scheduler run clears an earlier web failure off the row.
@@ -1430,7 +1498,9 @@ export async function syncAll(days?: number): Promise<{ synced: SyncResult[]; sk
       continue;
     }
     const inst = pluginInstanceById(key);
-    if (inst && inst.plugin.live && !inst.plugin.backupTarget && key !== inst.plugin.id) candidates.push(key);
+    if (inst && inst.plugin.live && !inst.plugin.backupTarget && !inst.plugin.mailTransport && key !== inst.plugin.id) {
+      candidates.push(key);
+    }
   }
   for (const id of candidates) {
     const hasCred =

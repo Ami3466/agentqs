@@ -153,6 +153,14 @@ export interface ImporterPlugin {
    * (`agentqs drive pull`), never on a schedule. Its `fetch()` throws.
    */
   credentialOnly?: boolean;
+  /**
+   * NOT a data source — a MAIL TRANSPORT (Gmail send): data going OUT, one message
+   * at a time. It rides this contract ONLY for the credential machinery, exactly
+   * like a backup target, and is filtered out of SOURCE_PLUGINS the same way. It
+   * has no cadence at all — `sendMail()` (src/lib/mail.ts) runs it when something
+   * needs to reach you. Its face is Settings → Channels → Email. Its `fetch()` throws.
+   */
+  mailTransport?: boolean;
   /** Whether a credential is required to sync (all Tier-1 APIs need one). */
   requiresCredential: boolean;
   credentialLabel: string; // "RescueTime API key" | "OAuth access token"

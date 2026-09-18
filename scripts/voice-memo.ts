@@ -27,7 +27,8 @@
  * The transcriber itself is substituted with a tiny wrapper (like the GitHub test
  * substitutes the network) — everything else (form parsing, the STT dispatch, the
  * inbox write, the rebuild, the route) is the real production path, so this fails
- * if any of it breaks. Run: npm run voice:test  (needs `next build` first).
+ * if any of it breaks. Run: npm run voice:test
+ * (builds its own app into .next-e2e).
  */
 import { spawn, spawnSync } from "child_process";
 import net from "net";
@@ -288,7 +289,7 @@ async function main() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (WHISPER_BIN=node ${path.basename(stub)}, data dir = ${root})…`);
-  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
+  const server = spawn(process.execPath, [path.join(process.cwd(), process.env.NEXT_DIST_DIR || ".next", "standalone", "server.js")], {
     env: {
       ...process.env,
       PORT: String(port),

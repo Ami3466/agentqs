@@ -1184,6 +1184,10 @@ function journalHuman(d: any, wide: boolean): string {
     .join("\n");
 }
 
+// Every channel a rule or a notification can send on, straight from the registry.
+const CHANNEL_NAMES = core.channelOptions().map((c) => c.id).join(" | ");
+const CHANNEL_TARGETS = core.channelOptions().map((c) => c.hint).join(", or ");
+
 // ---- rules ----------------------------------------------------------------
 // "When X → message me." X = a clock time (--at) or a data threshold (--when);
 // the message = a fixed line (--text) or an AI brief (--brief).
@@ -1220,8 +1224,8 @@ rules
 rules
   .command("add")
   .description('add/update a rule: --at HH:MM OR --when "src.metric > N", with --text OR --brief')
-  .requiredOption("--target <id>", "Slack channel/DM id or Telegram chat id")
-  .option("--channel <name>", "slack | telegram", "slack")
+  .requiredOption("--target <id>", CHANNEL_TARGETS)
+  .option("--channel <name>", CHANNEL_NAMES, "slack")
   .option("--at <HH:MM>", "time trigger (24h, record timezone)")
   .option("--when <expr>", 'threshold trigger, e.g. "whoop.resting_hr > 55"')
   .option("--text <message>", "send this fixed line")
@@ -1256,6 +1260,173 @@ rules
   .action((id: string) => {
     try {
       out(core.rulesRemove(id), (d: any) => (d.removed ? `Removed ${d.id}.` : `No rule "${d.id}".`));
+    } catch (e) {
+      die(e);
+    }
+  });
+
+// ---- notifications --------------------------------------------------------
+// A daily message sent TO you at a local time: a fixed line (--text) or a recap
+// generated from the record (--recap, with an optional prompt of your own).
+const notifications = program.command("notifications").description("daily messages sent to you on a channel: a fixed line or a generated recap");
+
+notifications
+  .command("list", { isDefault: true })
+  .description("list every notification and its send state")
+  .action(() => {
+    try {
+      out(core.notificationsList(), (d: any) =>
+        d.notifications.length
+          ? d.notifications
+              .map((n: any) => {
+                const what = n.kind === "recap" ? `recap: ${n.text}` : `"${n.text}"`;
+                const state = n.enabled === false ? " [off]" : n.lastError ? ` [error: ${n.lastError}]` : "";
+                return `${n.id}${state}\n  ${n.atLocal} → ${what}  (${n.channel}→${n.target})${n.lastSentDay ? `  last sent ${n.lastSentDay}` : ""}`;
+              })
+              .join("\n")
+          : "(no notifications yet)",
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+notifications
+  .command("add")
+  .description("add/update a daily notification: --at HH:MM with --text OR --recap")
+  .requiredOption("--target <id>", CHANNEL_TARGETS)
+  .requiredOption("--at <HH:MM>", "local send time (24h, record timezone)")
+  .option("--channel <name>", CHANNEL_NAMES, "slack")
+  .option("--text <message>", "send this fixed line")
+  .option("--recap [prompt]", "send a recap generated from your record (optionally with your own prompt)")
+  .option("--id <id>", "id to edit an existing notification")
+  .action((opts) => {
+    try {
+      if (!opts.text === !opts.recap) throw new Error("Pass exactly one of --text or --recap.");
+      const recap = typeof opts.recap === "string" ? opts.recap : ""; // bare --recap → the default prompt
+      const input = opts.text
+        ? ({ kind: "text", text: opts.text } as const)
+        : ({ kind: "recap", text: recap } as const);
+      out(
+        core.notificationsUpsert({ id: opts.id, channel: opts.channel, target: opts.target, atLocal: opts.at, ...input }),
+        (d: any) => `Saved notification ${d.notification.id} — sends daily at ${d.notification.atLocal}.`,
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+notifications
+  .command("test <id>")
+  .description("send a notification now (ignores the schedule, doesn't consume today's slot)")
+  .action(async (id: string) => {
+    try {
+      out(await core.notificationsTest(id), () => "Sent — check the channel.");
+    } catch (e) {
+      die(e);
+    }
+  });
+
+notifications
+  .command("remove <id>")
+  .description("delete a notification")
+  .action((id: string) => {
+    try {
+      out(core.notificationsRemove(id), (d: any) => (d.removed ? `Removed ${d.id}.` : `No notification "${d.id}".`));
+    } catch (e) {
+      die(e);
+    }
+  });
+
+// ---- mail -----------------------------------------------------------------
+// Outbound email. The transport is set in Settings → Channels → Email; this
+// reads its state and proves it with a real message.
+const mail = program.command("mail").description("outbound email (SMTP or Gmail): status and a real test send");
+
+mail
+  .command("status", { isDefault: true })
+  .description("which transport is set, whether it can send, and whether replies can be read")
+  .action(() => {
+    try {
+      out(core.mailStatus(), (d: any) =>
+        [
+          d.ready ? `Ready — ${d.transport}${d.from ? ` as ${d.from}` : ""}` : `Not ready — ${d.reason}`,
+          ...(d.ready && d.reason ? [d.reason] : []),
+          ...(d.ready ? [`Replies: ${d.canReceive ? "can be read (gmail.readonly granted)" : "send-only"}`] : []),
+          ...(d.lastTest ? [`Last test: ${d.lastTest.ok ? "ok" : "FAILED"} → ${d.lastTest.to} (${d.lastTest.at}) ${d.lastTest.detail}`] : []),
+        ].join("\n"),
+      );
+    } catch (e) {
+      die(e);
+    }
+  });
+
+mail
+  .command("test")
+  .description("send a real test message")
+  .requiredOption("--to <address>", "where to send it")
+  .action(async (opts: { to: string }) => {
+    try {
+      out(await core.mailTest(opts.to), (d: any) => `Sent to ${d.to}${d.threadId ? ` (thread ${d.threadId})` : ""} — check the inbox.`);
+    } catch (e) {
+      die(e);
+    }
+  });
+
+// ---- password ---------------------------------------------------------------
+// The recovery path that needs no email: whoever can run this already owns
+// config.json. The password is read from the terminal with echo off (or from a
+// pipe) — never from argv, where it would land in shell history and `ps`.
+
+/** One line from stdin. On a TTY the typed characters are not echoed. */
+function readSecret(prompt: string): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    return new Promise((resolve, reject) => {
+      let buf = "";
+      stdin.setEncoding("utf8");
+      stdin.on("data", (c) => (buf += c));
+      stdin.on("end", () => resolve(buf.split(/\r?\n/)[0]));
+      stdin.on("error", reject);
+    });
+  }
+  return new Promise((resolve, reject) => {
+    process.stderr.write(prompt);
+    let buf = "";
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    const done = (fn: () => void) => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off("data", onData);
+      process.stderr.write("\n");
+      fn();
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === "\r" || ch === "\n") return done(() => resolve(buf));
+        if (ch === "\u0003" || ch === "\u0004") return done(() => reject(new Error("Cancelled.")));
+        if (ch === "\u007f" || ch === "\b") buf = buf.slice(0, -1);
+        else buf += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+program
+  .command("password")
+  .description("reset the sign-in password from this machine (no email needed)")
+  .option("--set", "set a new password — typed at a hidden prompt, or piped on stdin")
+  .action(async (opts: { set?: boolean }) => {
+    try {
+      if (!opts.set) throw new Error("Use: agentqs password --set");
+      const tty = Boolean(process.stdin.isTTY);
+      const password = await readSecret("New password: ");
+      if (tty && (await readSecret("Confirm: ")) !== password) throw new Error("Passwords don't match.");
+      // The result carries the username only — the password is never printed back.
+      out(core.passwordSet(password), (d: any) => `Password changed for ${d.username}. Every existing session is signed out.`);
     } catch (e) {
       die(e);
     }

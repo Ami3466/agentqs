@@ -23,6 +23,7 @@ function apiBase(env: ChannelEnv): string {
 export const telegramAdapter: ChannelAdapter = {
   id: "telegram",
   label: "Telegram",
+  target: { hint: "Telegram chat id", example: "123456789" },
 
   configured(env: ChannelEnv): boolean {
     return Boolean(env.telegramBotToken && env.telegramBotToken.trim());

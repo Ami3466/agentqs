@@ -2,8 +2,11 @@ import { appendInboxItems, landInboxCaptures } from "../record";
 import { recordDir } from "../paths";
 import { readBackfillState, writeBackfillState } from "../sync-runs";
 import { recordDelivery } from "../channel-deliveries";
+import { readConfig } from "../config";
+import { modeOf } from "../smart-input";
 import { channelEnv, getChannelAdapter } from "./registry";
-import type { ChannelEnv } from "./types";
+import { EMAIL_PULL_TARGET } from "./email";
+import type { ChannelAdapter, ChannelEnv, InboundMessage } from "./types";
 
 /**
  * PULL a channel's history into the record, on our own schedule.
@@ -92,9 +95,14 @@ async function runPull(
 
   const env = channelEnv();
   if (!adapter.configured(env)) {
-    throw new Error(`${adapter.label} is not connected — save its bot token in Settings → Channels.`);
+    // The adapter's own reason when it has one ("SMTP needs a host.") — "save its
+    // bot token" is only true of the channels that have a bot.
+    throw new Error(adapter.describe(env).reason || `${adapter.label} is not connected — save its bot token in Settings → Channels.`);
   }
   const targets = await resolveTargets(adapter, env);
+  if (!targets.length && adapter.pullOnly) {
+    throw new Error(adapter.describe(env).reason || `${adapter.label} replies are off — tick "Capture replies" in Settings → Channels → ${adapter.label}.`);
+  }
   if (!targets.length) {
     throw new Error(
       `No ${adapter.label} conversation to pull. Set one in Settings → Channels — a channel name ` +
@@ -135,7 +143,16 @@ async function runPull(
     })),
     { recordDir: rDir },
   );
-  if (items.length) landInboxCaptures(items, opts);
+  if (items.length && adapter.pullOnly) {
+    // A channel with no webhook has no other capture funnel, so its poll uses THE
+    // funnel: `landCapture` — cache write + auto-structure as one queued job per
+    // item. Started together, so a sweep already running as a job waits out one
+    // grace window, not one per message. When THIS pull is itself the job (the
+    // Pipeline's Sync → POST /api/import/<channel>), `startJobAndWait` sees that and
+    // runs each landing inside it, in order, instead of queueing behind itself.
+    const { landCapture } = await import("../structure-run");
+    await Promise.all(items.map((item) => landCapture(item, opts)));
+  } else if (items.length) landInboxCaptures(items, opts);
 
   // Marked `via: "pull"`. These rows used to be indistinguishable from inbound
   // webhook deliveries, so a poll that could not reach the platform rendered as
@@ -143,6 +160,11 @@ async function runPull(
   // rendered as proof the webhook was healthy. Both were wrong.
   if (added > 0) recordDelivery(adapter.id, "captured", `pulled ${added} from ${from}`, { via: "pull" });
   else if (failed.length) recordDelivery(adapter.id, "rejected", failed[0], { via: "pull" });
+
+  if (adapter.pullOnly) {
+    const fresh = new Set(items.map((i) => i.id));
+    await replyToPulled(adapter, env, messages.filter((m) => fresh.has(m.messageId ?? m.eventId ?? "")));
+  }
 
   // Only now — the messages are on disk — is it safe to move on. A conversation that
   // threw never reaches here, so the next sweep re-reads its window.
@@ -159,8 +181,47 @@ async function runPull(
   };
 }
 
-/** The conversation setting as typed: a name, a comma-separated list, or "*". */
+/**
+ * The AI half of a webhook, for a channel that has none: answer each NEWLY captured
+ * message with the shared brain, under the same Settings → Channels prefs the
+ * webhook route reads. Log-only (`ai: false`) sends nothing. A `//` memo gets no
+ * "saved" ack and a keyless instance no "add an AI key" note — fine in a chat
+ * thread, noise in a mailbox. The message is already in the record by now, so a
+ * reply that fails is written on the ledger and never fails the sweep (which would
+ * hold the cursor back and re-read mail that did land).
+ */
+async function replyToPulled(adapter: ChannelAdapter, env: ChannelEnv, fresh: InboundMessage[]): Promise<void> {
+  const prefs = readConfig()?.channels?.replies?.[adapter.id];
+  if (prefs?.ai === false || !fresh.length) return;
+  const { composeReply } = await import("../reply");
+  for (const m of fresh) {
+    if (modeOf(m.text) === "memo") continue;
+    try {
+      const reply = await composeReply({
+        message: m.text,
+        channel: adapter.id,
+        messageId: m.messageId ?? null,
+        skill: prefs?.skill,
+        ai: true,
+        modelOverride: prefs?.providerId || prefs?.model ? { providerId: prefs.providerId, model: prefs.model } : null,
+      });
+      if (reply.via === "fallback") continue;
+      await adapter.send(env, m.target, reply.text);
+      recordDelivery(adapter.id, "replied", reply.via, { via: "pull" });
+    } catch (e) {
+      recordDelivery(adapter.id, "rejected", `captured, but the reply was not sent: ${(e as Error).message}`, { via: "pull" });
+    }
+  }
+}
+
+/** The conversation setting as typed: a name, a comma-separated list, or "*".
+ *  Email has nothing to type — its one "conversation" is replies, polled whenever
+ *  the transport can read them AND the user asked for it (Capture replies). */
 export function pullChannelName(channelId: string, env = channelEnv()): string {
+  if (channelId === "email") {
+    const mail = env.mail;
+    return mail?.canReceive && readConfig()?.email?.captureReplies ? EMAIL_PULL_TARGET : "";
+  }
   return channelId === "slack" ? (env.slackPullChannel ?? "").trim() : "";
 }
 

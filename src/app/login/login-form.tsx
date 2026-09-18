@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Spinner } from "@/components/icons";
 import { Button, Field, Input } from "@/components/ui";
@@ -60,6 +61,13 @@ export function LoginForm() {
         {busy ? <Spinner width={16} height={16} /> : null}
         {busy ? "Signing in…" : "Sign in"}
       </Button>
+      <Link
+        href="/reset"
+        title="Emails a single-use reset link — needs email set up in Settings → Channels"
+        className="block text-center text-sm text-muted-fg hover:text-fg"
+      >
+        Forgot password?
+      </Link>
     </form>
   );
 }

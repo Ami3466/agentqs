@@ -22,7 +22,8 @@
  * Only the platform's OUTBOUND API is substituted (a local capture server, the same
  * trick the importer tests use for fetch); everything else — verification, parsing,
  * the shared brain, the record write, the grounding — is the real production path,
- * so this fails if any of it breaks. Run: npm run channels:test (needs `next build`).
+ * so this fails if any of it breaks. Run: npm run channels:test
+ * (builds its own app into .next-e2e).
  */
 import { spawn } from "child_process";
 import crypto from "crypto";
@@ -99,6 +100,35 @@ function captureServer(): Promise<{ port: number; last: Record<string, string>; 
       const { port } = srv.address() as net.AddressInfo;
       resolve({ port, last, close: () => srv.close() });
     });
+  });
+}
+
+/** A loopback Gmail API holding tagged replies — the only party the email pull talks to. */
+function gmailStub(me: string, tag: string, texts: string[]): Promise<{ port: number; close: () => void }> {
+  const T = Date.now() - 60_000;
+  const body = (text: string) => `${text}\r\n\r\nOn Mon, Sep 14, 2026 at 8:00 PM Me <${me}> wrote:\r\n> How was your day?\r\n> -- \r\n> agentqs -- reply to this and it lands in your record -- ${tag}\r\n`;
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://stub");
+      const json = (v: unknown) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(v));
+      };
+      const base = "/gmail/v1/users/me/messages";
+      if (url.pathname === base) return json({ messages: texts.map((_, i) => ({ id: `e2e-${i}` })) });
+      const i = Number(url.pathname.slice(`${base}/e2e-`.length));
+      json({
+        id: `e2e-${i}`,
+        internalDate: String(T + i * 1000),
+        labelIds: ["INBOX"],
+        payload: {
+          mimeType: "multipart/alternative",
+          headers: [{ name: "From", value: `Me <${me}>` }, { name: "To", value: me }, { name: "In-Reply-To", value: "<abc@example.com>" }],
+          parts: [{ mimeType: "text/plain", body: { data: Buffer.from(body(texts[i]), "utf8").toString("base64url") } }],
+        },
+      });
+    });
+    srv.listen(0, "127.0.0.1", () => resolve({ port: (srv.address() as net.AddressInfo).port, close: () => srv.close() }));
   });
 }
 
@@ -181,10 +211,14 @@ async function main() {
 
   const cap = await captureServer();
   const capBase = `http://127.0.0.1:${cap.port}`;
+  const ME = "me@example.com";
+  const EMAIL_TAG = "aqs#e2e0a1";
+  const EMAIL_REPLIES = ["Slept badly, 5h. Skipped the gym.", "Long walk after lunch, felt better."];
+  const gmail = await gmailStub(ME, EMAIL_TAG, EMAIL_REPLIES);
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   console.log(`\nStarting the built app on ${base} (data dir = ${root}); outbound bot APIs → ${capBase}…`);
-  const server = spawn(process.execPath, [path.join(process.cwd(), ".next", "standalone", "server.js")], {
+  const server = spawn(process.execPath, [path.join(process.cwd(), process.env.NEXT_DIST_DIR || ".next", "standalone", "server.js")], {
     env: {
       ...process.env,
       PORT: String(port),
@@ -196,6 +230,7 @@ async function main() {
       TELEGRAM_API_BASE: capBase,
       SLACK_BOT_TOKEN: "xoxb-test-slack-token",
       SLACK_API_BASE: capBase,
+      GMAIL_API_BASE: `http://127.0.0.1:${gmail.port}`,
       // Secrets ARE set: inbound webhooks are refused unless verified, so the e2e
       // must sign/authenticate every POST — driving the real secure path.
       TELEGRAM_WEBHOOK_SECRET: TG_SECRET,
@@ -338,9 +373,45 @@ async function main() {
       !/history|import|sync/i.test(String(slackRow?.detail)) && slackRow?.syncEndpoint === null,
       String(slackRow?.detail),
     );
+
+    // ---- 5. Email: the Pipeline's Sync button reports what it captured --------
+    // Email has no webhook, so its pull lands each reply through `landCapture` — a
+    // record job. The route ALREADY runs the pull as a job on the same serial queue,
+    // and the inner job used to queue behind the outer one that was awaiting it: the
+    // request burned the whole grace window and answered 202 "queued" for a two-message
+    // pull, every time. Only the ROUTE shows this — calling pullChannel directly (as
+    // email:test does) is not inside a job.
+    console.log("\n  Email replies through POST /api/import/email:\n");
+    const cfgFile = path.join(root, "config.json");
+    const SEND = "https://www.googleapis.com/auth/gmail.send";
+    const READ = "https://www.googleapis.com/auth/gmail.readonly";
+    fs.writeFileSync(
+      cfgFile,
+      JSON.stringify({
+        ...JSON.parse(fs.readFileSync(cfgFile, "utf8")),
+        email: { transport: "gmail", from: ME, captureReplies: true },
+        sourceOAuth: { gmail_send: { accessToken: "ya29.test-token", refreshToken: "r", expiresAt: new Date(Date.now() + 86_400_000 * 365).toISOString(), scopes: `${SEND} ${READ}` } },
+        channels: { replies: { email: { ai: false } } },
+      }),
+    );
+    fs.writeFileSync(path.join(root, "email-channel.json"), JSON.stringify({ tag: EMAIL_TAG.slice(4) }));
+    const t0 = Date.now();
+    const pullRes = await fetch(`${base}/api/import/email`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+    const pulled = await pullRes.json();
+    const took = Date.now() - t0;
+    check("a small email pull answers 200, not 202 queued", pullRes.status === 200 && pulled.queued === undefined && pulled.job === undefined, `HTTP ${pullRes.status} in ${took}ms ${JSON.stringify(pulled).slice(0, 160)}`);
+    check("…with the capture summary the Sync button shows", pulled.ok === true && pulled.channel === "email" && pulled.captured === EMAIL_REPLIES.length && pulled.duplicates === 0, JSON.stringify(pulled).slice(0, 200));
+    const emailInbox = readRecord(path.join(root, "record")).inbox.filter((i) => i.source === "email");
+    check("…and every reply is in the record by the time it answers", emailInbox.length === EMAIL_REPLIES.length && EMAIL_REPLIES.every((t) => emailInbox.some((i) => i.text === t)), emailInbox.map((i) => i.text).join(" | "));
+    const inboxView = await (await fetch(`${base}/api/inbox`, { headers: { cookie } })).json();
+    check("…and in the cache the app reads (landed inside the same job)", EMAIL_REPLIES.every((t) => JSON.stringify(inboxView).includes(t)), JSON.stringify(inboxView).slice(0, 200));
+    const again = await fetch(`${base}/api/import/email`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+    const againBody = await again.json();
+    check("a second Sync answers 200 with nothing new", again.status === 200 && againBody.captured === 0, `HTTP ${again.status} ${JSON.stringify(againBody).slice(0, 160)}`);
   } finally {
     server.kill("SIGKILL");
     cap.close();
+    gmail.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
 

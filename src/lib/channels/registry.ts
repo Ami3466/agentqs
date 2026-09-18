@@ -1,18 +1,26 @@
-import type { ChannelAdapter, ChannelEnv } from "./types";
+import type { ChannelAdapter, ChannelEnv, ChannelOption } from "./types";
 import { telegramAdapter } from "./telegram";
 import { slackAdapter } from "./slack";
+import { emailAdapter } from "./email";
 import { readConfig } from "../config";
+import { mailStatus } from "../mail";
 
 /**
  * The channel registry — one entry per transport. The webhook route resolves an
  * adapter by its `[channel]` path segment; adding a channel is dropping one file
  * here. The brain (`composeReply`) is shared, so every adapter is a thin shell.
  */
-export const CHANNELS: ChannelAdapter[] = [telegramAdapter, slackAdapter];
+export const CHANNELS: ChannelAdapter[] = [telegramAdapter, slackAdapter, emailAdapter];
 
 export function getChannelAdapter(id: string | null | undefined): ChannelAdapter | null {
   const key = (id ?? "").toLowerCase();
   return CHANNELS.find((c) => c.id === key) ?? null;
+}
+
+/** Every channel a message can be sent on, with what its target looks like — the
+ *  one list the pickers and the CLI read. */
+export function channelOptions(): ChannelOption[] {
+  return CHANNELS.map((c) => ({ id: c.id, label: c.label, ...c.target }));
 }
 
 /** Where a channel's working credential came from. `only` builds the env from ONE
@@ -33,6 +41,9 @@ export function channelEnv(only?: EnvSide): ChannelEnv {
     slackSigningSecret: ch?.slackSigningSecret || env("SLACK_SIGNING_SECRET"),
     slackApiBase: process.env.SLACK_API_BASE || "",
     slackPullChannel: ch?.slackPullChannel || env("SLACK_PULL_CHANNEL"),
+    // Mail is set up in Settings only — there is no environment-variable transport.
+    mail: only === "env" ? null : mailStatus(),
+    gmailApiBase: process.env.GMAIL_API_BASE || "",
   };
 }
 

@@ -110,6 +110,12 @@ function status({ plugin, instanceId }: PluginInstance) {
  *  machinery, but importing FROM it is not a thing it does — this route is the
  *  data coming IN. Its face is /api/backup. */
 function backupTargetError(inst: PluginInstance): NextResponse | null {
+  if (inst.plugin.mailTransport) {
+    return NextResponse.json(
+      { error: `${inst.instanceId} is a mail transport, not a data source — use /api/mail ({"action":"test","to":"…"} to send one).` },
+      { status: 400 },
+    );
+  }
   if (!inst.plugin.backupTarget) return null;
   return NextResponse.json(
     {

@@ -285,6 +285,11 @@ export async function completeOAuth(
         if (!latest.backup?.drive?.interval) {
           latest.backup = { ...(latest.backup ?? {}), drive: { ...(latest.backup?.drive ?? {}), interval: "daily" } };
         }
+      } else if (inst.plugin.mailTransport) {
+        // No cadence — it sends when something needs to reach you. Authorizing it
+        // IS choosing it, so the transport flips here, on success, and not when the
+        // dance merely started (an abandoned tab must not switch off working SMTP).
+        latest.email = { ...(latest.email ?? {}), transport: "gmail" };
       } else if (inst.plugin.credentialOnly) {
         // Read-on-request: no cadence. Connecting it grants read access; nothing
         // syncs until the user explicitly pulls a file.
