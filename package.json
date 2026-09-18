@@ -81,6 +81,7 @@
     "rules:test": "tsx scripts/rules-test.ts",
     "notify:test": "tsx scripts/notifications-test.ts",
     "mail:test": "tsx scripts/mail-test.ts",
+    "mail:live": "tsx scripts/mail-live-test.ts",
     "email:test": "tsx scripts/email-channel-test.ts",
     "password:test": "tsx scripts/reset-test.ts",
     "semantic:test": "NEXT_DIST_DIR=.next-e2e next build && NEXT_DIST_DIR=.next-e2e tsx scripts/embeddings.ts",
